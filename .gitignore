@@ -22,6 +22,8 @@ coverage/
 *.db
 *.sqlite
 *.sqlite3
+compose.vps.yaml
+compose.override.yaml
 .DS_Store
 Thumbs.db
 
