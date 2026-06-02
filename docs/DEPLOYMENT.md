@@ -23,14 +23,67 @@ Default ports:
 - Agent Studio: `8010`
 - Sagad Postgres/pgvector: `5433` on the host, `5432` inside compose.
 
+## VPS Compose With Nginx Proxy Manager
+
+Use `compose.vps.example.yaml` as a template when the VPS already has Nginx Proxy Manager and a shared external Docker network named `client_internal_network`.
+
+Preflight:
+
+```bash
+docker network inspect client_internal_network >/dev/null
+```
+
+If the network does not exist yet:
+
+```bash
+docker network create client_internal_network
+```
+
+Copy the example env and compose files to local ignored files:
+
+```bash
+cp .env.example .env
+cp compose.vps.example.yaml compose.vps.yaml
+```
+
+Edit `.env` with real VPS values and secrets. Edit `compose.vps.yaml` only when that VPS uses different container names, networks, ports, or proxy assumptions. Do not commit either local file.
+
+Start the stack:
+
+```bash
+docker compose -f compose.vps.yaml config --quiet
+docker compose -f compose.vps.yaml up -d --build
+docker compose -f compose.vps.yaml ps
+```
+
+Nginx Proxy Manager should route the Sagad Console proxy host to:
+
+```text
+Forward Hostname / IP: sagad-console
+Forward Port: 3000
+```
+
+Do not publish Agent Studio publicly unless you intentionally add a protected route for webhooks. If Chatwoot runs on the same `client_internal_network`, configure its webhook URL as:
+
+```text
+http://sagad-agent-studio:8010/webhooks/chatwoot
+```
+
 ## Health Checks
 
-After deployment:
+After local preview deployment:
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/health
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations/twenty/health
+```
+
+After VPS deployment with the local `compose.vps.yaml`, check from inside the Docker network:
+
+```bash
+docker exec sagad-agent-studio python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8010/health').read().decode())"
+docker exec sagad-console node -e "fetch('http://sagad-agent-studio:8010/health').then(r=>r.text()).then(console.log)"
 ```
 
 ## VPS Layout

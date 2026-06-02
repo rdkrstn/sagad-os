@@ -97,6 +97,7 @@ Planned walkthroughs:
 |-- CONTRIBUTING.md     # Contributor workflow
 |-- SECURITY.md         # Security policy
 |-- compose.preview.yaml
+|-- compose.vps.example.yaml # Example Nginx Proxy Manager / shared-network VPS stack
 ```
 
 ## Requirements
@@ -151,6 +152,21 @@ Useful local endpoints:
 ```powershell
 docker compose -f compose.preview.yaml build
 docker compose -f compose.preview.yaml up -d
+```
+
+VPS deployments that already use Nginx Proxy Manager and a shared external Docker network can copy the example:
+
+```bash
+cp .env.example .env
+cp compose.vps.example.yaml compose.vps.yaml
+# Edit .env and compose.vps.yaml for the target VPS.
+docker compose -f compose.vps.yaml up -d --build
+```
+
+In Nginx Proxy Manager, point the proxy host to:
+
+```text
+sagad-console:3000
 ```
 
 Default ports:
