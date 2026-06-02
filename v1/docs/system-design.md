@@ -53,25 +53,27 @@ Future architecture target:
 flowchart LR
   Channels["Channel Intake: Web Chat / Email / WhatsApp / SMS / Social"]
   Chatwoot["Chatwoot: Unified Inbox"]
-  Studio["Agent Studio: LangGraph / LangChain Orchestration"]
-  Knowledge["Governed Knowledge: KB / SOP / QA / Compliance"]
-  Console["Sagad OS Console: HITL"]
+  Studio["Agent Studio: AI Orchestration"]
+  Policy["Routing & Policy Engine"]
+  Knowledge["Governed Knowledge Layer: KB / SOPs / QA / Compliance"]
+  Console["Supervisor Console: HITL"]
   External["External Systems: CRM / Ticketing / Calendar / Payments / Identity / APIs"]
-  LangSmith["LangSmith: Observability & Traces"]
-  MCP["Future FastMCP / MCP Layer"]
+  Observability["Observability & Traces: LangSmith"]
+  Outcomes["Outcomes: Faster Resolution / Quality / Oversight"]
 
   Channels --> Chatwoot
   Chatwoot --> Studio
+  Studio --> Policy
   Knowledge --> Studio
   Studio --> Console
   Console --> Chatwoot
   Studio --> External
-  Studio --> MCP
-  Studio --> LangSmith
-  LangSmith --> Console
+  Observability --> Studio
+  Observability --> Console
+  Console --> Outcomes
 ```
 
-Agent Studio is the orchestration layer between the Next.js console and external systems. It owns the Python LangGraph runtime, LangChain model/tool/retrieval primitives, typed state, agent routing, approval handling, tool planning, credentials, retries, audit, and LangSmith trace metadata. Twenty CRM is the selected first CRM target, but it is hosted outside Sagad OS.
+Agent Studio is the orchestration layer between the Next.js console and external systems. It owns the Python LangGraph runtime, LangChain model/tool/retrieval primitives, typed state, agent routing, policy checks, approval handling, tool planning, credentials, retries, audit, and LangSmith trace metadata. Twenty CRM is the selected first CRM target, but it is hosted outside Sagad OS. Future MCP/FastMCP belongs behind Agent Studio adapters, not beside the browser.
 
 ## Working Preview Path
 

@@ -95,7 +95,7 @@ An AI agent should ping its supervisor when:
 
 | Condition | Decision |
 | --- | --- |
-| High confidence + low risk | Auto-send |
+| High confidence + low risk | Eligible for faster approval; auto-send only after account policy explicitly allows it |
 | Medium confidence + low risk | Human approval or lightweight review |
 | Low confidence | Discovery question or human review |
 | High risk | Human takeover |
@@ -150,7 +150,7 @@ Actions: Approve, Edit, Reject, Coach, Take Over
 **AI metrics:**
 
 - confidence score
-- auto-send rate
+- auto-send eligibility or policy-send rate
 - HITL approval rate
 - human takeover rate
 - draft edit rate

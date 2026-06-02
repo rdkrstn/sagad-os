@@ -14,7 +14,7 @@ In scope:
 - contact driver classification
 - confidence score and simple risk level
 - human approval queue
-- response payload
+- HITL-approved response payload
 - CRM note/log output
 - LangSmith trace capture in the durable version
 
@@ -25,7 +25,7 @@ Out of scope:
 - fraud/insurance/finance compliance flows
 - complex QA automation
 - multi-account staffing optimization
-- fully autonomous high-risk actions
+- autonomous sends or fully autonomous high-risk actions
 - deep analytics beyond the minimum operating metrics
 
 ## MVP Flow
@@ -46,7 +46,6 @@ flowchart LR
     I --> J
     J --> K["Confidence + Risk"]
     K --> L{"Decision"}
-    L -->|"auto-send"| M["Send"]
     L -->|"needs approval"| N["Approval Queue"]
     L -->|"takeover"| O["Human Takeover"]
     N --> M
@@ -150,7 +149,7 @@ Low-fi layout:
 | User is angry or asks for refund/payment action | route `human` or support with approval required |
 | CRM lookup fails | safe fallback, no invented account details, log tool failure |
 | Confidence is medium | send to approval queue before response |
-| Confidence is high and risk is low | allow auto-send if account settings permit |
+| Confidence is high and risk is low | mark as low-risk and route to approval; future account policy may allow auto-send later |
 
 ## Metrics For Level 1
 
@@ -158,7 +157,7 @@ Low-fi layout:
 - route distribution
 - contact driver distribution
 - average confidence
-- auto-send rate
+- auto-send eligibility rate
 - approval rate
 - human takeover rate
 - tool failure rate

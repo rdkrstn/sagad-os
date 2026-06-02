@@ -35,7 +35,7 @@ Sagad OS can serve multiple industries, but each industry has different risk, ve
 - Support Agent handles basic customer issues and asks for verification before account-specific help.
 - Discovery Agent handles greetings, vague messages, empty messages, and unclear intent.
 
-**Metrics:** lead response time, qualified leads, booked calls, auto-send rate, HITL rate, missed lead reduction, CSAT, and follow-up completion.
+**Metrics:** lead response time, qualified leads, booked calls, auto-send eligibility rate, HITL rate, missed lead reduction, CSAT, and follow-up completion.
 
 **Why first:** lower compliance risk, easy demo, strong ROI story, and clear buyer language.
 
