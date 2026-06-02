@@ -10,6 +10,14 @@ The current project contains:
 
 Start with `QUICKSTART.md` for the technical guide: architecture, repo layout, local setup, environment variables, API endpoints, and integration boundaries.
 
+Contributor docs:
+
+- `CONTRIBUTING.md`
+- `SECURITY.md`
+- `docs/CI-CD.md`
+- `docs/VERSIONING.md`
+- `docs/DEPLOYMENT.md`
+
 Sagad OS does not replace every tool. Chatwoot, Twenty CRM, LangSmith, generic webhooks, and future MCP servers stay external or adapter-governed. Agent Studio owns credentials, policies, approvals, retries, audit logs, and trace metadata. n8n is not part of Sagad OS core orchestration.
 
 ## Local Checks
@@ -29,6 +37,12 @@ Backend:
 cd agent-studio
 uv sync
 uv run pytest
+```
+
+Container smoke test:
+
+```powershell
+docker compose -f compose.preview.yaml build
 ```
 
 Self-hosting is the open-source path. Paid commercial work can later focus on managed hosting, implementation, support, and enterprise operations.
