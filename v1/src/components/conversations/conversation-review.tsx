@@ -114,7 +114,6 @@ export function ConversationReview({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             approved,
-            supervisor_id: "demo-supervisor",
             edited_reply: approved ? draftReply : null,
           }),
         },

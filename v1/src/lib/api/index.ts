@@ -17,6 +17,7 @@ import {
   mockSopReferences,
   mockSupervisorPods,
 } from "@/lib/mocks";
+import { auth } from "../../../auth";
 
 type ViewRecord = Record<string, unknown>;
 type ConversationView = Omit<Conversation, "messages" | "priority" | "status"> &
@@ -88,6 +89,27 @@ function agentStudioBaseUrl(): string | null {
   return value ? value.replace(/\/$/, "") : null;
 }
 
+async function agentStudioHeaders(): Promise<HeadersInit> {
+  const headers = new Headers();
+  const secret = process.env.AGENT_STUDIO_INTERNAL_SECRET?.trim();
+  if (secret) {
+    headers.set("X-Sagad-Internal-Secret", secret);
+  }
+
+  const session = await auth();
+  if (session?.user?.id) {
+    headers.set("X-Sagad-User-Id", session.user.id);
+  }
+  if (session?.user?.organizationId) {
+    headers.set("X-Sagad-Org-Id", session.user.organizationId);
+  }
+  if (session?.user?.role) {
+    headers.set("X-Sagad-Role", session.user.role);
+  }
+
+  return headers;
+}
+
 async function fetchAgentStudioConversations(): Promise<AgentStudioConversation[] | null> {
   const baseUrl = agentStudioBaseUrl();
   if (!baseUrl) {
@@ -96,6 +118,7 @@ async function fetchAgentStudioConversations(): Promise<AgentStudioConversation[
 
   try {
     const response = await fetch(`${baseUrl}/conversations`, {
+      headers: await agentStudioHeaders(),
       cache: "no-store",
     });
 

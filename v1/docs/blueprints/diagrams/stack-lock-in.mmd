@@ -1,0 +1,69 @@
+flowchart LR
+  Customer["Customer"] --> Chatwoot["Chatwoot<br/>Channel intake + delivery"]
+  Supervisor["Supervisor"] --> Console["Next.js App Router<br/>Supervisor Console"]
+
+  subgraph ConsoleLayer["Console Layer"]
+    Console
+    Auth["Auth.js<br/>Sessions + tenant claims"]
+    UiApi["Next.js Server APIs<br/>Reads + approval proxy"]
+  end
+
+  subgraph DataPlane["Sagad Data Plane"]
+    Postgres[(Sagad Postgres<br/>tenants / users / conversations / approvals / audit)]
+    Pgvector[(pgvector<br/>knowledge embeddings)]
+    Knowledge["Governed Knowledge Records<br/>KB / SOP / QA / Compliance"]
+  end
+
+  subgraph StudioLayer["Agent Studio"]
+    StudioApi["FastAPI Gateway"]
+    Graph["LangGraph Orchestration"]
+    Policy["Policy + HITL Gates"]
+    Retrieval["Retrieval + Context Builder"]
+    ChatAdapter["Chatwoot Adapter"]
+    TwentyAdapter["Twenty CRM Adapter"]
+    Audit["Trace + Adapter Audit"]
+  end
+
+  subgraph ProviderLayer["External Provider Systems"]
+    Twenty["Twenty CRM<br/>External CRM"]
+    LangSmith["LangSmith<br/>Traces"]
+  end
+
+  Chatwoot --> ChatAdapter
+  ChatAdapter --> StudioApi
+  StudioApi --> Graph
+  Graph --> Policy
+  Graph --> Retrieval
+  Retrieval --> Pgvector
+  Knowledge --> Pgvector
+  Knowledge --> Retrieval
+  Graph --> Postgres
+  Audit --> Postgres
+  Graph --> Audit
+  Audit --> LangSmith
+
+  Console --> Auth
+  Auth --> Postgres
+  Console --> UiApi
+  UiApi --> Postgres
+  UiApi --> StudioApi
+  Policy --> UiApi
+
+  Graph --> TwentyAdapter
+  TwentyAdapter --> Twenty
+  Policy --> ChatAdapter
+  ChatAdapter --> Chatwoot
+
+  classDef console fill:#eef6ff,stroke:#2563eb,color:#0f172a;
+  classDef data fill:#ecfdf5,stroke:#059669,color:#0f172a;
+  classDef studio fill:#f8fafc,stroke:#475569,color:#0f172a;
+  classDef adapter fill:#fff7ed,stroke:#f97316,color:#0f172a;
+  classDef provider fill:#fdf2f8,stroke:#db2777,color:#0f172a;
+  classDef actor fill:#fefce8,stroke:#ca8a04,color:#0f172a;
+
+  class Console,Auth,UiApi console;
+  class Postgres,Pgvector,Knowledge data;
+  class StudioApi,Graph,Policy,Retrieval,Audit studio;
+  class ChatAdapter,TwentyAdapter adapter;
+  class Chatwoot,Twenty,LangSmith provider;
+  class Customer,Supervisor actor;

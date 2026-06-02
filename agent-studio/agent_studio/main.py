@@ -1,10 +1,13 @@
 from datetime import datetime, timezone
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException
 
 from agent_studio.chatwoot import send_approved_reply
 from agent_studio.config import get_settings
+from agent_studio.db import initialize_database
 from agent_studio.graph import graph
 from agent_studio.retrieval import retriever
 from agent_studio.schemas import (
@@ -22,10 +25,29 @@ from agent_studio.schemas import (
     HealthResponse,
     IntegrationListResponse,
 )
-from agent_studio.store import store
+from agent_studio.store import StoreContext, store
 from agent_studio.twenty import TwentyAdapter, twenty_status
 
-app = FastAPI(title="Sagad Agent Studio", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
+    initialize_database(get_settings())
+    yield
+
+
+app = FastAPI(title="Sagad Agent Studio", version="0.1.0", lifespan=lifespan)
+
+
+def _trusted_context(
+    org_id: str | None = None,
+    user_id: str | None = None,
+    role: str | None = None,
+) -> StoreContext:
+    return StoreContext(
+        organization_id=org_id,
+        user_id=user_id,
+        role=role or "system",
+    )
 
 
 def _string_from_mapping(value: dict[str, object] | None, key: str) -> str | None:
@@ -76,6 +98,12 @@ def _verify_webhook_token(token: str | None) -> None:
     settings = get_settings()
     if settings.chatwoot_webhook_token and token != settings.chatwoot_webhook_token:
         raise HTTPException(status_code=401, detail="Invalid Chatwoot webhook token.")
+
+
+def _verify_internal_secret(token: str | None) -> None:
+    settings = get_settings()
+    if settings.agent_studio_internal_secret and token != settings.agent_studio_internal_secret:
+        raise HTTPException(status_code=401, detail="Invalid Agent Studio internal secret.")
 
 
 def _integration_statuses() -> list[ExternalIntegrationStatus]:
@@ -176,8 +204,12 @@ def get_twenty_health() -> CrmProviderStatus:
 def receive_chatwoot_webhook(
     payload: ChatwootWebhookPayload,
     x_chatwoot_token: Annotated[str | None, Header()] = None,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
 ) -> ConversationRecord:
     _verify_webhook_token(x_chatwoot_token)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
 
     incoming_message = payload.content or ""
     if not incoming_message.strip():
@@ -208,17 +240,32 @@ def receive_chatwoot_webhook(
         approval_status="needs_approval",
         trace_url=final_state.get("trace_url"),
     )
-    return store.save(record)
+    return store.save(record, context=context)
 
 
 @app.get("/conversations", response_model=ConversationListResponse)
-def list_conversations() -> ConversationListResponse:
-    return ConversationListResponse(conversations=store.list())
+def list_conversations(
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> ConversationListResponse:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    return ConversationListResponse(conversations=store.list(context=context))
 
 
 @app.get("/conversations/{conversation_id}", response_model=ConversationRecord)
-def get_conversation(conversation_id: str) -> ConversationRecord:
-    record = store.get(conversation_id)
+def get_conversation(
+    conversation_id: str,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> ConversationRecord:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    record = store.get(conversation_id, context=context)
     if record is None:
         raise HTTPException(status_code=404, detail="Conversation not found.")
     return record
@@ -228,15 +275,29 @@ def get_conversation(conversation_id: str) -> ConversationRecord:
 async def approve_send(
     conversation_id: str,
     request: ApprovalRequest,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
 ) -> ConversationRecord:
-    record = store.get(conversation_id)
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    record = store.get(conversation_id, context=context)
     if record is None:
         raise HTTPException(status_code=404, detail="Conversation not found.")
 
     if not request.approved:
         record.approval_status = "rejected"
         record.send_status = "not_sent"
-        return store.save(record)
+        saved = store.save(record, context=context)
+        store.record_approval(
+            saved,
+            supervisor_id=request.supervisor_id,
+            approved=False,
+            edited_reply=request.edited_reply,
+            context=context,
+        )
+        return saved
 
     if record.approval_status not in {"needs_approval", "send_failed"}:
         raise HTTPException(status_code=409, detail="Conversation is not waiting for approval.")
@@ -251,33 +312,78 @@ async def approve_send(
     record.approval_status = "sent" if result["status"] in {"sent", "dry_run"} else "send_failed"
     record.send_status = result["status"]
     record.updated_at = datetime.now(timezone.utc)
-    return store.save(record)
+    saved = store.save(record, context=context)
+    store.record_approval(
+        saved,
+        supervisor_id=request.supervisor_id,
+        approved=True,
+        edited_reply=request.edited_reply,
+        context=context,
+    )
+    return saved
 
 
 @app.post("/tools/crm/lookup-contact", response_model=CrmToolResponse)
-async def crm_lookup_contact(request: CrmLookupContactRequest) -> CrmToolResponse:
-    context, plan, result = await TwentyAdapter(get_settings()).lookup_contact(
+async def crm_lookup_contact(
+    request: CrmLookupContactRequest,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> CrmToolResponse:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    crm_context, plan, result = await TwentyAdapter(get_settings()).lookup_contact(
         request.query,
         conversation_id=request.conversation_id,
     )
-    return CrmToolResponse(plan=plan, result=result, crm_context=context)
+    store.record_tool_execution(
+        plan,
+        result,
+        conversation_id=request.conversation_id,
+        crm_context=crm_context,
+        context=context,
+    )
+    return CrmToolResponse(plan=plan, result=result, crm_context=crm_context)
 
 
 @app.post("/tools/crm/create-note", response_model=CrmToolResponse)
-async def crm_create_note(request: CrmCreateNoteRequest) -> CrmToolResponse:
+async def crm_create_note(
+    request: CrmCreateNoteRequest,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> CrmToolResponse:
     _require_supervisor_approval(request.approved)
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
     plan, result = await TwentyAdapter(get_settings()).create_note(
         request.contact_id,
         request.note,
         conversation_id=request.conversation_id,
         approved=request.approved,
     )
+    store.record_tool_execution(
+        plan,
+        result,
+        conversation_id=request.conversation_id,
+        context=context,
+    )
     return CrmToolResponse(plan=plan, result=result)
 
 
 @app.post("/tools/crm/create-task", response_model=CrmToolResponse)
-async def crm_create_task(request: CrmCreateTaskRequest) -> CrmToolResponse:
+async def crm_create_task(
+    request: CrmCreateTaskRequest,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> CrmToolResponse:
     _require_supervisor_approval(request.approved)
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
     plan, result = await TwentyAdapter(get_settings()).create_task(
         request.contact_id,
         request.title,
@@ -286,18 +392,36 @@ async def crm_create_task(request: CrmCreateTaskRequest) -> CrmToolResponse:
         conversation_id=request.conversation_id,
         approved=request.approved,
     )
+    store.record_tool_execution(
+        plan,
+        result,
+        conversation_id=request.conversation_id,
+        context=context,
+    )
     return CrmToolResponse(plan=plan, result=result)
 
 
 @app.post("/tools/crm/update-lead-stage", response_model=CrmToolResponse)
 async def crm_update_lead_stage(
     request: CrmUpdateLeadStageRequest,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
 ) -> CrmToolResponse:
     _require_supervisor_approval(request.approved)
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
     plan, result = await TwentyAdapter(get_settings()).update_lead_stage(
         request.contact_id,
         request.lead_stage,
         conversation_id=request.conversation_id,
         approved=request.approved,
+    )
+    store.record_tool_execution(
+        plan,
+        result,
+        conversation_id=request.conversation_id,
+        context=context,
     )
     return CrmToolResponse(plan=plan, result=result)

@@ -11,6 +11,7 @@ RUN uv sync --frozen --no-dev
 
 COPY agent_studio ./agent_studio
 COPY knowledge ./knowledge
+COPY migrations ./migrations
 
 EXPOSE 8010
 
