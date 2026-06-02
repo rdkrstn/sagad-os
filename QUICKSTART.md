@@ -1,0 +1,138 @@
+# Sagad OS Technical Quickstart
+
+Last updated: 2026-06-02
+
+Sagad OS is an open-source, self-hostable AI operations platform for AI-native BPO and contact-center workflows. It coordinates external tools instead of replacing them.
+
+## Platform Overview
+
+Sagad OS has three core runtime surfaces:
+
+- `v1/`: Next.js supervisor console for queues, approvals, conversations, agent performance, contact drivers, knowledge, QA, integrations, and settings.
+- `agent-studio/`: Python FastAPI + LangGraph backend preview for orchestration, typed state, adapter policy, tool planning, HITL gates, and approved sends.
+- `docs/blueprints/`: architecture docs, diagrams, and implementation phases.
+
+External systems connect through Agent Studio adapters:
+
+- Chatwoot handles channel intake and approved customer replies.
+- Twenty CRM provides customer and lead context.
+- Uptime Kuma provides infrastructure health later.
+- LangSmith provides traces and observability.
+- FastMCP/MCP is a future tool exposure layer behind Agent Studio.
+
+Browser code must not call Chatwoot, Twenty, Uptime Kuma, LangSmith, MCP, or client internal systems directly.
+
+## Prerequisites
+
+- Node.js and npm for the Next.js console.
+- Python 3.12+ for Agent Studio.
+- `uv` for Python dependency management.
+- Optional external services for live integration work: Chatwoot, Twenty CRM, LangSmith, and Uptime Kuma.
+
+## Repository Layout
+
+```text
+.
+|-- v1/                 # Next.js supervisor console
+|-- agent-studio/       # FastAPI + LangGraph backend preview
+|-- docs/blueprints/    # Canonical architecture and study docs
+|-- README.md           # Project overview
+|-- QUICKSTART.md       # Technical quickstart
+```
+
+## Run The Frontend
+
+From `v1/`:
+
+```powershell
+npm install
+npm run dev
+```
+
+Verification commands:
+
+```powershell
+npm run lint
+npx tsc --noEmit --pretty false
+npm run build
+```
+
+The console uses typed mock data by default. Later, it can read Agent Studio through `SAGAD_API_BASE_URL`.
+
+## Run Agent Studio
+
+From `agent-studio/`:
+
+```powershell
+uv sync
+uv run pytest
+uv run uvicorn agent_studio.main:app --reload --port 8010
+```
+
+Useful dev endpoints:
+
+- `GET /health`
+- `GET /integrations`
+- `GET /integrations/twenty/health`
+- `POST /webhooks/chatwoot`
+- `GET /conversations`
+- `GET /conversations/{id}`
+- `POST /conversations/{id}/approve-send`
+
+## Environment Configuration
+
+Use environment variables for provider credentials. Do not commit secrets.
+
+Frontend:
+
+- `SAGAD_API_BASE_URL`
+
+Agent Studio:
+
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+- `OPENAI_EMBEDDING_MODEL`
+- `CHATWOOT_BASE_URL`
+- `CHATWOOT_ACCOUNT_ID`
+- `CHATWOOT_API_ACCESS_TOKEN`
+- `CHATWOOT_WEBHOOK_TOKEN`
+- `TWENTY_ENABLED`
+- `TWENTY_BASE_URL`
+- `TWENTY_API_KEY`
+- `TWENTY_API_MODE`
+- `TWENTY_DRY_RUN`
+- `TWENTY_ALLOW_WRITES`
+- `TWENTY_TIMEOUT_SECONDS`
+- `LANGSMITH_TRACING`
+- `LANGSMITH_API_KEY`
+- `LANGSMITH_PROJECT`
+
+## Current Integration Path
+
+The first live slice is:
+
+```text
+Chatwoot inbound message
+-> Agent Studio webhook
+-> LangGraph typed state
+-> knowledge retrieval and draft
+-> Supervisor Console approval
+-> approved reply back to Chatwoot
+-> optional Twenty CRM note gate
+```
+
+Twenty CRM starts read-only. Writes remain disabled or dry-run until approval gates and write-policy tests are verified.
+
+## Development Rules
+
+- Keep provider credentials server-side in Agent Studio.
+- Keep LangGraph nodes calling internal adapter services, not provider SDKs directly.
+- Use typed state and partial state updates in LangGraph nodes.
+- Do not use legacy LangChain `Chain` classes.
+- Add FastMCP only after adapter boundaries are stable.
+- Preserve mock fallback behavior in the frontend until live APIs are explicitly enabled.
+- Update public docs when behavior, setup, architecture, or integration contracts change.
+
+## Maintainer Workflow
+
+Keep public documentation focused on setup, architecture, interfaces, and contribution rules. Local maintainer notes, working status, task lists, and personal knowledge-management files should stay untracked.

@@ -1,0 +1,21 @@
+flowchart LR
+  Channels["Channel Intake: Web Chat / Email / WhatsApp / SMS / Social"]
+  Chatwoot["Chatwoot: Unified Inbox"]
+  Studio["Agent Studio: AI Orchestration"]
+  Policy["Routing & Policy Engine"]
+  Knowledge["Governed Knowledge Layer: KB / SOPs / QA / Compliance"]
+  Console["Supervisor Console: HITL"]
+  External["External Systems: CRM / Ticketing / Calendar / Payments / Identity / APIs"]
+  Observability["Observability & Traces: LangSmith"]
+  Outcomes["Outcomes: Faster Resolution / Quality / Oversight"]
+
+  Channels --> Chatwoot
+  Chatwoot --> Studio
+  Studio --> Policy
+  Knowledge --> Studio
+  Studio --> Console
+  Console --> Chatwoot
+  Studio --> External
+  Observability --> Studio
+  Observability --> Console
+  Console --> Outcomes

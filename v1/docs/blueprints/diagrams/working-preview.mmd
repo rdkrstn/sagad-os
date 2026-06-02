@@ -1,0 +1,15 @@
+flowchart TD
+  Chatwoot["Chatwoot VPS"] --> Webhook["POST /webhooks/chatwoot"]
+  Webhook --> Studio["Agent Studio API"]
+  Studio --> State["Typed LangGraph State"]
+  State --> Classifier["Classifier Node"]
+  Classifier --> Retriever["Policy-Aware Retriever"]
+  Retriever --> KB["Markdown KB/SOP/QA/Compliance Pack"]
+  Retriever --> Vector["In-Memory Vector Store"]
+  Vector --> Draft["Draft Reply Node"]
+  Draft --> Guardrails["QA + Compliance Check"]
+  Guardrails --> Console["Sagad OS Console"]
+  Console --> Approval["HITL Approve Send"]
+  Approval --> Send["POST /conversations/{id}/approve-send"]
+  Send --> Chatwoot
+  Studio --> LangSmith["LangSmith Traces"]

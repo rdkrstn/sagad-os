@@ -1,0 +1,12 @@
+flowchart LR
+  Source["Markdown Source Docs"] --> Canonical["Knowledge Records"]
+  Canonical --> Chunks["Chunks + Metadata + Version"]
+  Chunks --> Vector["Vector Index"]
+  Chunks --> Store["Source Store"]
+  Conversation["Conversation State"] --> Policy["Intent + Risk + Role Filter"]
+  Policy --> Vector
+  Policy --> Store
+  Store --> Context["Cited Context Pack"]
+  Vector --> Context
+  Context --> Agent["Specialist Agent"]
+  Agent --> QA["QA/Compliance Gate"]

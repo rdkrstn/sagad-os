@@ -1,0 +1,36 @@
+flowchart TD
+  Channel["Channel Adapter: Chatwoot / Email / SMS / Voice"] --> Inbound["Canonical Inbound Message"]
+  Inbound --> Graph["Agent Studio LangGraph"]
+  Graph --> CRM["CRM Adapter: Twenty external / HubSpot / Salesforce / Internal"]
+  Graph --> Webhook["Webhook Adapter: Generic Inbound / Outbound"]
+  Graph --> KB["Knowledge Adapter: Markdown / Notion / Drive / Confluence"]
+  Graph --> Draft["Draft + Tool Plan"]
+  Draft --> HITL["Sagad HITL Approval"]
+  HITL --> Outbound["Channel Adapter Send"]
+  Graph --> Audit["Trace + Audit Adapter"]
+
+  subgraph ProviderSystems["Provider Systems"]
+    CRMProvider["CRM / Internal Tool"]
+    KBProvider["Knowledge Source"]
+    ChannelProvider["Customer Channel"]
+    AuditProvider["LangSmith / Audit Store"]
+    WebhookProvider["External App / Client System"]
+  end
+
+  CRM --> CRMProvider
+  Webhook --> WebhookProvider
+  KB --> KBProvider
+  Outbound --> ChannelProvider
+  Audit --> AuditProvider
+
+  classDef adapter fill:#eef6ff,stroke:#2563eb,color:#0f172a;
+  classDef canonical fill:#ecfdf5,stroke:#059669,color:#0f172a;
+  classDef graphNode fill:#f8fafc,stroke:#475569,color:#0f172a;
+  classDef approval fill:#fff7ed,stroke:#f97316,color:#0f172a;
+  classDef provider fill:#fdf2f8,stroke:#db2777,color:#0f172a;
+
+  class Channel,CRM,Webhook,KB,Outbound,Audit adapter;
+  class Inbound,Draft canonical;
+  class Graph graphNode;
+  class HITL approval;
+  class CRMProvider,WebhookProvider,KBProvider,ChannelProvider,AuditProvider provider;

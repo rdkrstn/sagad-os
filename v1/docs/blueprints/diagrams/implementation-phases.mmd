@@ -1,0 +1,11 @@
+flowchart LR
+  P1["Phase 1: Blueprints"] --> P2["Phase 2: Frontend Preview Wiring"]
+  P2 --> P3["Phase 3: Agent Studio Dev Backend"]
+  P3 --> P4["Phase 4: Chatwoot HITL Loop"]
+  P4 --> P5["Phase 5: Production Hardening"]
+
+  P1 --> D1["Docs, Mermaid, Images"]
+  P2 --> D2["Mock/live API adapter fallback"]
+  P3 --> D3["uv + FastAPI + LangGraph + Markdown RAG"]
+  P4 --> D4["Real inbound + approved outbound + Twenty dry-run"]
+  P5 --> D5["Persistent DB, MCP, managed hosting, Auth, Audit"]

@@ -1,0 +1,19 @@
+sequenceDiagram
+  participant C as Customer
+  participant CW as Chatwoot
+  participant AS as Agent Studio
+  participant KB as Knowledge Pack
+  participant UI as Sagad OS Console
+  participant S as Supervisor
+
+  C->>CW: Sends website chat message
+  CW->>AS: Webhook payload
+  AS->>AS: Normalize and classify
+  AS->>KB: Retrieve KB/SOP/QA/compliance context
+  KB-->>AS: Cited context pack
+  AS->>AS: Draft reply and run QA/compliance
+  AS-->>UI: Conversation appears in approval queue
+  S->>UI: Approves or edits reply
+  UI->>AS: Approve-send request
+  AS->>CW: Send approved message
+  CW-->>C: Customer receives approved reply

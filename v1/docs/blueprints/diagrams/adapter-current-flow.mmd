@@ -1,0 +1,17 @@
+flowchart LR
+  Chatwoot["Chatwoot Payload"] --> Studio["Agent Studio"]
+  Studio --> Canonical["Sagad OS Canonical State"]
+  Canonical --> Console["Sagad OS Console"]
+  Console --> Proxy["Next.js Approval Proxy"]
+  Proxy --> Studio
+  Studio --> Send["Chatwoot Send Adapter"]
+
+  classDef external fill:#f8fafc,stroke:#94a3b8,color:#0f172a;
+  classDef backend fill:#eef6ff,stroke:#2563eb,color:#0f172a;
+  classDef canonical fill:#ecfdf5,stroke:#059669,color:#0f172a;
+  classDef approval fill:#fff7ed,stroke:#f97316,color:#0f172a;
+
+  class Chatwoot,Send external;
+  class Studio,Proxy backend;
+  class Canonical canonical;
+  class Console approval;
