@@ -1,52 +1,268 @@
-# Sagad OS v1
+# Sagad OS
 
-Sagad OS is an open-source, self-hostable AI-native BPO platform. Chatwoot handles channel intake, Agent Studio handles LangGraph/LangChain orchestration, the Supervisor Console handles HITL approval, and LangSmith handles observability.
+Sagad OS is an open-source, self-hostable AI operations platform for AI-native BPO and contact-center workflows.
 
-The current project contains:
+It coordinates inboxes, CRMs, knowledge bases, approvals, QA, observability, and tool execution through a supervised AI operations layer. Sagad OS does not replace every tool. It connects them through controlled server-side adapters.
 
-- `v1/`: Next.js supervisor console preview for a home services account.
-- `agent-studio/`: `uv`-managed FastAPI + LangGraph backend preview.
-- `docs/blueprints/`: canonical architecture and operating model docs.
+> Status: early preview. Sagad OS is not production-hardened yet.
 
-Start with `QUICKSTART.md` for the technical guide: architecture, repo layout, local setup, environment variables, API endpoints, and integration boundaries.
+## What It Does
 
-Contributor docs:
+Sagad OS is built around one operating loop:
 
-- `CONTRIBUTING.md`
-- `SECURITY.md`
-- `docs/CI-CD.md`
-- `docs/VERSIONING.md`
-- `docs/DEPLOYMENT.md`
+```text
+customer message
+-> channel intake
+-> AI orchestration
+-> knowledge and tool context
+-> draft response
+-> human approval
+-> approved customer reply or external action
+-> audit and trace
+```
 
-Sagad OS does not replace every tool. Chatwoot, Twenty CRM, LangSmith, generic webhooks, and future MCP servers stay external or adapter-governed. Agent Studio owns credentials, policies, approvals, retries, audit logs, and trace metadata. n8n is not part of Sagad OS core orchestration.
+The first target workflow follows the canonical blueprint: customer channels flow into Chatwoot, Agent Studio orchestrates the conversation with governed knowledge, policy checks, tool adapters, and LangSmith traces, then the Supervisor Console approves or escalates before any reply is delivered.
 
-## Local Checks
+## Core Architecture
 
-Frontend:
+```mermaid
+flowchart LR
+  Channels["Customer Channels"]
+  Chatwoot["Chatwoot Inbox"]
+  Studio["Agent Studio"]
+  Knowledge["Knowledge / SOP / QA"]
+  Tools["Server-Side Adapters"]
+  Console["Sagad Console"]
+  External["Twenty / Uptime Kuma / APIs"]
+  LangSmith["LangSmith Traces"]
+
+  Channels --> Chatwoot
+  Chatwoot --> Studio
+  Knowledge --> Studio
+  Studio --> Tools
+  Tools --> External
+  Studio --> Console
+  Console --> Studio
+  Studio --> Chatwoot
+  Studio --> LangSmith
+```
+
+### Sagad Console
+
+The supervisor UI for queues, approvals, conversations, agent performance, contact drivers, QA/SOP review, knowledge inventory, integrations, and settings.
+
+Location: `v1/`
+
+### Agent Studio
+
+The backend orchestration layer. It owns typed LangGraph state, LangChain tools, adapter policy, approval gates, knowledge retrieval, draft generation, trace metadata, and approved external actions.
+
+Location: `agent-studio/`
+
+### External Systems
+
+Sagad OS coordinates external systems through Agent Studio adapters:
+
+- Chatwoot for channel intake and approved replies.
+- Twenty CRM for customer and lead context.
+- Uptime Kuma for infrastructure health later.
+- LangSmith for traces and observability.
+- MCP/FastMCP as a future tool exposure layer behind Agent Studio.
+
+Browser code must not call provider APIs directly.
+
+## Demo Videos
+
+Video demos are planned but not published yet.
+
+Planned walkthroughs:
+
+- Sagad Console overview.
+- Chatwoot human-in-the-loop reply flow.
+- Agent Studio architecture.
+- Self-hosted VPS deployment.
+- Future MCP/FastMCP connector model.
+
+## Current Repository
+
+```text
+.
+|-- v1/                 # Next.js supervisor console
+|-- agent-studio/       # FastAPI + LangGraph backend preview
+|-- docs/blueprints/    # Architecture and implementation blueprints
+|-- docs/CI-CD.md       # CI and future CD model
+|-- docs/DEPLOYMENT.md  # Container and VPS deployment notes
+|-- docs/VERSIONING.md  # Release/versioning policy
+|-- QUICKSTART.md       # Technical setup guide
+|-- CONTRIBUTING.md     # Contributor workflow
+|-- SECURITY.md         # Security policy
+|-- compose.preview.yaml
+```
+
+## Requirements
+
+- Node.js and npm for the console.
+- Python 3.12+ for Agent Studio.
+- `uv` for Python dependency management.
+- Docker for container builds.
+- Optional external services: Chatwoot, Twenty CRM, Uptime Kuma, LangSmith.
+
+## Quick Start
+
+Read `QUICKSTART.md` for the full setup guide.
+
+### Frontend
 
 ```powershell
 cd v1
+npm install
+npm run dev
+```
+
+Verification:
+
+```powershell
 npm run lint
 npx tsc --noEmit --pretty false
 npm run build
 ```
 
-Backend:
+### Agent Studio
 
 ```powershell
 cd agent-studio
 uv sync
 uv run pytest
+uv run uvicorn agent_studio.main:app --reload --port 8010
 ```
 
-Container smoke test:
+Useful local endpoints:
+
+- `GET /health`
+- `GET /integrations`
+- `GET /integrations/twenty/health`
+- `POST /webhooks/chatwoot`
+- `GET /conversations`
+- `GET /conversations/{id}`
+- `POST /conversations/{id}/approve-send`
+
+### Docker Preview
 
 ```powershell
 docker compose -f compose.preview.yaml build
+docker compose -f compose.preview.yaml up -d
 ```
 
-Self-hosting is the open-source path. Paid commercial work can later focus on managed hosting, implementation, support, and enterprise operations.
+Default ports:
 
-## Documentation
+- Sagad Console: `3000`
+- Agent Studio: `8010`
 
-Project documentation is plain Markdown. Use `QUICKSTART.md` for technical onboarding and `docs/blueprints/` for architecture context. Local maintainer notes such as status, task, focus, and memory files are intentionally ignored by Git.
+## Integration Path
+
+The first live milestone is:
+
+```text
+real Chatwoot message
+-> Agent Studio receives webhook
+-> Agent Studio creates typed conversation state
+-> knowledge/SOP context is retrieved
+-> optional Twenty CRM context is loaded
+-> AI draft is created
+-> supervisor approves
+-> reply sends back through Chatwoot
+-> audit and trace are recorded
+```
+
+Twenty CRM starts read-only. External writes remain disabled or dry-run until human approval gates and write-policy tests are verified.
+
+## Deployment Model
+
+Sagad OS is designed for:
+
+- self-hosted deployments;
+- managed hosting later;
+- client-owned deployments for high-risk environments.
+
+The first preview deployment can run beside Chatwoot, Twenty CRM, and Uptime Kuma on a single VPS.
+
+```text
+VPS
+|-- Chatwoot
+|-- Twenty CRM
+|-- Uptime Kuma
+|-- Sagad Console
+`-- Agent Studio
+```
+
+Before production use, Sagad OS still needs persistent Sagad database storage, pgvector-backed retrieval, secret management, auth, tenant isolation, audit persistence, backups, and deployment runbooks.
+
+## CI/CD And Versioning
+
+GitHub Actions currently verify:
+
+- frontend lint, typecheck, and build;
+- Agent Studio tests;
+- container build smoke tests.
+
+See:
+
+- `docs/CI-CD.md`
+- `docs/VERSIONING.md`
+- `docs/DEPLOYMENT.md`
+
+Current version: `0.1.0`
+
+## Roadmap
+
+Current:
+
+- Next.js supervisor console preview.
+- Agent Studio FastAPI + LangGraph backend preview.
+- Mocked home-services operating data.
+- Chatwoot and Twenty integration boundaries.
+- Docker and CI scaffolding.
+
+Next:
+
+- Sagad Postgres with pgvector.
+- Persistent conversations, messages, approvals, tool plans, and audit events.
+- Live Chatwoot webhook loop.
+- Twenty CRM read-only context.
+- Human-in-the-loop approved send back to Chatwoot.
+- Uptime Kuma read-only health visibility.
+
+Later:
+
+- connector registry;
+- managed hosting path;
+- auth and tenant isolation;
+- production secret management;
+- durable LangGraph checkpoints;
+- MCP/FastMCP read-only tool exposure;
+- write tools behind approval and audit gates;
+- high-risk account workflows.
+
+## Contributing
+
+Read `CONTRIBUTING.md` before opening a pull request.
+
+Contribution rules:
+
+- Keep provider credentials server-side in Agent Studio.
+- Do not add browser-direct calls to external tools.
+- Keep high-risk writes behind approval gates.
+- Preserve typed frontend contracts and typed Agent Studio state.
+- Use `uv` for Python dependency management.
+- Avoid deprecated LangChain `Chain` classes.
+- Update public docs when setup, behavior, architecture, or integration contracts change.
+
+## Security
+
+Read `SECURITY.md` before using Sagad OS with customer data.
+
+The current preview is not production-hardened. Do not use it for regulated or high-risk customer data without reviewing auth, audit, tenant isolation, retention, backups, and secret management.
+
+## License
+
+A license file should be added before the first stable public release.

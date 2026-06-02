@@ -1,8 +1,8 @@
-# Sagad Blueprints
+# Sagad OS Blueprints
 
 ## Purpose
 
-This package is the visual and operational blueprint set for Sagad. It explains how the AI-native BPO layer moves from today's mock supervisor console into a working Chatwoot and Agent Studio preview.
+This package is the visual and operational blueprint set for Sagad OS. It explains how the AI-native BPO layer moves from today's mock supervisor console into a working Chatwoot and Agent Studio preview.
 
 ## Blueprint Set
 

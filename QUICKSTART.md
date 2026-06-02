@@ -15,7 +15,7 @@ Sagad OS has three core runtime surfaces:
 External systems connect through Agent Studio adapters:
 
 - Chatwoot handles channel intake and approved customer replies.
-- Twenty CRM provides customer and lead context.
+- Twenty CRM is the first external CRM adapter target and starts read-only.
 - Uptime Kuma provides infrastructure health later.
 - LangSmith provides traces and observability.
 - FastMCP/MCP is a future tool exposure layer behind Agent Studio.
@@ -138,7 +138,7 @@ Chatwoot inbound message
 -> knowledge retrieval and draft
 -> Supervisor Console approval
 -> approved reply back to Chatwoot
--> optional Twenty CRM note gate
+-> optional approval-gated CRM note plan
 ```
 
 Twenty CRM starts read-only. Writes remain disabled or dry-run until approval gates and write-policy tests are verified.

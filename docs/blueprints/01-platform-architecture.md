@@ -57,12 +57,12 @@ flowchart LR
 | Channel | Receive and send messages across web chat, email, WhatsApp, SMS, social, or future voice | Chatwoot adapter first, generic webhooks later |
 | Intake | Debounce, group, normalize, and persist inbound messages | Agent Studio webhook/API and typed LangGraph state |
 | Classification | Identify intent, route, contact driver, confidence, and reason | LangChain chat model call with structured output |
-| Routing | Send the conversation to the correct specialist path | Switch node, later deterministic graph edge |
+| Routing | Send the conversation to the correct specialist path | Deterministic rule table or LangGraph edge |
 | Agent | Draft a useful reply inside role boundaries | Sales, support, discovery agents first |
 | Knowledge | Provide FAQs, SOPs, guides, policies, and retrieval context | Static docs first, RAG later |
 | Tools | Read/write CRM, tickets, notes, tags, tasks, lead stages, and approved webhooks through adapters | Twenty, Chatwoot, generic webhooks, and future MCP after base loop works |
 | Supervisor | Check risk, confidence, SLA, AHT, driver, and policy | Rules first, agentic supervisor later |
-| HITL | Decide approve, edit, reject, take over, or auto-send | Supervisor queue |
+| HITL | Decide approve, edit, reject, take over, or later allow policy-governed auto-send | Supervisor queue first |
 | Observability | Trace decisions, latency, quality, confidence, alerts, and anomalies | LangSmith |
 
 ## AI Supervisor Pod Model
