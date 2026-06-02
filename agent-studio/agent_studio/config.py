@@ -15,6 +15,8 @@ def _bool_env(name: str, default: bool = False) -> bool:
 
 
 class Settings(BaseModel):
+    database_url: str | None = None
+    agent_studio_internal_secret: str | None = None
     chatwoot_base_url: str | None = None
     chatwoot_account_id: str | None = None
     chatwoot_api_access_token: str | None = None
@@ -63,6 +65,8 @@ class Settings(BaseModel):
 @lru_cache
 def get_settings() -> Settings:
     return Settings(
+        database_url=os.getenv("DATABASE_URL"),
+        agent_studio_internal_secret=os.getenv("AGENT_STUDIO_INTERNAL_SECRET"),
         chatwoot_base_url=os.getenv("CHATWOOT_BASE_URL"),
         chatwoot_account_id=os.getenv("CHATWOOT_ACCOUNT_ID"),
         chatwoot_api_access_token=os.getenv("CHATWOOT_API_ACCESS_TOKEN"),

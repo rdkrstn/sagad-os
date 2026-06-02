@@ -13,6 +13,8 @@ These blueprints are intentionally architecture-first. They document the product
 - [03 - AI Contact Center Operating Model](./03-ai-contact-center-operating-model.md): BPO-inspired operating model, agent roles, supervisors, contact drivers, SOPs, QA, and escalation rules.
 - [04 - Level 1 Service Business MVP](./04-level-1-service-business-mvp.md): the first build target for service businesses.
 
+Related implementation lock: [06 - Stack Lock-In](../../v1/docs/blueprints/06-stack-lock-in.md) fixes the Next.js, Auth.js, Sagad Postgres/pgvector, Agent Studio, and Chatwoot/Twenty adapter boundaries for the console preview track.
+
 ## Learning Path
 
 1. Prove the core Chatwoot -> Agent Studio -> HITL loop.

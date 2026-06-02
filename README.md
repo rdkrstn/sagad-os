@@ -157,6 +157,7 @@ Default ports:
 
 - Sagad Console: `3000`
 - Agent Studio: `8010`
+- Sagad Postgres/pgvector: `5433`
 
 ## Integration Path
 
@@ -195,7 +196,7 @@ VPS
 `-- Agent Studio
 ```
 
-Before production use, Sagad OS still needs persistent Sagad database storage, pgvector-backed retrieval, secret management, auth, tenant isolation, audit persistence, backups, and deployment runbooks.
+The current preview includes the first database and auth foundation: Auth.js for console sessions, Sagad Postgres with pgvector in preview compose, tenant-scoped Sagad tables, and durable Agent Studio conversation/approval/tool/audit rows when `DATABASE_URL` is configured. Production still needs hardened secret management, backups, migration operations, encrypted tenant secrets, auth runbooks, and pgvector-backed retrieval validation.
 
 ## CI/CD And Versioning
 
@@ -222,15 +223,17 @@ Current:
 - Mocked home-services operating data.
 - Chatwoot and Twenty integration boundaries.
 - Docker and CI scaffolding.
+- Auth.js console session foundation.
+- Sagad Postgres/pgvector schema foundation.
+- Optional Agent Studio Postgres persistence for conversations, approvals, tool rows, and audit events.
 
 Next:
 
-- Sagad Postgres with pgvector.
-- Persistent conversations, messages, approvals, tool plans, and audit events.
 - Live Chatwoot webhook loop.
 - Twenty CRM read-only context.
 - Human-in-the-loop approved send back to Chatwoot.
 - Uptime Kuma read-only health visibility.
+- pgvector-backed governed knowledge retrieval.
 
 Later:
 

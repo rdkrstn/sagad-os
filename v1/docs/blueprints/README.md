@@ -11,12 +11,15 @@ This package is the visual and operational blueprint set for Sagad OS. It explai
 - `03-chatwoot-hitl-loop.md`: first live preview loop with HITL-only sending.
 - `04-implementation-phases.md`: phased delivery path from diagrams to dev preview and production hardening.
 - `05-adapter-architecture.md`: tool-agnostic adapter layer for channels, CRM, automation, knowledge, and audit systems.
+- `06-stack-lock-in.md`: locked platform stack for Next.js, Auth.js, Sagad Postgres/pgvector, Agent Studio, and Chatwoot/Twenty adapters.
 
 ## Diagram Assets
 
 - Mermaid sources live in `diagrams/`.
 - Rendered technical images live in `images/`.
 - The generated poster image is for presentation and orientation only; Mermaid files remain the source of truth for exact architecture.
+- `diagrams/stack-lock-in.mmd` is the source of truth for the stack lock-in diagram.
+- Stack lock-in artifacts are available as `images/stack-lock-in.svg`, `images/stack-lock-in.png`, and `images/stack-lock-in-poster.png`.
 
 ## Current Boundary
 

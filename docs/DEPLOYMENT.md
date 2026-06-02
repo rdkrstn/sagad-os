@@ -15,11 +15,13 @@ Services:
 
 - `sagad-console`: Next.js supervisor console.
 - `agent-studio`: FastAPI + LangGraph backend preview.
+- `sagad-db`: Postgres 16 with pgvector for Sagad-owned data.
 
 Default ports:
 
 - Console: `3000`
 - Agent Studio: `8010`
+- Sagad Postgres/pgvector: `5433` on the host, `5432` inside compose.
 
 ## Health Checks
 
@@ -51,9 +53,9 @@ Keep Agent Studio as the only service that talks to provider APIs, databases, ve
 Before production use, add:
 
 - TLS and reverse proxy config.
-- persistent Sagad database and pgvector.
-- secret management.
-- auth and role-based access.
-- durable audit storage.
+- hardened Postgres/pgvector operations, migrations, and backups.
+- secret management and encrypted tenant/client credentials.
+- auth runbooks, role review, and session hardening.
+- durable audit retention and export policy.
 - backup and restore procedures.
 - image publishing and deploy automation.

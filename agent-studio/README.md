@@ -14,6 +14,8 @@ Agent Studio is also the adapter boundary. External tools such as Twenty CRM, Ch
 
 ## Environment Variables
 
+- `DATABASE_URL`
+- `AGENT_STUDIO_INTERNAL_SECRET`
 - `CHATWOOT_BASE_URL`
 - `CHATWOOT_ACCOUNT_ID`
 - `CHATWOOT_API_ACCESS_TOKEN`
@@ -33,6 +35,10 @@ Agent Studio is also the adapter boundary. External tools such as Twenty CRM, Ch
 - `OPENAI_EMBEDDING_MODEL`
 
 OpenAI and LangSmith variables are optional in this deterministic dev preview. Chatwoot send runs as `dry_run` when Chatwoot credentials are not set. Twenty CRM is disabled and dry-run by default; live writes require `TWENTY_ENABLED=true`, `TWENTY_DRY_RUN=false`, `TWENTY_ALLOW_WRITES=true`, and an explicit supervisor approval payload.
+
+`DATABASE_URL` is optional. When unset, Agent Studio uses the in-memory development store. When set to a Postgres-compatible URL, Agent Studio runs SQL migrations from `migrations/`, enables the Sagad schema foundation, and stores conversations, inbound messages, approvals, CRM tool plans, CRM tool results, and audit events through `psycopg`. `AGENT_STUDIO_INTERNAL_SECRET` protects privileged console-to-Agent-Studio routes when configured.
+
+When `DATABASE_URL` is set, Agent Studio also syncs Markdown knowledge records into Postgres and uses pgvector-backed retrieval with deterministic local dev embeddings. Production retrieval should replace those dev embeddings with real embedding generation and evaluation.
 
 ## Commands
 

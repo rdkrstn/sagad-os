@@ -1,14 +1,40 @@
 services:
+  sagad-db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: sagad_os
+      POSTGRES_USER: sagad
+      POSTGRES_PASSWORD: sagad_dev_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - sagad-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sagad -d sagad_os"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   sagad-console:
     build:
       context: ./v1
     environment:
       SAGAD_API_BASE_URL: http://agent-studio:8010
+      DATABASE_URL: postgresql://sagad:sagad_dev_password@sagad-db:5432/sagad_os
+      AUTH_URL: http://localhost:3000
+      AUTH_SECRET: sagad-preview-auth-secret-change-me
+      EMAIL_SERVER: smtp://localhost:1025
+      EMAIL_FROM: Sagad OS <noreply@sagad.local>
+      AGENT_STUDIO_INTERNAL_SECRET: sagad-preview-internal-secret-change-me
       NEXT_TELEMETRY_DISABLED: "1"
     ports:
       - "3000:3000"
     depends_on:
-      - agent-studio
+      sagad-db:
+        condition: service_healthy
+      agent-studio:
+        condition: service_healthy
     restart: unless-stopped
 
   agent-studio:
@@ -16,6 +42,20 @@ services:
       context: ./agent-studio
     env_file:
       - ./agent-studio/.env.example
+    environment:
+      DATABASE_URL: postgresql://sagad:sagad_dev_password@sagad-db:5432/sagad_os
+      AGENT_STUDIO_INTERNAL_SECRET: sagad-preview-internal-secret-change-me
     ports:
       - "8010:8010"
+    depends_on:
+      sagad-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
+
+volumes:
+  sagad-db-data:

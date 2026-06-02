@@ -27,6 +27,7 @@ Browser code must not call Chatwoot, Twenty, Uptime Kuma, LangSmith, MCP, or cli
 - Node.js and npm for the Next.js console.
 - Python 3.12+ for Agent Studio.
 - `uv` for Python dependency management.
+- Docker if you want the bundled Sagad Postgres/pgvector preview database.
 - Optional external services for live integration work: Chatwoot, Twenty CRM, LangSmith, and Uptime Kuma.
 
 ## Repository Layout
@@ -63,7 +64,7 @@ npx tsc --noEmit --pretty false
 npm run build
 ```
 
-The console uses typed mock data by default. Later, it can read Agent Studio through `SAGAD_API_BASE_URL`.
+The console uses typed mock data by default. It can read Agent Studio through `SAGAD_API_BASE_URL`. Auth.js is wired for email magic-link sessions when `DATABASE_URL`, `AUTH_SECRET`, `AUTH_URL`, `EMAIL_SERVER`, and `EMAIL_FROM` are configured.
 
 ## Run Agent Studio
 
@@ -98,6 +99,7 @@ The preview compose file starts:
 
 - Sagad Console on port `3000`.
 - Agent Studio on port `8010`.
+- Sagad Postgres/pgvector on host port `5433`.
 
 ## Environment Configuration
 
@@ -106,9 +108,17 @@ Use environment variables for provider credentials. Do not commit secrets.
 Frontend:
 
 - `SAGAD_API_BASE_URL`
+- `DATABASE_URL`
+- `AUTH_SECRET`
+- `AUTH_URL`
+- `EMAIL_SERVER`
+- `EMAIL_FROM`
+- `AGENT_STUDIO_INTERNAL_SECRET`
 
 Agent Studio:
 
+- `DATABASE_URL`
+- `AGENT_STUDIO_INTERNAL_SECRET`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 - `OPENAI_EMBEDDING_MODEL`
