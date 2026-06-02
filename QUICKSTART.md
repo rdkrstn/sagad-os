@@ -36,8 +36,14 @@ Browser code must not call Chatwoot, Twenty, Uptime Kuma, LangSmith, MCP, or cli
 |-- v1/                 # Next.js supervisor console
 |-- agent-studio/       # FastAPI + LangGraph backend preview
 |-- docs/blueprints/    # Canonical architecture and study docs
+|-- docs/CI-CD.md       # CI and future CD model
+|-- docs/DEPLOYMENT.md  # container and VPS deployment notes
+|-- docs/VERSIONING.md  # release/versioning policy
 |-- README.md           # Project overview
 |-- QUICKSTART.md       # Technical quickstart
+|-- CONTRIBUTING.md     # contributor workflow
+|-- SECURITY.md         # security policy
+|-- compose.preview.yaml
 ```
 
 ## Run The Frontend
@@ -78,6 +84,20 @@ Useful dev endpoints:
 - `GET /conversations`
 - `GET /conversations/{id}`
 - `POST /conversations/{id}/approve-send`
+
+## Run With Docker
+
+From the repository root:
+
+```powershell
+docker compose -f compose.preview.yaml build
+docker compose -f compose.preview.yaml up -d
+```
+
+The preview compose file starts:
+
+- Sagad Console on port `3000`.
+- Agent Studio on port `8010`.
 
 ## Environment Configuration
 
@@ -132,6 +152,13 @@ Twenty CRM starts read-only. Writes remain disabled or dry-run until approval ga
 - Add FastMCP only after adapter boundaries are stable.
 - Preserve mock fallback behavior in the frontend until live APIs are explicitly enabled.
 - Update public docs when behavior, setup, architecture, or integration contracts change.
+
+## CI And Versioning
+
+- CI workflow: `.github/workflows/ci.yml`
+- Version policy: `docs/VERSIONING.md`
+- Deployment notes: `docs/DEPLOYMENT.md`
+- Current version: `VERSION`
 
 ## Maintainer Workflow
 

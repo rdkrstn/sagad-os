@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest a focused Sagad OS improvement.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or operator problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should Sagad OS do?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Supervisor Console
+        - Agent Studio
+        - Integrations
+        - Knowledge/QA
+        - Deployment
+        - Documentation
+        - Other
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints or risks
+      description: Provider boundaries, HITL needs, security concerns, or deployment notes.

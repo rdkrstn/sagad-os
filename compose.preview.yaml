@@ -1,0 +1,21 @@
+services:
+  sagad-console:
+    build:
+      context: ./v1
+    environment:
+      SAGAD_API_BASE_URL: http://agent-studio:8010
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - agent-studio
+    restart: unless-stopped
+
+  agent-studio:
+    build:
+      context: ./agent-studio
+    env_file:
+      - ./agent-studio/.env.example
+    ports:
+      - "8010:8010"
+    restart: unless-stopped
