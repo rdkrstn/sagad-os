@@ -41,6 +41,8 @@ def test_foundation_migration_defines_auth_pgvector_and_sagad_tables() -> None:
     assert "CREATE TABLE IF NOT EXISTS organizations" in migration
     assert "CREATE TABLE IF NOT EXISTS profiles" in migration
     assert "CREATE TABLE IF NOT EXISTS conversation_messages" in migration
+    assert "CREATE TABLE IF NOT EXISTS integration_connections" in migration
+    assert "CREATE TABLE IF NOT EXISTS integration_secret_versions" in migration
     assert "CREATE TABLE IF NOT EXISTS knowledge_chunk_embeddings" in migration
     assert "ENABLE ROW LEVEL SECURITY" in migration
 

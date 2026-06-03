@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from agent_studio.config import get_settings
+from agent_studio.integration_config import integration_config_store
 from agent_studio.main import app
 from agent_studio.realtime import create_realtime_token
 from agent_studio.store import store
@@ -14,6 +15,7 @@ client = TestClient(app)
 
 def setup_function() -> None:
     store.clear()
+    integration_config_store.clear()
     get_settings.cache_clear()
 
 
@@ -248,6 +250,147 @@ def test_integrations_use_generic_webhooks_not_n8n() -> None:
     assert "n8n" not in providers
     webhook = next(item for item in integrations if item["provider"] == "Generic Webhooks")
     assert webhook["kind"] == "webhook"
+
+
+def test_integration_configs_are_viewable_without_secrets() -> None:
+    response = client.get(
+        "/integration-configs",
+        headers={"X-Sagad-Role": "supervisor"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    providers = {item["provider"] for item in payload["connections"]}
+    assert providers == {"chatwoot", "twenty"}
+    assert "secret-token" not in response.text
+    assert "twenty-secret" not in response.text
+
+
+def test_integration_config_write_requires_owner_or_admin() -> None:
+    response = client.put(
+        "/integration-configs/chatwoot",
+        headers={"X-Sagad-Role": "supervisor"},
+        json={
+            "base_url": "https://chat.example.test",
+            "account_id": "1",
+            "api_access_token": "secret-token",
+            "webhook_token": "secret-webhook",
+            "enabled": True,
+            "dry_run": False,
+        },
+    )
+
+    assert response.status_code == 403
+    assert "owner or admin" in response.json()["detail"].lower()
+
+
+def test_owner_can_save_chatwoot_config_without_secret_leak() -> None:
+    response = client.put(
+        "/integration-configs/chatwoot",
+        headers={"X-Sagad-Role": "owner"},
+        json={
+            "base_url": "https://chat.example.test",
+            "account_id": "1",
+            "inbox_id": "7",
+            "api_access_token": "secret-token",
+            "webhook_token": "secret-webhook",
+            "enabled": True,
+            "dry_run": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "chatwoot"
+    assert payload["status"] == "ready"
+    assert payload["configured"] is True
+    assert payload["has_api_access_token"] is True
+    assert payload["has_webhook_token"] is True
+    assert "secret-token" not in response.text
+    assert "secret-webhook" not in response.text
+
+
+def test_owner_can_save_twenty_config_without_secret_leak() -> None:
+    response = client.put(
+        "/integration-configs/twenty",
+        headers={"X-Sagad-Role": "admin"},
+        json={
+            "base_url": "https://crm.example.test",
+            "api_mode": "graphql",
+            "api_key": "twenty-secret",
+            "enabled": True,
+            "dry_run": True,
+            "allow_writes": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "twenty"
+    assert payload["status"] == "dry_run"
+    assert payload["configured"] is True
+    assert payload["has_api_key"] is True
+    assert payload["writes_enabled"] is False
+    assert "twenty-secret" not in response.text
+
+
+def test_integration_config_test_reports_missing_config() -> None:
+    response = client.post(
+        "/integration-configs/twenty/test",
+        headers={"X-Sagad-Role": "admin"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "twenty"
+    assert payload["status"] == "unconfigured"
+    assert "base url" in payload["detail"].lower()
+
+
+def test_integration_config_test_requires_owner_or_admin() -> None:
+    response = client.post(
+        "/integration-configs/twenty/test",
+        headers={"X-Sagad-Role": "supervisor"},
+    )
+
+    assert response.status_code == 403
+    assert "owner or admin" in response.json()["detail"].lower()
+
+
+def test_integration_config_partial_update_preserves_existing_values() -> None:
+    created = client.put(
+        "/integration-configs/chatwoot",
+        headers={"X-Sagad-Role": "owner"},
+        json={
+            "base_url": "https://chat.example.test",
+            "account_id": "1",
+            "inbox_id": "7",
+            "api_access_token": "secret-token",
+            "webhook_token": "secret-webhook",
+            "enabled": True,
+            "dry_run": False,
+        },
+    )
+    assert created.status_code == 200
+
+    updated = client.put(
+        "/integration-configs/chatwoot",
+        headers={"X-Sagad-Role": "owner"},
+        json={
+            "inbox_id": "9",
+            "enabled": True,
+            "dry_run": False,
+        },
+    )
+
+    assert updated.status_code == 200
+    payload = updated.json()
+    assert payload["base_url"] == "https://chat.example.test"
+    assert payload["account_id"] == "1"
+    assert payload["inbox_id"] == "9"
+    assert payload["has_api_access_token"] is True
+    assert payload["has_webhook_token"] is True
+    assert "secret-token" not in updated.text
 
 
 def test_twenty_dry_run_write_does_not_call_network(

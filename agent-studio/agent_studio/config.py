@@ -32,6 +32,7 @@ class Settings(BaseModel):
     langsmith_api_key: str | None = None
     langsmith_project: str | None = None
     sagad_realtime_secret: str | None = None
+    sagad_integration_encryption_key: str | None = None
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.4"
     openai_embedding_model: str = "text-embedding-3-small"
@@ -83,6 +84,7 @@ def get_settings() -> Settings:
         langsmith_api_key=os.getenv("LANGSMITH_API_KEY"),
         langsmith_project=os.getenv("LANGSMITH_PROJECT"),
         sagad_realtime_secret=os.getenv("SAGAD_REALTIME_SECRET"),
+        sagad_integration_encryption_key=os.getenv("SAGAD_INTEGRATION_ENCRYPTION_KEY"),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5.4"),
         openai_embedding_model=os.getenv(

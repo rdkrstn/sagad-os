@@ -116,6 +116,37 @@ FROM organizations
 WHERE slug = 'johnred-workspace'
 ON CONFLICT DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS integration_connections (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('chatwoot', 'twenty')),
+  base_url TEXT,
+  account_id TEXT,
+  inbox_id TEXT,
+  api_mode TEXT,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  dry_run BOOLEAN NOT NULL DEFAULT true,
+  allow_writes BOOLEAN NOT NULL DEFAULT false,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, provider)
+);
+
+CREATE TABLE IF NOT EXISTS integration_secret_versions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  connection_id UUID NOT NULL REFERENCES integration_connections(id) ON DELETE CASCADE,
+  secret_name TEXT NOT NULL CHECK (secret_name IN ('api_access_token', 'webhook_token', 'api_key')),
+  encrypted_secret BYTEA NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS integration_secret_versions_active_idx
+  ON integration_secret_versions(connection_id, secret_name)
+  WHERE is_active;
+
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -376,6 +407,8 @@ DECLARE
 BEGIN
   FOREACH table_name IN ARRAY ARRAY[
     'chatwoot_inboxes',
+    'integration_connections',
+    'integration_secret_versions',
     'conversations',
     'conversation_messages',
     'approvals',
@@ -430,6 +463,8 @@ DECLARE
 BEGIN
   FOREACH table_name IN ARRAY ARRAY[
     'chatwoot_inboxes',
+    'integration_connections',
+    'integration_secret_versions',
     'conversations',
     'conversation_messages',
     'approvals',
