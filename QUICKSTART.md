@@ -45,6 +45,7 @@ Browser code must not call Chatwoot, Twenty, Uptime Kuma, LangSmith, MCP, or cli
 |-- CONTRIBUTING.md     # contributor workflow
 |-- SECURITY.md         # security policy
 |-- compose.preview.yaml
+|-- compose.vps.example.yaml # Example NPM/shared-network VPS compose
 ```
 
 ## Run The Frontend
@@ -102,6 +103,17 @@ The preview compose file starts:
 - Sagad Console on port `3000`.
 - Agent Studio on port `8010`.
 - Sagad Postgres/pgvector on host port `5433`.
+
+For a VPS that already uses Nginx Proxy Manager on an external Docker network, copy the example to a local ignored compose file:
+
+```bash
+cp .env.example .env
+cp compose.vps.example.yaml compose.vps.yaml
+# Edit .env and compose.vps.yaml for the target VPS.
+docker compose -f compose.vps.yaml up -d --build
+```
+
+The local `compose.vps.yaml` file is ignored by Git so each VPS can adjust names, networks, and ports. The example does not bind host port `3000`. Nginx Proxy Manager should route to `sagad-console:3000` on the shared `client_internal_network`.
 
 ## Environment Configuration
 

@@ -1,0 +1,89 @@
+name: sagad-os
+
+services:
+  sagad-db:
+    image: pgvector/pgvector:pg16
+    container_name: sagad-db
+    environment:
+      POSTGRES_DB: ${SAGAD_POSTGRES_DB:-sagad_os}
+      POSTGRES_USER: ${SAGAD_POSTGRES_USER:-sagad}
+      POSTGRES_PASSWORD: ${SAGAD_POSTGRES_PASSWORD:?Set SAGAD_POSTGRES_PASSWORD in .env}
+    volumes:
+      - sagad-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SAGAD_POSTGRES_USER:-sagad} -d ${SAGAD_POSTGRES_DB:-sagad_os}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - client_internal_network
+    restart: unless-stopped
+
+  sagad-console:
+    build:
+      context: ./v1
+    container_name: sagad-console
+    environment:
+      SAGAD_API_BASE_URL: http://sagad-agent-studio:8010
+      DATABASE_URL: postgresql://${SAGAD_POSTGRES_USER:-sagad}:${SAGAD_POSTGRES_PASSWORD}@sagad-db:5432/${SAGAD_POSTGRES_DB:-sagad_os}
+      AUTH_URL: ${AUTH_URL:?Set AUTH_URL in .env}
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env}
+      EMAIL_SERVER: ${EMAIL_SERVER:?Set EMAIL_SERVER in .env}
+      EMAIL_FROM: ${EMAIL_FROM:?Set EMAIL_FROM in .env}
+      AGENT_STUDIO_INTERNAL_SECRET: ${AGENT_STUDIO_INTERNAL_SECRET:?Set AGENT_STUDIO_INTERNAL_SECRET in .env}
+      NEXT_TELEMETRY_DISABLED: "1"
+    expose:
+      - "3000"
+    depends_on:
+      sagad-db:
+        condition: service_healthy
+      agent-studio:
+        condition: service_healthy
+    networks:
+      - client_internal_network
+    restart: unless-stopped
+
+  agent-studio:
+    build:
+      context: ./agent-studio
+    container_name: sagad-agent-studio
+    environment:
+      DATABASE_URL: postgresql://${SAGAD_POSTGRES_USER:-sagad}:${SAGAD_POSTGRES_PASSWORD}@sagad-db:5432/${SAGAD_POSTGRES_DB:-sagad_os}
+      AGENT_STUDIO_INTERNAL_SECRET: ${AGENT_STUDIO_INTERNAL_SECRET:?Set AGENT_STUDIO_INTERNAL_SECRET in .env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-}
+      CHATWOOT_ACCOUNT_ID: ${CHATWOOT_ACCOUNT_ID:-}
+      CHATWOOT_API_ACCESS_TOKEN: ${CHATWOOT_API_ACCESS_TOKEN:-}
+      CHATWOOT_WEBHOOK_TOKEN: ${CHATWOOT_WEBHOOK_TOKEN:-}
+      TWENTY_ENABLED: ${TWENTY_ENABLED:-false}
+      TWENTY_BASE_URL: ${TWENTY_BASE_URL:-}
+      TWENTY_API_KEY: ${TWENTY_API_KEY:-}
+      TWENTY_API_MODE: ${TWENTY_API_MODE:-graphql}
+      TWENTY_DRY_RUN: ${TWENTY_DRY_RUN:-true}
+      TWENTY_ALLOW_WRITES: ${TWENTY_ALLOW_WRITES:-false}
+      TWENTY_TIMEOUT_SECONDS: ${TWENTY_TIMEOUT_SECONDS:-20}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-sagad-agent-studio-vps}
+    expose:
+      - "8010"
+    depends_on:
+      sagad-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - client_internal_network
+    restart: unless-stopped
+
+networks:
+  client_internal_network:
+    external: true
+
+volumes:
+  sagad-db-data:

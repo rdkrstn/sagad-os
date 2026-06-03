@@ -54,12 +54,19 @@ The first self-host preview assigns signed-in users to the default Home Services
 
 ## Health Checks
 
-After deployment:
+After local preview deployment:
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/health
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations/twenty/health
+```
+
+After VPS deployment with the local `compose.vps.yaml`, check from inside the Docker network:
+
+```bash
+docker exec sagad-agent-studio python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8010/health').read().decode())"
+docker exec sagad-console node -e "fetch('http://sagad-agent-studio:8010/health').then(r=>r.text()).then(console.log)"
 ```
 
 ## VPS Layout
