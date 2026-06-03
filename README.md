@@ -57,6 +57,8 @@ Location: `v1/`
 
 The backend orchestration layer. It owns typed LangGraph state, LangChain tools, adapter policy, approval gates, knowledge retrieval, draft generation, trace metadata, and approved external actions.
 
+It also includes `langgraph.json` for official LangSmith Studio visual debugging of the local `sagad_conversation` graph. Studio is for graph design and inspection; the Sagad Console is for supervisor operations.
+
 Location: `agent-studio/`
 
 ### External Systems
@@ -146,6 +148,7 @@ Useful local endpoints:
 - `GET /conversations`
 - `GET /conversations/{id}`
 - `POST /conversations/{id}/approve-send`
+- `WS /ws/conversations`
 
 ### Docker Preview
 
@@ -182,7 +185,7 @@ The first live milestone is:
 ```text
 real Chatwoot message
 -> Agent Studio receives webhook
--> Agent Studio creates typed conversation state
+-> Agent Studio upserts one Sagad thread per Chatwoot conversation
 -> knowledge/SOP context is retrieved
 -> optional Twenty CRM context is loaded
 -> AI draft is created
@@ -190,6 +193,8 @@ real Chatwoot message
 -> reply sends back through Chatwoot
 -> audit and trace are recorded
 ```
+
+Repeated messages from the same Chatwoot session append to the same Sagad conversation row. The console can use Agent Studio WebSocket events to refresh queue and review screens without manual reload.
 
 Twenty CRM starts read-only. External writes remain disabled or dry-run until human approval gates and write-policy tests are verified.
 

@@ -3,16 +3,18 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Response, WebSocket, WebSocketDisconnect, status
 
 from agent_studio.chatwoot import send_approved_reply
 from agent_studio.config import get_settings
 from agent_studio.db import initialize_database
 from agent_studio.graph import graph
+from agent_studio.realtime import realtime_manager, verify_realtime_token
 from agent_studio.retrieval import retriever
 from agent_studio.schemas import (
     ApprovalRequest,
     ChatwootWebhookPayload,
+    ConversationMessageRecord,
     ConversationListResponse,
     ConversationRecord,
     CrmCreateNoteRequest,
@@ -23,6 +25,7 @@ from agent_studio.schemas import (
     CrmUpdateLeadStageRequest,
     ExternalIntegrationStatus,
     HealthResponse,
+    IgnoredWebhookResponse,
     IntegrationListResponse,
 )
 from agent_studio.store import StoreContext, store
@@ -92,6 +95,37 @@ def _message_id(payload: ChatwootWebhookPayload) -> str | None:
     if isinstance(payload.id, int):
         return str(payload.id)
     return None
+
+
+def _safe_id_part(value: str) -> str:
+    cleaned = "".join(
+        character if character.isalnum() or character in {"_", "-"} else "_"
+        for character in value.strip()
+    )
+    return cleaned or "unknown"
+
+
+def _sagad_conversation_id(payload: ChatwootWebhookPayload) -> str | None:
+    chatwoot_id = _conversation_id(payload)
+    if not chatwoot_id:
+        return None
+    return f"chatwoot_{_safe_id_part(chatwoot_id)}"
+
+
+def _is_ignored_chatwoot_message(payload: ChatwootWebhookPayload) -> bool:
+    message_type = (payload.message_type or "").lower()
+    if payload.private is True:
+        return True
+    return message_type in {"outgoing", "template"}
+
+
+def _message_already_recorded(
+    record: ConversationRecord | None,
+    message_id: str | None,
+) -> bool:
+    if record is None or message_id is None:
+        return False
+    return any(message.external_message_id == message_id for message in record.messages)
 
 
 def _verify_webhook_token(token: str | None) -> None:
@@ -178,6 +212,23 @@ def _require_supervisor_approval(approved: bool) -> None:
         )
 
 
+def _realtime_event(
+    event_type: str,
+    record: ConversationRecord,
+    *,
+    organization_id: str | None,
+) -> dict[str, object]:
+    return {
+        "type": event_type,
+        "conversation_id": record.id,
+        "chatwoot_conversation_id": record.chatwoot_conversation_id,
+        "organization_id": organization_id,
+        "approval_status": record.approval_status,
+        "send_status": record.send_status,
+        "updated_at": record.updated_at.isoformat(),
+    }
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     settings = get_settings()
@@ -200,24 +251,67 @@ def get_twenty_health() -> CrmProviderStatus:
     return twenty_status(get_settings())
 
 
-@app.post("/webhooks/chatwoot", response_model=ConversationRecord)
-def receive_chatwoot_webhook(
+@app.websocket("/ws/conversations")
+async def conversations_websocket(websocket: WebSocket, token: str) -> None:
+    settings = get_settings()
+    if not settings.sagad_realtime_secret:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    claims = verify_realtime_token(
+        secret=settings.sagad_realtime_secret,
+        token=token,
+    )
+    if claims is None:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    await realtime_manager.connect(claims.organization_id, websocket)
+    await websocket.send_json(
+        {
+            "type": "heartbeat",
+            "organization_id": claims.organization_id,
+            "user_id": claims.user_id,
+            "role": claims.role,
+        },
+    )
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        realtime_manager.disconnect(claims.organization_id, websocket)
+
+
+@app.post("/webhooks/chatwoot", response_model=ConversationRecord | IgnoredWebhookResponse)
+async def receive_chatwoot_webhook(
     payload: ChatwootWebhookPayload,
+    response: Response,
     x_chatwoot_token: Annotated[str | None, Header()] = None,
     x_sagad_org_id: Annotated[str | None, Header()] = None,
     x_sagad_user_id: Annotated[str | None, Header()] = None,
     x_sagad_role: Annotated[str | None, Header()] = None,
-) -> ConversationRecord:
+) -> ConversationRecord | IgnoredWebhookResponse:
     _verify_webhook_token(x_chatwoot_token)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+
+    if _is_ignored_chatwoot_message(payload):
+        response.status_code = status.HTTP_202_ACCEPTED
+        return IgnoredWebhookResponse(reason="Chatwoot event is not an inbound customer message.")
 
     incoming_message = payload.content or ""
     if not incoming_message.strip():
         raise HTTPException(status_code=400, detail="Webhook payload did not include message content.")
 
+    conversation_id = _sagad_conversation_id(payload)
+    chatwoot_message_id = _message_id(payload)
+    existing_record = store.get(conversation_id, context=context) if conversation_id else None
+    if _message_already_recorded(existing_record, chatwoot_message_id):
+        return existing_record
+
     initial_state = {
+        "conversation_id": conversation_id,
         "chatwoot_conversation_id": _conversation_id(payload),
-        "chatwoot_message_id": _message_id(payload),
+        "chatwoot_message_id": chatwoot_message_id,
         "customer_name": _customer_name(payload),
         "channel": "chatwoot",
         "incoming_message": incoming_message,
@@ -238,9 +332,38 @@ def receive_chatwoot_webhook(
         qa_findings=final_state.get("qa_findings", []),
         compliance_status=final_state.get("compliance_status", "needs_review"),
         approval_status="needs_approval",
+        send_status="not_sent",
         trace_url=final_state.get("trace_url"),
+        messages=[
+            ConversationMessageRecord(
+                sender_type="customer",
+                body=incoming_message,
+                external_message_id=chatwoot_message_id,
+                provider="chatwoot",
+                payload=payload.model_dump(mode="json", exclude_none=True),
+            ),
+        ],
     )
-    return store.save(record, context=context)
+    if conversation_id:
+        record.id = conversation_id
+    saved = store.save(record, context=context)
+    await realtime_manager.broadcast(
+        context.organization_id,
+        _realtime_event(
+            "conversation.message_appended",
+            saved,
+            organization_id=context.organization_id,
+        ),
+    )
+    await realtime_manager.broadcast(
+        context.organization_id,
+        _realtime_event(
+            "conversation.upserted",
+            saved,
+            organization_id=context.organization_id,
+        ),
+    )
+    return saved
 
 
 @app.get("/conversations", response_model=ConversationListResponse)
@@ -297,6 +420,14 @@ async def approve_send(
             edited_reply=request.edited_reply,
             context=context,
         )
+        await realtime_manager.broadcast(
+            context.organization_id,
+            _realtime_event(
+                "approval.updated",
+                saved,
+                organization_id=context.organization_id,
+            ),
+        )
         return saved
 
     if record.approval_status not in {"needs_approval", "send_failed"}:
@@ -311,6 +442,18 @@ async def approve_send(
     record.draft_reply = content
     record.approval_status = "sent" if result["status"] in {"sent", "dry_run"} else "send_failed"
     record.send_status = result["status"]
+    if result["status"] in {"sent", "dry_run"}:
+        record.messages.append(
+            ConversationMessageRecord(
+                sender_type="ai_agent",
+                body=content,
+                provider="sagad",
+                payload={
+                    "approval": "supervisor_approved",
+                    "send_status": result["status"],
+                },
+            ),
+        )
     record.updated_at = datetime.now(timezone.utc)
     saved = store.save(record, context=context)
     store.record_approval(
@@ -319,6 +462,14 @@ async def approve_send(
         approved=True,
         edited_reply=request.edited_reply,
         context=context,
+    )
+    await realtime_manager.broadcast(
+        context.organization_id,
+        _realtime_event(
+            "approval.updated",
+            saved,
+            organization_id=context.organization_id,
+        ),
     )
     return saved
 

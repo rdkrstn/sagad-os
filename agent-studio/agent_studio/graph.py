@@ -20,7 +20,7 @@ def classify_message(state: AgentStudioState) -> dict[str, str]:
     if any(term in message for term in ["appointment", "schedule", "book", "reschedule"]):
         return {"intent": "booking_or_support", "risk_level": "medium"}
     if len(message.split()) <= 2:
-        return {"intent": "discovery", "risk_level": "medium"}
+        return {"intent": "general_support", "risk_level": "medium"}
     return {"intent": "general_support", "risk_level": "medium"}
 
 
@@ -53,10 +53,11 @@ def draft_reply(state: AgentStudioState) -> dict[str, str]:
             "I can help with that. Before I discuss account or appointment details, "
             "please confirm the phone number or ZIP code on the booking."
         )
-    elif intent == "discovery":
-        body = "Hi. What can we help with today: HVAC, plumbing, electrical, cleaning, or something else?"
     else:
-        body = "Thanks. I can help route this to the right team. Can you share a little more detail?"
+        body = (
+            "Thanks. I can help route this to the right team. Are you looking for "
+            "pricing or booking help, or support with an existing service?"
+        )
 
     if citation_titles:
         body = f"{body}\n\nBasis: {citation_titles}."

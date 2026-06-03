@@ -50,7 +50,20 @@ Configure the Google OAuth client with these redirect URIs:
 
 The production JavaScript origin should match `AUTH_URL`, for example `https://sagad.example.com`.
 
-The first self-host preview assigns signed-in users to the default Home Services Demo organization as supervisors. Replace this with invites and organization management before production use.
+The first self-host preview assigns signed-in users to the default Johnred Workspace organization as supervisors. Replace this with invites and organization management before production use.
+
+## Realtime Sync
+
+The Sagad Console can refresh queue and review screens from Agent Studio WebSocket events. Configure both services with the same realtime secret:
+
+```env
+SAGAD_WS_PUBLIC_URL=wss://sagad-agent.example.com/ws/conversations
+SAGAD_REALTIME_SECRET=replace-with-realtime-secret
+```
+
+`SAGAD_WS_PUBLIC_URL` is browser-facing and belongs in the console environment. `SAGAD_REALTIME_SECRET` is shared by the console and Agent Studio so the console can mint short-lived WebSocket tokens from the Auth.js session.
+
+In Nginx Proxy Manager, enable WebSocket support on the proxy host that forwards to `sagad-agent-studio:8010`. Without WebSocket upgrade support, the console will show live sync as disabled or reconnecting.
 
 ## Health Checks
 

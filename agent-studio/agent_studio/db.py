@@ -9,7 +9,7 @@ from psycopg.rows import DictRow, dict_row
 
 from agent_studio.config import Settings
 
-DEFAULT_ORGANIZATION_SLUG = "home-services-demo"
+DEFAULT_ORGANIZATION_SLUG = "johnred-workspace"
 DEFAULT_USER_EMAIL = "owner@sagad.local"
 
 

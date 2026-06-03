@@ -19,9 +19,8 @@ The AI Supervisor Pod monitors the agent team. The QA/Coach layer checks process
 
 | Agent | Scope | Verification | Typical Handoff |
 | --- | --- | --- | --- |
-| Sales Agent | Rapport, qualification, pricing questions, demos, quotes, next steps | Usually none unless accessing account data | Support, discovery, human sales |
+| Sales Agent | Rapport, qualification, pricing questions, demos, quotes, next steps, and lead probing | Usually none unless accessing account data | Support, human sales |
 | Support Agent | Account/service issues, complaints, general help | Account verification before private actions | Technical, retention, fraud, human |
-| Discovery Agent | Empty, vague, greeting-only, unclear, early-stage messages | None at first | Sales, support, booking, human |
 | Technical Agent | Device, app, setup, integration, bug, troubleshooting | Device/environment verification; account verification when needed | Support, engineering, human |
 | Retention Agent | Cancellation, churn, objections, save offers | Account verification and policy bounds | Human retention, support |
 | Fraud/Risk Agent | Suspicious activity, disputes, security, sensitive claims | Strict identity verification | Human fraud/risk team |
@@ -43,7 +42,7 @@ Examples:
 | Technical | device_issue | app_version_error |
 | Retention | cancellation | price_objection |
 | Fraud | suspicious_activity | unauthorized_login |
-| Discovery | unclear_need | greeting_only |
+| Support | unclear_need | greeting_only |
 
 Each conversation should store:
 
@@ -97,7 +96,7 @@ An AI agent should ping its supervisor when:
 | --- | --- |
 | High confidence + low risk | Eligible for faster approval; auto-send only after account policy explicitly allows it |
 | Medium confidence + low risk | Human approval or lightweight review |
-| Low confidence | Discovery question or human review |
+| Low confidence | One sales/support probing question or human review |
 | High risk | Human takeover |
 | Verification required but missing | Ask verification question, do not perform private action |
 | Tool failure | Safe fallback and supervisor alert |

@@ -54,7 +54,7 @@ const defaultToolRows: LooseRecord[] = [
     providerStatus: "Twenty external",
     health: "Dry-run",
     description: "Retrieve CRM identity, lead stage, and routing metadata through Agent Studio.",
-    samplePayload: '{\n  "query": "Avery Hill",\n  "provider": "twenty"\n}',
+    samplePayload: '{\n  "query": "Johnred Demafeliz",\n  "provider": "twenty"\n}',
   },
   {
     name: "chatwoot.messages.send_approved",
@@ -72,7 +72,7 @@ const defaultToolRows: LooseRecord[] = [
     providerStatus: "Local source",
     health: "Ready",
     description: "Retrieve KB/SOP/QA/compliance context for a conversation.",
-    samplePayload: '{\n  "intent": "pricing_lead",\n  "risk_level": "low"\n}',
+    samplePayload: '{\n  "intent": "general_support",\n  "risk_level": "low"\n}',
   },
 ];
 

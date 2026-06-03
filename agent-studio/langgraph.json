@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "sagad_conversation": "./agent_studio/graph.py:graph"
+  },
+  "env": "./.env"
+}

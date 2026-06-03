@@ -111,6 +111,8 @@ The queue represents conversations or work items that need supervisor awareness.
 
 The conversation view shows a timeline of inbound customer messages, AI drafts, tool suggestions, supervisor approvals, and handoffs. v1 should make it obvious which events are mock or simulated.
 
+When Agent Studio is configured, `GET /conversations/{id}` returns the ordered `messages` array that the console should render as the source of truth. A Chatwoot session should appear as one Sagad thread, not repeated conversation rows. Realtime events from `WS /ws/conversations` only trigger a server refresh through the console live-sync chip; browser code still never calls Chatwoot or privileged provider routes directly.
+
 ### AI Work Review
 
 AI work is advisory in v1. Suggested replies, next-best actions, call summaries, and routing decisions require supervisor interpretation. Do not present AI actions as autonomous live execution.
@@ -135,11 +137,11 @@ Suggested domains:
 - `SlaState`
 - `Channel`
 
-## Home Services Demo
+## Empty Workspace Preview
 
-The account should resemble a home services operator that receives calls, texts, web leads, and follow-up requests. Example services include HVAC, plumbing, cleaning, pest control, electrical, appliance repair, and roof repair.
+The default console workspace is Johnred Workspace. It should start empty until Agent Studio receives live Chatwoot conversations, trusted CRM context, knowledge retrieval results, or configured agent/pod records.
 
-Use fake records only. Do not include real addresses, phone numbers, customer names, or private operational data.
+Use fake records only when building explicit demos or tests. Do not include real addresses, phone numbers, customer names, or private operational data in committed fixtures.
 
 ## Runtime Decisions
 

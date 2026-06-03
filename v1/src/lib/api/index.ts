@@ -52,9 +52,20 @@ interface AgentStudioQaFinding {
   detail: string;
 }
 
+interface AgentStudioConversationMessage {
+  id: string;
+  sender_type: "customer" | "ai_agent" | "human_agent" | "system" | "tool";
+  body: string;
+  external_message_id: string | null;
+  provider: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
 interface AgentStudioConversation {
   id: string;
   chatwoot_conversation_id: string | null;
+  chatwoot_message_id: string | null;
   customer_name: string;
   channel: string;
   incoming_message: string;
@@ -68,6 +79,7 @@ interface AgentStudioConversation {
   approval_status: string;
   send_status: string;
   trace_url: string | null;
+  messages?: AgentStudioConversationMessage[];
   created_at: string;
   updated_at: string;
 }
@@ -76,7 +88,7 @@ interface AgentStudioConversationList {
   conversations: AgentStudioConversation[];
 }
 
-const demoNow = "2026-05-31T11:48:00-07:00";
+const demoNow = "2026-06-04T09:00:00+08:00";
 const clone = <T>(value: T): T => structuredClone(value);
 
 const contactById = new Map(mockContacts.map((contact) => [contact.id, contact]));
@@ -208,7 +220,7 @@ function routeForIntent(intent: string): string {
   if (intent.includes("support")) return "Support";
   if (intent.includes("tool")) return "Support";
   if (intent.includes("refund") || intent.includes("cancellation")) return "Retention";
-  if (intent.includes("discovery") || intent.includes("unknown")) return "Discovery";
+  if (intent.includes("unknown")) return "Support";
   return "Supervisor";
 }
 
@@ -370,9 +382,9 @@ function laneForAgentStudioConversation(conversation: AgentStudioConversation): 
 
 function classifierIntentForAgentStudio(intent: string): ClassifierIntent {
   if (intent === "pricing_lead") return "pricing_lead";
-  if (intent === "discovery") return "discovery";
+  if (intent === "general_support") return "general_support";
   if (intent === "refund_or_cancellation") return "refund_or_cancellation";
-  if (intent === "booking_or_support" || intent === "general_support") {
+  if (intent === "booking_or_support") {
     return "account_support";
   }
   return "unknown";
@@ -396,6 +408,25 @@ function toAgentStudioConversationView(
     status: titleCase(finding.status),
     detail: finding.detail,
   }));
+  const threadMessages =
+    conversation.messages && conversation.messages.length > 0
+      ? conversation.messages
+      : [
+          {
+            id: `${conversation.id}-inbound`,
+            sender_type: "customer" as const,
+            body: conversation.incoming_message,
+            external_message_id: conversation.chatwoot_message_id,
+            provider: "chatwoot",
+            payload: {},
+            created_at: conversation.created_at,
+          },
+        ];
+  const latestCustomerMessage =
+    [...threadMessages]
+      .reverse()
+      .find((message) => message.sender_type === "customer")?.body ??
+    conversation.incoming_message;
 
   return {
     id: conversation.id,
@@ -403,7 +434,7 @@ function toAgentStudioConversationView(
     assignedAgentId: "agent-ai-dispatch",
     supervisorPodId: "pod-intake",
     channel: "web_chat",
-    subject: conversation.incoming_message.slice(0, 80),
+    subject: latestCustomerMessage.slice(0, 80),
     openedAt: conversation.created_at,
     updatedAt: conversation.updated_at,
     slaDueAt: conversation.updated_at,
@@ -452,7 +483,7 @@ function toAgentStudioConversationView(
     status: titleCase(conversation.approval_status),
     queueStatus: lane,
     summary: `${titleCase(conversation.intent)} requires supervisor approval.`,
-    lastMessage: conversation.incoming_message,
+    lastMessage: latestCustomerMessage,
     draftReply: conversation.draft_reply,
     suggestedReply: conversation.draft_reply,
     assignedTo: "Sagad Dispatch AI",
@@ -507,19 +538,24 @@ function toAgentStudioConversationView(
       },
     ],
     aiDecisionTrail: [],
-    messages: [
-      {
-        id: `${conversation.id}-inbound`,
-        sender: conversation.customer_name,
-        role: "Customer",
-        body: conversation.incoming_message,
-        createdAt: conversation.created_at,
-        time: new Date(conversation.created_at).toLocaleTimeString("en-US", {
+    messages: threadMessages.map((message) => ({
+      id: message.id,
+      sender:
+        message.sender_type === "customer"
+          ? conversation.customer_name
+          : message.sender_type === "ai_agent"
+            ? "Sagad OS"
+            : titleCase(message.sender_type),
+      role: titleCase(message.sender_type),
+      body: message.body,
+      externalMessageId: message.external_message_id,
+      provider: message.provider,
+      createdAt: message.created_at,
+      time: new Date(message.created_at).toLocaleTimeString("en-US", {
           hour: "numeric",
           minute: "2-digit",
-        }),
-      },
-    ],
+      }),
+    })),
   };
 }
 
@@ -551,7 +587,7 @@ function toConversationView(conversation: Conversation): ConversationView {
     queueReason:
       conversation.reviewDecision?.reason ??
       (lane === "Low confidence"
-        ? "Discovery agent should ask a probing question."
+        ? "Sales or support should ask one probing question."
         : conversation.classifier.summary),
     reason:
       conversation.reviewDecision?.reason ??
@@ -587,7 +623,7 @@ function toConversationView(conversation: Conversation): ConversationView {
     complianceStatus: conversation.reviewDecision ? "Needs review" : "Pass",
     knowledgeContext: [
       {
-        title: "Home Services Demo Knowledge",
+        title: "Sagad OS Knowledge",
         category: "Mock",
         source: "src/lib/mocks/home-services.ts",
         score: 1,
@@ -614,7 +650,7 @@ function toConversationView(conversation: Conversation): ConversationView {
 }
 
 function toAgentViews(): AgentView[] {
-  const actual: AgentView[] = mockAgents.map((agent) => ({
+  return mockAgents.map((agent) => ({
     ...agent,
     role: titleCase(agent.role),
     lane:
@@ -622,10 +658,10 @@ function toAgentViews(): AgentView[] {
         ? "Supervisor"
         : agent.role === "human_agent"
           ? "Support"
-          : "Sales / Support / Discovery",
-    supervisor: "Rio Santos",
-    podLead: "Rio Santos",
-    owner: "Intake Pod",
+          : "Sales / Support",
+    supervisor: "Unassigned",
+    podLead: "Unassigned",
+    owner: "Unassigned",
     handled: agent.activeConversationCount * 12 + 14,
     resolved: agent.activeConversationCount * 8 + 9,
     volume: agent.activeConversationCount,
@@ -635,84 +671,12 @@ function toAgentViews(): AgentView[] {
     qualityScore: agent.role === "supervisor" ? "n/a" : "92",
     health: titleCase(agent.status),
   }));
-
-  return [
-    ...actual,
-    {
-      id: "agent-sales-ai",
-      name: "Sales Agent",
-      role: "AI Agent",
-      lane: "Sales",
-      supervisor: "Rio Santos",
-      podLead: "Rio Santos",
-      handled: 31,
-      resolved: 24,
-      volume: 31,
-      aht: "3m 42s",
-      avgHandleTime: "3m 42s",
-      qaScore: "94",
-      qualityScore: "94",
-      status: "Active",
-      health: "Healthy",
-    },
-    {
-      id: "agent-support-ai",
-      name: "Support Agent",
-      role: "AI Agent",
-      lane: "Support",
-      supervisor: "Rio Santos",
-      podLead: "Rio Santos",
-      handled: 26,
-      resolved: 18,
-      volume: 26,
-      aht: "5m 08s",
-      avgHandleTime: "5m 08s",
-      qaScore: "91",
-      qualityScore: "91",
-      status: "Active",
-      health: "Watch",
-    },
-    {
-      id: "agent-discovery-ai",
-      name: "Discovery Agent",
-      role: "AI Agent",
-      lane: "Discovery",
-      supervisor: "Rio Santos",
-      podLead: "Rio Santos",
-      handled: 19,
-      resolved: 14,
-      volume: 19,
-      aht: "2m 54s",
-      avgHandleTime: "2m 54s",
-      qaScore: "90",
-      qualityScore: "90",
-      status: "Active",
-      health: "Healthy",
-    },
-    ...["Technical", "Retention", "Fraud/Risk"].map((lane) => ({
-      id: `agent-${lane.toLowerCase().replace("/", "-")}-ai`,
-      name: `${lane} Agent`,
-      role: "AI Agent",
-      lane,
-      supervisor: "Unassigned",
-      podLead: "Unassigned",
-      handled: 0,
-      resolved: 0,
-      volume: 0,
-      aht: "n/a",
-      avgHandleTime: "n/a",
-      qaScore: "n/a",
-      qualityScore: "n/a",
-      status: "Planned",
-      health: "Planned",
-    })),
-  ];
 }
 
 function toDriverView(driver: ContactDriver): DriverView {
   const ahtByDriver: Record<string, string> = {
     "driver-pricing": "3m 42s",
-    "driver-discovery": "2m 54s",
+    "driver-general-intake": "2m 54s",
     "driver-account-support": "5m 08s",
     "driver-tool-failure": "8m 22s",
     "driver-takeover": "12m 40s",
@@ -740,8 +704,8 @@ function toDriverView(driver: ContactDriver): DriverView {
       fcr: "82%",
       costInteraction: "$0.08",
     },
-    "driver-discovery": {
-      workstream: "Discovery",
+    "driver-general-intake": {
+      workstream: "Support",
       platform: "Chatwoot",
       integration: "Markdown KB",
       csat: "88%",
@@ -852,19 +816,19 @@ function toSopView(reference: SopReference): SopView {
     category: reference.section,
     owner: reference.section === "Escalations" ? "Supervisor Ops" : "Ops",
     team: reference.section,
-    updatedAt: "May 31, 2026",
-    lastUpdated: "May 31, 2026",
-    status: qa.status,
-    health: qa.status,
+    updatedAt: "June 4, 2026",
+    lastUpdated: "June 4, 2026",
+    status: qa?.status ?? "Draft",
+    health: qa?.status ?? "Draft",
     rubric: `${reference.title} Rubric`,
-    score: qa.score,
-    adherence: qa.score,
-    passRate: qa.score,
-    flags: qa.flags,
-    policyFlags: qa.flags,
-    coachingNote: qa.note,
-    note: qa.note,
-    recommendation: qa.note,
+    score: qa?.score ?? 0,
+    adherence: qa?.score ?? 0,
+    passRate: qa?.score ?? 0,
+    flags: qa?.flags ?? 0,
+    policyFlags: qa?.flags ?? 0,
+    coachingNote: qa?.note ?? "No QA rubric configured yet.",
+    note: qa?.note ?? "No QA rubric configured yet.",
+    recommendation: qa?.note ?? "No QA rubric configured yet.",
     sop: reference.title,
     reference: reference.title,
     policy: reference.title,
@@ -877,13 +841,13 @@ function toToolView(tool: McpTool): ToolView {
     args:
       tool.name === "crm.schedule_appointment"
         ? {
-            contactId: "contact-morgan-tool",
-            serviceType: "Electrical inspection",
-            requestedFor: "2026-06-01T10:00:00-07:00",
+            contactId: "contact_123",
+            serviceType: "Service request",
+            requestedFor: "2026-06-04T10:00:00+08:00",
           }
         : {
-            contactId: "contact-avery-price",
-            conversationId: "conv-pricing-lead",
+            contactId: "contact_123",
+            conversationId: "conversation_123",
           },
   };
 
@@ -925,7 +889,7 @@ function previewToolViews(): ToolView[] {
       samplePayload: JSON.stringify(
         {
           event: "message_created",
-          content: "How much does an AC tune-up cost?",
+          content: "Hello, I need help.",
           conversation: { id: 42 },
         },
         null,
@@ -976,9 +940,9 @@ function previewToolViews(): ToolView[] {
       mode: "In-memory retrieval",
       samplePayload: JSON.stringify(
         {
-          intent: "pricing_lead",
+          intent: "general_support",
           risk_level: "low",
-          query: "AC tune-up price",
+          query: "customer needs help",
         },
         null,
         2,
@@ -1003,7 +967,7 @@ function previewToolViews(): ToolView[] {
       mode: "GraphQL read",
       samplePayload: JSON.stringify(
         {
-          query: "Avery Hill",
+          query: "Johnred Demafeliz",
           provider: "twenty",
           source: "agent-studio",
         },
@@ -1124,7 +1088,11 @@ function previewToolViews(): ToolView[] {
 }
 
 function queueHealth(conversations: ConversationView[]): ViewRecord[] {
-  return ["Sales", "Support", "Discovery", "Retention"].map((queue) => {
+  if (conversations.length === 0) {
+    return [];
+  }
+
+  return ["Sales", "Support", "Retention"].map((queue) => {
     const rows = conversations.filter(
       (conversation) =>
         String(conversation.driver).includes(queue) ||
@@ -1198,6 +1166,10 @@ function channelHealth(conversations: ConversationView[], source: string): ViewR
 }
 
 function attentionSummary(conversations: ConversationView[]): ViewRecord[] {
+  if (conversations.length === 0) {
+    return [];
+  }
+
   const groups = ["Approval", "Low confidence", "Escalated", "Failed tool/send"];
 
   return groups.map((group) => {
@@ -1209,9 +1181,9 @@ function attentionSummary(conversations: ConversationView[]): ViewRecord[] {
       count: rows.length,
       total: rows.length,
       items: rows.length,
-      owner: "Intake Pod",
-      team: "Intake Pod",
-      pod: "Intake Pod",
+      owner: "Unassigned",
+      team: "Unassigned",
+      pod: "Unassigned",
       severity:
         group === "Failed tool/send" || group === "Escalated"
           ? "High risk"
@@ -1260,8 +1232,8 @@ export async function getDashboardData(): Promise<DashboardViewData> {
     sopReferences: mockSopReferences.map(toSopView),
     mcpTools: mockMcpTools.map(toToolView),
     accountName: homeServicesDashboardData.account.name,
-    lastUpdated: "May 31, 2026 11:48 AM",
-    asOf: "May 31, 2026 11:48 AM",
+    lastUpdated: "June 4, 2026 9:00 AM",
+    asOf: "June 4, 2026 9:00 AM",
     metrics: {
       openQueue: conversations.length,
       openItems: conversations.length,
@@ -1327,7 +1299,9 @@ export async function getPrimaryConversation(): Promise<ConversationView> {
     mockConversations.find((conversation) => conversation.priority === "urgent") ??
     mockConversations[0];
 
-  return clone(toConversationView(primaryConversation));
+  return primaryConversation
+    ? clone(toConversationView(primaryConversation))
+    : clone({} as ConversationView);
 }
 
 export async function getAgents(): Promise<AgentView[]> {

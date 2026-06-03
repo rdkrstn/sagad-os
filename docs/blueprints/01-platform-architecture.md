@@ -58,7 +58,7 @@ flowchart LR
 | Intake | Debounce, group, normalize, and persist inbound messages | Agent Studio webhook/API and typed LangGraph state |
 | Classification | Identify intent, route, contact driver, confidence, and reason | LangChain chat model call with structured output |
 | Routing | Send the conversation to the correct specialist path | Deterministic rule table or LangGraph edge |
-| Agent | Draft a useful reply inside role boundaries | Sales, support, discovery agents first |
+| Agent | Draft a useful reply inside role boundaries | Sales and support agents first; probing belongs inside both roles |
 | Knowledge | Provide FAQs, SOPs, guides, policies, and retrieval context | Static docs first, RAG later |
 | Tools | Read/write CRM, tickets, notes, tags, tasks, lead stages, and approved webhooks through adapters | Twenty, Chatwoot, generic webhooks, and future MCP after base loop works |
 | Supervisor | Check risk, confidence, SLA, AHT, driver, and policy | Rules first, agentic supervisor later |
@@ -72,14 +72,12 @@ flowchart TD
     Account["Client Account"] --> Sup["AI Supervisor Pod"]
     Sup --> Sales["Sales Agent"]
     Sup --> Support["Support Agent"]
-    Sup --> Discovery["Discovery Agent"]
     Sup --> Tech["Technical Agent"]
     Sup --> Retention["Retention Agent"]
     Sup --> Fraud["Fraud/Risk Agent"]
     Sup --> QA["AI QA / Coach"]
     Sales --> Queue["Supervisor Attention Queue"]
     Support --> Queue
-    Discovery --> Queue
     Tech --> Queue
     Retention --> Queue
     Fraud --> Queue

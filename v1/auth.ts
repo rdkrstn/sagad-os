@@ -76,7 +76,7 @@ async function ensureDefaultMembership(
     WITH default_org AS (
       SELECT id
       FROM organizations
-      WHERE slug = 'home-services-demo'
+      WHERE slug = 'johnred-workspace'
       LIMIT 1
     )
     INSERT INTO profiles (user_id, display_name, default_organization_id)
@@ -95,7 +95,7 @@ async function ensureDefaultMembership(
     WITH default_org AS (
       SELECT id
       FROM organizations
-      WHERE slug = 'home-services-demo'
+      WHERE slug = 'johnred-workspace'
       LIMIT 1
     )
     INSERT INTO organization_members (organization_id, user_id, role, status)

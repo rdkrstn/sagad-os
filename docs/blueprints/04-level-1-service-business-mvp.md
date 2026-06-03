@@ -10,7 +10,7 @@ In scope:
 - debounce/group messages
 - classifier with structured output
 - deterministic router
-- Sales Agent, Support Agent, Discovery Agent
+- Sales Agent and Support Agent
 - contact driver classification
 - confidence score and simple risk level
 - human approval queue
@@ -38,17 +38,16 @@ flowchart LR
     D --> E{"Router"}
     E -->|"sales"| F["Sales Agent"]
     E -->|"support"| G["Support Agent"]
-    E -->|"discovery"| H["Discovery Agent"]
     E -->|"human"| I["Human Review"]
     F --> J["Draft Reply"]
     G --> J
-    H --> J
     I --> J
     J --> K["Confidence + Risk"]
     K --> L{"Decision"}
     L -->|"needs approval"| N["Approval Queue"]
     L -->|"takeover"| O["Human Takeover"]
-    N --> M
+    N --> M["Approved Response"]
+    O --> M
     M --> P["Trace + CRM Note"]
 ```
 
@@ -72,14 +71,12 @@ Allowed Level 1 routes:
 
 - `sales`
 - `support`
-- `discovery`
 - `human`
 
 Level 1 routing rules:
 
 - `sales`: pricing, services, packages, quote requests, demo requests, buying intent
-- `support`: complaint, existing customer issue, account/service problem
-- `discovery`: empty, greeting-only, vague, unclear, "tell me more"
+- `support`: complaints, existing customer issues, account/service problems, and unclear messages that need one general intake question
 - `human`: sensitive, angry, high-risk, private-account action without verification
 
 ## Agent Scope
@@ -87,8 +84,7 @@ Level 1 routing rules:
 | Agent | Job | Should Ask For | Should Not Do |
 | --- | --- | --- | --- |
 | Sales Agent | Qualify and move the lead to the next useful step | goal, service interest, timeline, budget if appropriate | promise outcomes, invent prices, handle private support issues |
-| Support Agent | Help with existing service/account problems | account verification before private help, issue details | expose private data, promise refunds, skip verification |
-| Discovery Agent | Probe unclear messages | one simple clarifying question | sell aggressively, assume intent, ask many questions |
+| Support Agent | Help with existing service/account problems and unclear first-touch messages | account verification before private help, issue details, one simple clarifying question | expose private data, promise refunds, skip verification, ask many questions at once |
 
 ## Minimum Dashboard
 
@@ -111,7 +107,6 @@ AI Supervisor Console
 +-- Agent Activity
 |   +-- sales
 |   +-- support
-|   +-- discovery
 +-- Settings
     +-- confidence thresholds
     +-- routing rules
@@ -134,7 +129,6 @@ Low-fi layout:
 | Agents        | Maria S.                     | [editable draft]   |
 | Sales         | "I need help logging in"     |                    |
 | Support       | Route: support               | [Approve] [Edit]   |
-| Discovery     | Confidence: 71%              | [Reject] [Takeover]|
 +---------------+-----------------------------+--------------------+
 ```
 
@@ -143,9 +137,9 @@ Low-fi layout:
 | Scenario | Expected Result |
 | --- | --- |
 | User asks "How much is your service?" | route `sales`, driver `pricing_inquiry`, draft sales reply |
-| User says "hello" | route `discovery`, ask one probing question |
+| User says "hello" | route `support`, driver `general_intake`, ask one probing question |
 | User says "I cannot access my account" | route `support`, ask for verification before private help |
-| User sends an empty message | route `discovery`, confidence low, ask what they need |
+| User sends an empty message | route `support`, confidence low, ask one general intake question |
 | User is angry or asks for refund/payment action | route `human` or support with approval required |
 | CRM lookup fails | safe fallback, no invented account details, log tool failure |
 | Confidence is medium | send to approval queue before response |

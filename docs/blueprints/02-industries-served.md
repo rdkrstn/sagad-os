@@ -6,7 +6,7 @@ Sagad OS can serve multiple industries, but each industry has different risk, ve
 
 | Industry | Main Buyer Pain | Primary Agents | Verification Need | Risk | MVP Offer |
 | --- | --- | --- | --- | --- | --- |
-| Service businesses | Missed leads, slow replies, weak follow-up | Sales, support, discovery | Low to medium | Low | AI front desk for sales and support |
+| Service businesses | Missed leads, slow replies, weak follow-up | Sales, support | Low to medium | Low | AI front desk for sales and support |
 | Retail / ecommerce | Repeated order questions, product questions, complaints | Support, sales, returns | Medium | Medium | AI support pod for order and product inquiries |
 | SaaS | Tier-1 support load, onboarding friction, tech questions | Support, technical, sales | Medium | Medium | AI technical support and onboarding assistant |
 | BPO | QA load, supervisor span, agent inconsistency | Supervisor, QA coach, specialist agents | Depends on account | Medium to high | AI supervisor and QA console |
@@ -33,7 +33,7 @@ Sagad OS can serve multiple industries, but each industry has different risk, ve
 
 - Sales Agent qualifies interest, explains the offer, asks next-step questions, and prepares follow-up.
 - Support Agent handles basic customer issues and asks for verification before account-specific help.
-- Discovery Agent handles greetings, vague messages, empty messages, and unclear intent.
+- Sales and Support Agents handle greetings, vague messages, empty messages, and unclear intent by asking one focused probing question.
 
 **Metrics:** lead response time, qualified leads, booked calls, auto-send eligibility rate, HITL rate, missed lead reduction, CSAT, and follow-up completion.
 
