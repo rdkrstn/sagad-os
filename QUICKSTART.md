@@ -8,7 +8,7 @@ Sagad OS is an open-source, self-hostable AI operations platform for AI-native B
 
 Sagad OS has three core runtime surfaces:
 
-- `v1/`: Next.js supervisor console for queues, approvals, conversations, agent performance, contact drivers, knowledge, QA, integrations, and settings.
+- `v1/`: Next.js supervisor console for queues, approvals, conversations, agent performance, contact drivers, knowledge, QA, the operator/admin Integrations page, and settings.
 - `agent-studio/`: Python FastAPI + LangGraph backend preview for orchestration, typed state, adapter policy, tool planning, HITL gates, and approved sends.
 - `docs/blueprints/`: architecture docs, diagrams, and implementation phases.
 
@@ -21,6 +21,10 @@ External systems connect through Agent Studio adapters:
 - FastMCP/MCP is a future tool exposure layer behind Agent Studio.
 
 Browser code must not call Chatwoot, Twenty, Uptime Kuma, LangSmith, MCP, or client internal systems directly.
+
+The console direction follows the SagadOS Premium Open Ops design system: calm, modular, inspectable, transparent, and operator-focused. The UI should show routes, states, modules, logs, docs, and configuration without AI-magic framing.
+
+The Integrations page is operator/admin-facing: Owner and Admin users can set up and test Chatwoot/Twenty connections, while Supervisor users can monitor redacted readiness and health. Developer payloads, DTO contracts, and webhook/tool examples belong under `Settings -> Advanced`.
 
 ## Prerequisites
 
@@ -84,6 +88,10 @@ Useful dev endpoints:
 - `GET /health`
 - `GET /integrations`
 - `GET /integrations/twenty/health`
+- `GET /integration-configs`
+- `PUT /integration-configs/{provider}`
+- `POST /integration-configs/{provider}/disable`
+- `POST /integration-configs/{provider}/test`
 - `POST /webhooks/chatwoot`
 - `GET /conversations`
 - `GET /conversations/{id}`
@@ -137,7 +145,9 @@ The local `compose.vps.yaml` file is ignored by Git so each VPS can adjust names
 
 ## Environment Configuration
 
-Use environment variables for provider credentials. Do not commit secrets.
+Use environment variables for service bootstrap credentials. Do not commit secrets.
+
+Live Chatwoot and Twenty connection setup should be saved through Agent Studio. When `DATABASE_URL` is configured, Agent Studio stores connection metadata in Sagad Postgres and stores provider tokens/API keys as encrypted secret versions. Browser code receives only redacted status, missing-field, dry-run, and write-gate fields.
 
 Frontend:
 
@@ -158,6 +168,7 @@ Agent Studio:
 - `DATABASE_URL`
 - `AGENT_STUDIO_INTERNAL_SECRET`
 - `SAGAD_REALTIME_SECRET`
+- `SAGAD_INTEGRATION_ENCRYPTION_KEY`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 - `OPENAI_EMBEDDING_MODEL`
@@ -176,7 +187,11 @@ Agent Studio:
 - `LANGSMITH_API_KEY`
 - `LANGSMITH_PROJECT`
 
+`SAGAD_INTEGRATION_ENCRYPTION_KEY` should be a strong deployment secret. In local development, Agent Studio can fall back to the internal secret or a local default, but production deployments must provide a durable encryption key before saving provider credentials.
+
 ## Current Integration Path
+
+Owners and Admins configure Chatwoot and Twenty from the operator/admin Integrations page. Supervisors monitor connection status and readiness without edit access. Developer-oriented request payloads, DTO contracts, headers, and tool samples are documented under `Settings -> Advanced` and backend contract docs rather than shown as the main integrations experience.
 
 The first live slice is:
 
@@ -203,6 +218,7 @@ Twenty CRM starts read-only. Writes remain disabled or dry-run until approval ga
 - Do not use legacy LangChain `Chain` classes.
 - Add FastMCP only after adapter boundaries are stable.
 - Preserve mock fallback behavior in the frontend until live APIs are explicitly enabled.
+- Keep Integrations focused on operator/admin monitor and setup; keep developer payload/contracts under `Settings -> Advanced`.
 - Update public docs when behavior, setup, architecture, or integration contracts change.
 
 ## CI And Versioning

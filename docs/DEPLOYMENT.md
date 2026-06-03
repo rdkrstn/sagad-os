@@ -50,7 +50,26 @@ Configure the Google OAuth client with these redirect URIs:
 
 The production JavaScript origin should match `AUTH_URL`, for example `https://sagad.example.com`.
 
-The first self-host preview assigns signed-in users to the default Johnred Workspace organization as supervisors. Replace this with invites and organization management before production use.
+The first self-host preview uses the default Johnred Workspace organization. The access-control contract is:
+
+- Owner and Admin users can edit integration setup.
+- Supervisor users can monitor redacted integration status and use HITL approval flows, but cannot edit provider credentials.
+
+Replace the preview membership flow with invites, organization management, and role review before production use.
+
+## Integration Setup And Secrets
+
+Keep Agent Studio as the only service that talks to provider APIs. The console must not expose Chatwoot, Twenty, LangSmith, MCP, or client-internal credentials to browser code.
+
+Owners and Admins configure Chatwoot and Twenty CRM through the operator/admin Integrations page. Supervisors can view redacted health and readiness only. Agent Studio stores connection metadata in Sagad Postgres and stores provider tokens/API keys as encrypted secret versions when `DATABASE_URL` is configured.
+
+Set a durable encryption key for deployments that save provider credentials:
+
+```env
+SAGAD_INTEGRATION_ENCRYPTION_KEY=replace-with-strong-integration-secret-key
+```
+
+The integration setup API returns redacted status only: configured flags, missing fields, dry-run state, write-gate state, health detail, and `has_*` booleans. It must not return raw API tokens, webhook tokens, or API keys.
 
 ## Realtime Sync
 
@@ -73,6 +92,7 @@ After local preview deployment:
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/health
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations/twenty/health
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integration-configs
 ```
 
 After VPS deployment with the local `compose.vps.yaml`, check from inside the Docker network:
@@ -97,13 +117,15 @@ GCE VPS
 
 Keep Agent Studio as the only service that talks to provider APIs, databases, vector stores, MCP servers, or client internal systems.
 
+Keep local maintainer files local and ignored. Real per-server `.env`, `compose.vps.yaml`, maintainer memory/status/task notes, Obsidian state, screenshots, generated caches, key files, and certificates should not be committed.
+
 ## Production Notes
 
 Before production use, add:
 
 - TLS and reverse proxy config.
 - hardened Postgres/pgvector operations, migrations, and backups.
-- secret management and encrypted tenant/client credentials.
+- secret management, key rotation, and encrypted tenant/client credentials.
 - auth runbooks, role review, and session hardening.
 - durable audit retention and export policy.
 - backup and restore procedures.
