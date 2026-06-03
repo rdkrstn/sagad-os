@@ -57,6 +57,8 @@ npm install
 npm run dev
 ```
 
+The default console dev script uses webpack for local stability. Turbopack remains available with `npm run dev:turbo` from `v1/`.
+
 Verification commands:
 
 ```powershell
@@ -65,7 +67,7 @@ npx tsc --noEmit --pretty false
 npm run build
 ```
 
-The console uses typed mock data by default. It can read Agent Studio through `SAGAD_API_BASE_URL`. Auth.js is wired for email magic-link sessions when `DATABASE_URL`, `AUTH_SECRET`, `AUTH_URL`, `EMAIL_SERVER`, and `EMAIL_FROM` are configured.
+The console uses typed mock data by default. It can read Agent Studio through `SAGAD_API_BASE_URL`. Auth.js is wired for email magic-link sessions when `DATABASE_URL`, `AUTH_SECRET`, `AUTH_URL`, `EMAIL_SERVER`, and `EMAIL_FROM` are configured. Google OAuth appears on the sign-in page when `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` are set.
 
 ## Run Agent Studio
 
@@ -125,6 +127,8 @@ Frontend:
 - `AUTH_URL`
 - `EMAIL_SERVER`
 - `EMAIL_FROM`
+- `AUTH_GOOGLE_ID`
+- `AUTH_GOOGLE_SECRET`
 - `AGENT_STUDIO_INTERNAL_SECRET`
 
 Agent Studio:

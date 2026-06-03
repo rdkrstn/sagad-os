@@ -23,51 +23,34 @@ Default ports:
 - Agent Studio: `8010`
 - Sagad Postgres/pgvector: `5433` on the host, `5432` inside compose.
 
-## VPS Compose With Nginx Proxy Manager
+## Console Auth
 
-Use `compose.vps.example.yaml` as a template when the VPS already has Nginx Proxy Manager and a shared external Docker network named `client_internal_network`.
+The Sagad Console is protected by Auth.js. Browser users without a session are redirected to `/api/auth/signin`.
 
-Preflight:
+Email magic-link login requires these environment variables:
 
-```bash
-docker network inspect client_internal_network >/dev/null
+```env
+AUTH_URL=https://sagad.example.com
+AUTH_SECRET=replace-with-auth-secret
+EMAIL_SERVER=smtp://user:password@smtp.example.com:587
+EMAIL_FROM=Sagad OS <noreply@example.com>
 ```
 
-If the network does not exist yet:
+Google OAuth is optional. Set both variables to show the Google sign-in option:
 
-```bash
-docker network create client_internal_network
+```env
+AUTH_GOOGLE_ID=google-oauth-client-id
+AUTH_GOOGLE_SECRET=google-oauth-client-secret
 ```
 
-Copy the example env and compose files to local ignored files:
+Configure the Google OAuth client with these redirect URIs:
 
-```bash
-cp .env.example .env
-cp compose.vps.example.yaml compose.vps.yaml
-```
+- Local: `http://localhost:3000/api/auth/callback/google`
+- Production: `https://sagad.example.com/api/auth/callback/google`
 
-Edit `.env` with real VPS values and secrets. Edit `compose.vps.yaml` only when that VPS uses different container names, networks, ports, or proxy assumptions. Do not commit either local file.
+The production JavaScript origin should match `AUTH_URL`, for example `https://sagad.example.com`.
 
-Start the stack:
-
-```bash
-docker compose -f compose.vps.yaml config --quiet
-docker compose -f compose.vps.yaml up -d --build
-docker compose -f compose.vps.yaml ps
-```
-
-Nginx Proxy Manager should route the Sagad Console proxy host to:
-
-```text
-Forward Hostname / IP: sagad-console
-Forward Port: 3000
-```
-
-Do not publish Agent Studio publicly unless you intentionally add a protected route for webhooks. If Chatwoot runs on the same `client_internal_network`, configure its webhook URL as:
-
-```text
-http://sagad-agent-studio:8010/webhooks/chatwoot
-```
+The first self-host preview assigns signed-in users to the default Home Services Demo organization as supervisors. Replace this with invites and organization management before production use.
 
 ## Health Checks
 

@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { redirect } from "next/navigation";
 import { ConsoleShell } from "@/components/layout/console-shell";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { auth } from "../../auth";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -20,11 +22,19 @@ export const metadata: Metadata = {
     "Open-source, self-hostable AI operations platform for supervised agent workflows.",
 };
 
-export default function RootLayout({
+export const dynamic = "force-dynamic";
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const session = await auth();
+
+  if (!session?.user) {
+    redirect("/api/auth/signin");
+  }
+
   return (
     <html
       lang="en"
