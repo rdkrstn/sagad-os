@@ -1,6 +1,8 @@
 import PostgresAdapter from "@auth/pg-adapter";
 import NextAuth, { type DefaultSession, type NextAuthConfig } from "next-auth";
+import Google from "next-auth/providers/google";
 import Nodemailer from "next-auth/providers/nodemailer";
+import type { Provider } from "next-auth/providers";
 import { Pool } from "pg";
 
 type SagadRole = "owner" | "admin" | "supervisor" | "agent" | "qa" | "viewer";
@@ -22,6 +24,8 @@ type AuthEnvironmentName =
   | "EMAIL_FROM"
   | "EMAIL_SERVER";
 
+type OptionalAuthEnvironmentName = "AUTH_GOOGLE_ID" | "AUTH_GOOGLE_SECRET";
+
 const localAuthDefaults: Record<AuthEnvironmentName, string> = {
   AUTH_SECRET: "change-me-for-local-dev",
   AUTH_URL: "http://localhost:3000",
@@ -34,6 +38,13 @@ let authPool: Pool | null = null;
 
 function readAuthEnvironment(name: AuthEnvironmentName): string {
   return process.env[name] ?? localAuthDefaults[name];
+}
+
+function readOptionalAuthEnvironment(
+  name: OptionalAuthEnvironmentName,
+): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
 }
 
 function getAuthPool(): Pool {
@@ -131,17 +142,35 @@ async function getDefaultMembership(
     : { organizationId: null, role: null };
 }
 
+function createProviders(): Provider[] {
+  const providers: Provider[] = [
+    Nodemailer({
+      server: readAuthEnvironment("EMAIL_SERVER"),
+      from: readAuthEnvironment("EMAIL_FROM"),
+    }),
+  ];
+
+  const googleClientId = readOptionalAuthEnvironment("AUTH_GOOGLE_ID");
+  const googleClientSecret = readOptionalAuthEnvironment("AUTH_GOOGLE_SECRET");
+
+  if (googleClientId && googleClientSecret) {
+    providers.push(
+      Google({
+        clientId: googleClientId,
+        clientSecret: googleClientSecret,
+      }),
+    );
+  }
+
+  return providers;
+}
+
 function createAuthConfig(): NextAuthConfig {
   const authUrl = readAuthEnvironment("AUTH_URL");
 
   return {
     adapter: PostgresAdapter(getAuthPool()),
-    providers: [
-      Nodemailer({
-        server: readAuthEnvironment("EMAIL_SERVER"),
-        from: readAuthEnvironment("EMAIL_FROM"),
-      }),
-    ],
+    providers: createProviders(),
     secret: readAuthEnvironment("AUTH_SECRET"),
     session: {
       strategy: "database",

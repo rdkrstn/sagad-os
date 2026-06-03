@@ -26,6 +26,8 @@ services:
       AUTH_SECRET: sagad-preview-auth-secret-change-me
       EMAIL_SERVER: smtp://localhost:1025
       EMAIL_FROM: Sagad OS <noreply@sagad.local>
+      AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID:-}
+      AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET:-}
       AGENT_STUDIO_INTERNAL_SECRET: sagad-preview-internal-secret-change-me
       NEXT_TELEMETRY_DISABLED: "1"
     ports:

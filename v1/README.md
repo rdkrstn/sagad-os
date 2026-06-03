@@ -50,6 +50,8 @@ npm run dev
 
 Then open the local URL printed by Next.js, usually `http://localhost:3000`.
 
+`npm run dev` uses webpack because Turbopack can panic on Windows dev cache/project-root resolution. To test Turbopack explicitly, run `npm run dev:turbo`.
+
 To connect the Agent Studio preview:
 
 ```powershell

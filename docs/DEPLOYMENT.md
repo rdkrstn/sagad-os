@@ -23,6 +23,35 @@ Default ports:
 - Agent Studio: `8010`
 - Sagad Postgres/pgvector: `5433` on the host, `5432` inside compose.
 
+## Console Auth
+
+The Sagad Console is protected by Auth.js. Browser users without a session are redirected to `/api/auth/signin`.
+
+Email magic-link login requires these environment variables:
+
+```env
+AUTH_URL=https://sagad.example.com
+AUTH_SECRET=replace-with-auth-secret
+EMAIL_SERVER=smtp://user:password@smtp.example.com:587
+EMAIL_FROM=Sagad OS <noreply@example.com>
+```
+
+Google OAuth is optional. Set both variables to show the Google sign-in option:
+
+```env
+AUTH_GOOGLE_ID=google-oauth-client-id
+AUTH_GOOGLE_SECRET=google-oauth-client-secret
+```
+
+Configure the Google OAuth client with these redirect URIs:
+
+- Local: `http://localhost:3000/api/auth/callback/google`
+- Production: `https://sagad.example.com/api/auth/callback/google`
+
+The production JavaScript origin should match `AUTH_URL`, for example `https://sagad.example.com`.
+
+The first self-host preview assigns signed-in users to the default Home Services Demo organization as supervisors. Replace this with invites and organization management before production use.
+
 ## Health Checks
 
 After deployment:
