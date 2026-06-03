@@ -24,8 +24,8 @@ export type MessageDeliveryStatus = "queued" | "sent" | "delivered" | "failed";
 
 export type ClassifierIntent =
   | "pricing_lead"
-  | "discovery"
   | "account_support"
+  | "general_support"
   | "crm_tool_failure"
   | "refund_or_cancellation"
   | "unknown";
@@ -248,7 +248,7 @@ export interface DashboardData {
   account: {
     id: string;
     name: string;
-    industry: "home_services";
+    industry: "home_services" | "internal_ops";
     timezone: string;
   };
   conversations: Conversation[];

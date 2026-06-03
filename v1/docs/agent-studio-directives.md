@@ -10,7 +10,7 @@ This file defines architecture and implementation expectations for the root `age
 
 - Strictly use `uv` for Python dependency management, locking, and execution.
 - Never invoke native `pip` or standard `venv` activation scripts manually.
-- Target Python 3.12 or newer.
+- Target Python 3.12 or newer for runtime work; use Python 3.12 for local LangSmith Studio/LangGraph CLI dev until the Studio dependency chain supports newer Python versions cleanly.
 - Build backend orchestration around LangGraph State Graph architecture.
 - Use LangChain v0.3 or newer only.
 - Build any frontend surface with Next.js App Router, React, TypeScript, and Tailwind.
@@ -18,6 +18,7 @@ This file defines architecture and implementation expectations for the root `age
 - Treat Chatwoot as the webhook and conversational API integration target.
 - Treat webhooks as generic connector primitives, not n8n-specific orchestration.
 - Use LangSmith for targeted telemetry through environment variables.
+- Use the official LangSmith Studio/LangGraph CLI path for visual graph inspection and workflow debugging.
 - Load all Twenty CRM, Chatwoot, and LangSmith configuration through environment variables.
 
 ## Structural And Code Quality Rules
@@ -43,6 +44,7 @@ This file defines architecture and implementation expectations for the root `age
 ## Current Preview Boundary
 
 - Agent Studio lives at root `agent-studio/` as a `uv` Python project.
+- `agent-studio/langgraph.json` exposes `sagad_conversation` for LangSmith Studio visual debugging.
 - FastAPI exposes health, integration status, Chatwoot webhook, conversation list/detail, approve-send, and CRM tool endpoints.
 - LangGraph owns normalize, classify, retrieve, draft, and QA/compliance nodes.
 - Markdown knowledge packs are the first KB/SOP/QA/compliance source.

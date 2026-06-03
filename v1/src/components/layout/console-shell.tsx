@@ -37,6 +37,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { ConsoleRealtimeStatus } from "@/components/realtime/console-realtime-status";
 import { cn } from "@/lib/utils";
 
 const navSections = [
@@ -44,7 +45,7 @@ const navSections = [
     label: "Operations",
     items: [
       { href: "/", label: "Command", icon: LayoutDashboard, badge: "Live" },
-      { href: "/queue", label: "Queue", icon: Inbox, badge: "1" },
+      { href: "/queue", label: "Queue", icon: Inbox },
       { href: "/conversations", label: "Review", icon: ClipboardCheck },
     ],
   },
@@ -160,7 +161,7 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
           <div className="rounded-lg border bg-muted/30 p-3">
             <div className="flex items-center gap-2 text-xs font-medium">
               <Activity className="text-emerald-600" size={14} />
-              Home Services Demo
+              Johnred Workspace
             </div>
             <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
               <span>Agent Studio</span>
@@ -210,8 +211,9 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
               </Badge>
               <Badge className="h-7 gap-1.5" variant="outline">
                 <span className="size-1.5 rounded-full bg-emerald-500" />
-                Chatwoot ready
+                Console ready
               </Badge>
+              <ConsoleRealtimeStatus />
               <Badge className="h-7 gap-1.5" variant="outline">
                 <span className="size-1.5 rounded-full bg-amber-500" />
                 Twenty external
@@ -241,7 +243,7 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
               <Separator className="hidden h-6 md:block" orientation="vertical" />
               <Avatar className="size-8">
                 <AvatarFallback className="bg-primary text-xs text-primary-foreground">
-                  RS
+                  JD
                 </AvatarFallback>
               </Avatar>
             </div>

@@ -1,6 +1,6 @@
 # Sagad OS Technical Quickstart
 
-Last updated: 2026-06-02
+Last updated: 2026-06-04
 
 Sagad OS is an open-source, self-hostable AI operations platform for AI-native BPO and contact-center workflows. It coordinates external tools instead of replacing them.
 
@@ -88,6 +88,26 @@ Useful dev endpoints:
 - `GET /conversations`
 - `GET /conversations/{id}`
 - `POST /conversations/{id}/approve-send`
+- `WS /ws/conversations`
+
+## Open The Graph In LangSmith Studio
+
+Agent Studio has a `langgraph.json` file that exposes the local graph to the official LangSmith Studio visual debugger.
+
+From `agent-studio/`:
+
+```powershell
+Copy-Item .env.example .env
+$env:PYTHONUTF8 = "1"
+uv sync --dev
+uv run langgraph dev
+```
+
+Open the Studio URL printed by the CLI. It usually points to LangSmith Studio with `baseUrl=http://127.0.0.1:2024`.
+
+Use Studio to inspect graph state, run nodes, debug transitions, and test the local `sagad_conversation` graph. Use the Sagad Console for supervisor operations and HITL review. Current local Studio dev should use Python 3.12; `.python-version` pins that for `uv`.
+
+On Windows, keep `PYTHONUTF8=1` set for LangGraph CLI commands to avoid PowerShell code page errors when the CLI prints Unicode help text.
 
 ## Run With Docker
 
@@ -122,6 +142,8 @@ Use environment variables for provider credentials. Do not commit secrets.
 Frontend:
 
 - `SAGAD_API_BASE_URL`
+- `SAGAD_WS_PUBLIC_URL`
+- `SAGAD_REALTIME_SECRET`
 - `DATABASE_URL`
 - `AUTH_SECRET`
 - `AUTH_URL`
@@ -135,6 +157,7 @@ Agent Studio:
 
 - `DATABASE_URL`
 - `AGENT_STUDIO_INTERNAL_SECRET`
+- `SAGAD_REALTIME_SECRET`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 - `OPENAI_EMBEDDING_MODEL`
@@ -160,12 +183,15 @@ The first live slice is:
 ```text
 Chatwoot inbound message
 -> Agent Studio webhook
+-> one Sagad thread per Chatwoot conversation
 -> LangGraph typed state
 -> knowledge retrieval and draft
 -> Supervisor Console approval
 -> approved reply back to Chatwoot
 -> optional approval-gated CRM note plan
 ```
+
+Repeated customer messages in the same Chatwoot session append to the same Sagad conversation and regenerate the latest supervised draft. The console live-sync chip uses `SAGAD_WS_PUBLIC_URL` plus short-lived tokens signed with `SAGAD_REALTIME_SECRET` to refresh on Agent Studio WebSocket events.
 
 Twenty CRM starts read-only. Writes remain disabled or dry-run until approval gates and write-policy tests are verified.
 

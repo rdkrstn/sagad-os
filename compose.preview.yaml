@@ -21,6 +21,8 @@ services:
       context: ./v1
     environment:
       SAGAD_API_BASE_URL: http://agent-studio:8010
+      SAGAD_WS_PUBLIC_URL: ws://localhost:8010/ws/conversations
+      SAGAD_REALTIME_SECRET: sagad-preview-realtime-secret-change-me
       DATABASE_URL: postgresql://sagad:sagad_dev_password@sagad-db:5432/sagad_os
       AUTH_URL: http://localhost:3000
       AUTH_SECRET: sagad-preview-auth-secret-change-me
@@ -47,6 +49,7 @@ services:
     environment:
       DATABASE_URL: postgresql://sagad:sagad_dev_password@sagad-db:5432/sagad_os
       AGENT_STUDIO_INTERNAL_SECRET: sagad-preview-internal-secret-change-me
+      SAGAD_REALTIME_SECRET: sagad-preview-realtime-secret-change-me
     ports:
       - "8010:8010"
     depends_on:

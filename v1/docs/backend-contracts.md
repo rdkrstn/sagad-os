@@ -49,15 +49,18 @@ POST /webhooks/chatwoot
 GET  /conversations
 GET  /conversations/{id}
 POST /conversations/{id}/approve-send
+WS   /ws/conversations
 POST /tools/crm/lookup-contact
 POST /tools/crm/create-note
 POST /tools/crm/create-task
 POST /tools/crm/update-lead-stage
 ```
 
-`POST /webhooks/chatwoot` receives a Chatwoot message payload, normalizes the inbound message, classifies intent and risk, retrieves Markdown KB/SOP/QA/compliance context, drafts a reply, runs QA/compliance checks, and stores the conversation as `needs_approval`.
+`POST /webhooks/chatwoot` receives a Chatwoot message payload, normalizes the inbound message, classifies intent and risk, retrieves Markdown KB/SOP/QA/compliance context, drafts a reply, runs QA/compliance checks, and stores the conversation as `needs_approval`. One Chatwoot `conversation.id` maps to one Sagad conversation row. New inbound messages append to that thread, regenerate the draft, and reset approval to `needs_approval`. Duplicate webhook retries with the same Chatwoot message id are ignored.
 
 `POST /conversations/{id}/approve-send` is the only outbound path. It sends to Chatwoot only after HITL approval. When Chatwoot credentials are missing in dev, it returns a `dry_run` send status.
+
+`WS /ws/conversations` emits org-scoped realtime events such as `conversation.upserted`, `conversation.message_appended`, `approval.updated`, and `heartbeat`. Browser clients must connect using a short-lived token from the Next.js preview proxy, not provider credentials.
 
 Twenty CRM endpoints are server-side Agent Studio tool endpoints. Reads are unavailable until `TWENTY_ENABLED`, `TWENTY_BASE_URL`, and `TWENTY_API_KEY` are configured. Writes require an explicit supervisor approval payload. Live writes additionally require `TWENTY_DRY_RUN=false` and `TWENTY_ALLOW_WRITES=true`.
 
@@ -74,12 +77,22 @@ POST /api/conversations/{id}/approve-send
 
 This route is only active when `SAGAD_API_BASE_URL` is configured.
 
+The console also exposes:
+
+```text
+GET /api/realtime-token
+  -> signed short-lived token for Agent Studio /ws/conversations
+```
+
+This route is active only for authenticated users and only when `SAGAD_WS_PUBLIC_URL` and `SAGAD_REALTIME_SECRET` are configured.
+
 ### Conversation Preview Shape
 
 ```ts
 type AgentStudioConversationDto = {
   id: string;
   chatwoot_conversation_id: string | null;
+  chatwoot_message_id: string | null;
   customer_name: string;
   channel: "chatwoot";
   incoming_message: string;
@@ -101,6 +114,15 @@ type AgentStudioConversationDto = {
   approval_status: string;
   send_status: string;
   trace_url: string | null;
+  messages: Array<{
+    id: string;
+    sender_type: "customer" | "ai_agent" | "human_agent" | "system" | "tool";
+    body: string;
+    external_message_id: string | null;
+    provider: string | null;
+    payload: Record<string, unknown>;
+    created_at: string;
+  }>;
 };
 ```
 

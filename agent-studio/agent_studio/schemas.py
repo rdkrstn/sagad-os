@@ -111,10 +111,26 @@ class ChatwootWebhookPayload(BaseModel):
     event: str | None = None
     content: str | None = None
     message_type: str | None = None
+    private: bool | None = None
     id: int | str | None = None
     conversation: dict[str, object] | None = None
     sender: dict[str, object] | None = None
     inbox: dict[str, object] | None = None
+
+
+class IgnoredWebhookResponse(BaseModel):
+    status: Literal["ignored"] = "ignored"
+    reason: str
+
+
+class ConversationMessageRecord(BaseModel):
+    id: str = Field(default_factory=lambda: f"msg_{uuid4().hex[:12]}")
+    sender_type: Literal["customer", "ai_agent", "human_agent", "system", "tool"] = "customer"
+    body: str
+    external_message_id: str | None = None
+    provider: str | None = "chatwoot"
+    payload: dict[str, object] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class ConversationRecord(BaseModel):
@@ -137,6 +153,7 @@ class ConversationRecord(BaseModel):
     approval_status: ConversationStatus = "needs_approval"
     send_status: str = "not_sent"
     trace_url: str | None = None
+    messages: list[ConversationMessageRecord] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

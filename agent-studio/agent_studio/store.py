@@ -18,6 +18,7 @@ from agent_studio.db import (
     set_app_context,
 )
 from agent_studio.schemas import (
+    ConversationMessageRecord,
     ConversationRecord,
     CrmContactContext,
     ToolPlan,
@@ -114,6 +115,41 @@ def _json_dict(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
 
+def _inbound_message_from_record(record: ConversationRecord) -> ConversationMessageRecord:
+    return ConversationMessageRecord(
+        sender_type="customer",
+        body=record.incoming_message,
+        external_message_id=record.chatwoot_message_id,
+        provider=record.channel,
+        payload={
+            "chatwoot_conversation_id": record.chatwoot_conversation_id,
+            "customer_name": record.customer_name,
+        },
+        created_at=record.updated_at,
+    )
+
+
+def _message_merge_key(message: ConversationMessageRecord) -> str:
+    if message.external_message_id:
+        return f"external:{message.external_message_id}"
+    return f"id:{message.id}"
+
+
+def _merge_messages(
+    existing: list[ConversationMessageRecord],
+    incoming: list[ConversationMessageRecord],
+) -> list[ConversationMessageRecord]:
+    merged = list(existing)
+    seen = {_message_merge_key(message) for message in merged}
+    for message in incoming:
+        key = _message_merge_key(message)
+        if key in seen:
+            continue
+        merged.append(message)
+        seen.add(key)
+    return sorted(merged, key=lambda message: message.created_at)
+
+
 def _trusted_context(context: StoreContext | None) -> TrustedContext:
     scoped = context or DEFAULT_CONTEXT
     return TrustedContext(
@@ -165,6 +201,13 @@ class InMemoryConversationStore:
         context: StoreContext | None = None,
     ) -> ConversationRecord:
         record.updated_at = _now()
+        existing = self._records.get(record.id)
+        incoming_messages = record.messages or [_inbound_message_from_record(record)]
+        if existing is not None:
+            record.created_at = existing.created_at
+            record.messages = _merge_messages(existing.messages, incoming_messages)
+        else:
+            record.messages = _merge_messages([], incoming_messages)
         self._records[record.id] = record
         return record
 
@@ -218,7 +261,28 @@ class PostgresConversationStore:
             set_app_context(connection, scoped)
             rows = connection.execute(
                 """
-                SELECT *
+                SELECT
+                  conversations.*,
+                  COALESCE(
+                    (
+                      SELECT jsonb_agg(
+                        jsonb_build_object(
+                          'id', conversation_messages.id::text,
+                          'sender_type', conversation_messages.sender_type,
+                          'body', conversation_messages.body,
+                          'external_message_id', conversation_messages.external_message_id,
+                          'provider', conversation_messages.provider,
+                          'payload', conversation_messages.payload,
+                          'created_at', conversation_messages.created_at
+                        )
+                        ORDER BY conversation_messages.created_at ASC
+                      )
+                      FROM conversation_messages
+                      WHERE conversation_messages.organization_id = conversations.organization_id
+                        AND conversation_messages.conversation_id = conversations.id
+                    ),
+                    '[]'::jsonb
+                  ) AS messages
                 FROM conversations
                 WHERE organization_id = %s
                 ORDER BY updated_at DESC
@@ -237,7 +301,28 @@ class PostgresConversationStore:
             set_app_context(connection, scoped)
             row = connection.execute(
                 """
-                SELECT *
+                SELECT
+                  conversations.*,
+                  COALESCE(
+                    (
+                      SELECT jsonb_agg(
+                        jsonb_build_object(
+                          'id', conversation_messages.id::text,
+                          'sender_type', conversation_messages.sender_type,
+                          'body', conversation_messages.body,
+                          'external_message_id', conversation_messages.external_message_id,
+                          'provider', conversation_messages.provider,
+                          'payload', conversation_messages.payload,
+                          'created_at', conversation_messages.created_at
+                        )
+                        ORDER BY conversation_messages.created_at ASC
+                      )
+                      FROM conversation_messages
+                      WHERE conversation_messages.organization_id = conversations.organization_id
+                        AND conversation_messages.conversation_id = conversations.id
+                    ),
+                    '[]'::jsonb
+                  ) AS messages
                 FROM conversations
                 WHERE organization_id = %s
                   AND id = %s
@@ -260,6 +345,8 @@ class PostgresConversationStore:
                 scoped.organization_id,
                 record.id,
             )
+            if not record.messages:
+                record.messages = [_inbound_message_from_record(record)]
             connection.execute(
                 """
                 INSERT INTO conversations (
@@ -333,8 +420,7 @@ class PostgresConversationStore:
                 """,
                 self._conversation_values(record, scoped.organization_id),
             )
-            if not existed:
-                self._insert_inbound_message(connection, scoped.organization_id, record)
+            self._insert_messages(connection, scoped.organization_id, record)
             self._sync_tool_tables(connection, scoped.organization_id, record)
             self._record_audit_event(
                 connection,
@@ -349,7 +435,7 @@ class PostgresConversationStore:
                 },
             )
             connection.commit()
-        return record
+        return self.get(record.id, context=context) or record
 
     def record_approval(
         self,
@@ -494,6 +580,7 @@ class PostgresConversationStore:
             "approval_status": row["approval_status"],
             "send_status": row["send_status"],
             "trace_url": row["trace_url"],
+            "messages": _json_list(row.get("messages")),
             "created_at": _coerce_datetime(row["created_at"]),
             "updated_at": _coerce_datetime(row["updated_at"]),
         }
@@ -550,40 +637,69 @@ class PostgresConversationStore:
         ).fetchone()
         return row is not None
 
-    def _insert_inbound_message(
+    def _insert_messages(
         self,
         connection: object,
         organization_id: str | None,
         record: ConversationRecord,
     ) -> None:
-        connection.execute(
-            """
-            INSERT INTO conversation_messages (
-              organization_id,
-              conversation_id,
-              sender_type,
-              body,
-              external_message_id,
-              provider,
-              payload
-            )
-            VALUES (%s, %s, 'customer', %s, %s, %s, %s)
-            ON CONFLICT DO NOTHING
-            """,
-            (
-                organization_id,
-                record.id,
-                record.incoming_message,
-                record.chatwoot_message_id,
-                record.channel,
-                Jsonb(
-                    {
-                        "chatwoot_conversation_id": record.chatwoot_conversation_id,
-                        "customer_name": record.customer_name,
-                    },
+        for message in record.messages:
+            if _is_uuid(message.id):
+                connection.execute(
+                    """
+                    INSERT INTO conversation_messages (
+                      id,
+                      organization_id,
+                      conversation_id,
+                      sender_type,
+                      body,
+                      external_message_id,
+                      provider,
+                      payload,
+                      created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (
+                        message.id,
+                        organization_id,
+                        record.id,
+                        message.sender_type,
+                        message.body,
+                        message.external_message_id,
+                        message.provider,
+                        Jsonb(message.payload),
+                        message.created_at,
+                    ),
+                )
+                continue
+            connection.execute(
+                """
+                INSERT INTO conversation_messages (
+                  organization_id,
+                  conversation_id,
+                  sender_type,
+                  body,
+                  external_message_id,
+                  provider,
+                  payload,
+                  created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    organization_id,
+                    record.id,
+                    message.sender_type,
+                    message.body,
+                    message.external_message_id,
+                    message.provider,
+                    Jsonb(message.payload),
+                    message.created_at,
                 ),
-            ),
-        )
+            )
 
     def _sync_tool_tables(
         self,

@@ -60,6 +60,7 @@ export function ConversationReview({
     return Object.keys(candidate).length > 0 ? candidate : list[0] ?? {};
   }, [list, primaryConversation]);
   const primaryId = textOf(primary, ["id"], "");
+  const hasConversation = Boolean(primaryId);
   const primaryDraft = textOf(primary, ["draftReply", "suggestedReply"], "");
   const [draftByConversation, setDraftByConversation] = useState<Record<string, string>>(
     {},
@@ -85,6 +86,10 @@ export function ConversationReview({
   const qaCompliance = nestedArray(primary, ["qaCompliance", "qaFindings"]);
 
   function setDraftReply(value: string): void {
+    if (!primaryId) {
+      return;
+    }
+
     setDraftByConversation((current) => ({
       ...current,
       [primaryId]: value,
@@ -152,6 +157,12 @@ export function ConversationReview({
             </div>
           </div>
           <div className="divide-y">
+            {list.length === 0 ? (
+              <div className="p-4 text-sm leading-6 text-muted-foreground">
+                No conversations yet. Connect Chatwoot to Agent Studio, then inbound
+                messages will appear here for review.
+              </div>
+            ) : null}
             {list.map((conversation, index) => {
               const status = textOf(conversation, ["status", "queueStatus"], "Review");
               const conversationId = textOf(
@@ -191,26 +202,31 @@ export function ConversationReview({
             action={
               <div className="flex flex-wrap items-center gap-2">
                 <ActionButton
-                  disabled={isPending}
+                  disabled={!hasConversation || isPending}
                   icon={Check}
                   label="Approve"
                   onClick={() => void submitDecision(true)}
                 />
-                <ActionButton icon={Pencil} label="Edit" />
+                <ActionButton disabled={!hasConversation} icon={Pencil} label="Edit" />
                 <ActionButton
-                  disabled={isPending}
+                  disabled={!hasConversation || isPending}
                   icon={X}
                   label="Reject"
                   onClick={() => void submitDecision(false)}
                 />
                 <ActionButton
+                  disabled={!hasConversation}
                   icon={Hand}
                   label="Take over"
                   onClick={() => setActionMessage("Human takeover queued for supervisor.")}
                 />
               </div>
             }
-            title={textOf(primary, ["customerName", "contact", "name"])}
+            title={
+              hasConversation
+                ? textOf(primary, ["customerName", "contact", "name"])
+                : "No conversation selected"
+            }
             eyebrow="Thread"
           >
             <div className="grid grid-cols-2 gap-3 border-b bg-muted/30 p-4 text-xs md:grid-cols-4">
@@ -227,28 +243,34 @@ export function ConversationReview({
               ))}
             </div>
             <ScrollArea className="h-[360px]">
-            <div className="space-y-3 p-4">
-              {asArray(messages).map((message, index) => {
-                const row = asRecord(message);
-                const sender = textOf(row, ["sender", "role", "from"], "Customer");
-                return (
-                  <div
-                    className="rounded-md border bg-muted/30 p-3"
-                    key={index}
-                  >
-                    <div className="mb-1 flex items-center justify-between gap-2 text-xs">
-                      <span className="font-semibold text-foreground">{sender}</span>
-                      <span className="text-muted-foreground">
-                        {textOf(row, ["time", "timestamp", "createdAt"], "")}
-                      </span>
-                    </div>
-                    <p className="text-sm leading-6 text-foreground">
-                      {textOf(row, ["body", "content", "text", "message"], "")}
-                    </p>
+              <div className="space-y-3 p-4">
+                {asArray(messages).length === 0 ? (
+                  <div className="rounded-md border border-dashed bg-background p-4 text-sm leading-6 text-muted-foreground">
+                    No thread loaded yet. New Chatwoot conversations will populate
+                    this pane after Agent Studio receives a webhook.
                   </div>
-                );
-              })}
-            </div>
+                ) : null}
+                {asArray(messages).map((message, index) => {
+                  const row = asRecord(message);
+                  const sender = textOf(row, ["sender", "role", "from"], "Customer");
+                  return (
+                    <div
+                      className="rounded-md border bg-muted/30 p-3"
+                      key={index}
+                    >
+                      <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+                        <span className="font-semibold text-foreground">{sender}</span>
+                        <span className="text-muted-foreground">
+                          {textOf(row, ["time", "timestamp", "createdAt"], "")}
+                        </span>
+                      </div>
+                      <p className="text-sm leading-6 text-foreground">
+                        {textOf(row, ["body", "content", "text", "message"], "")}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
             </ScrollArea>
           </SectionPanel>
 
@@ -256,7 +278,9 @@ export function ConversationReview({
             <div className="p-4">
               <Textarea
                 className="min-h-32 resize-y bg-background text-sm leading-6"
+                disabled={!hasConversation}
                 onChange={(event) => setDraftReply(event.target.value)}
+                placeholder="No draft yet. Agent Studio will generate a supervised draft after a conversation arrives."
                 value={draftReply}
               />
               {actionMessage ? (
@@ -273,6 +297,11 @@ export function ConversationReview({
         <div className="space-y-4">
           <SectionPanel title="AI Decision Trail" eyebrow="Reasoning log">
             <div className="divide-y">
+              {asArray(trail).length === 0 ? (
+                <div className="p-3 text-sm leading-6 text-muted-foreground">
+                  No graph events yet.
+                </div>
+              ) : null}
               {asArray(trail).map((event, index) => {
                 const row = asRecord(event);
                 const status = textOf(row, ["status", "result"], "Logged");
@@ -295,32 +324,42 @@ export function ConversationReview({
 
           <SectionPanel title="Knowledge Context" eyebrow="KB/SOP/QA">
             <ScrollArea className="h-[320px]">
-            <div className="divide-y">
-              {asArray(knowledge).map((event, index) => {
-                const row = asRecord(event);
-                return (
-                  <div className="p-3" key={index}>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-medium text-foreground">
-                        {textOf(row, ["title", "name"])}
-                      </div>
-                      <StatusChip>{textOf(row, ["category", "type"], "KB")}</StatusChip>
-                    </div>
-                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      {textOf(row, ["excerpt", "summary", "detail"], "")}
-                    </p>
-                    <div className="mt-1 text-[11px] text-muted-foreground">
-                      {textOf(row, ["source", "source_path", "path"], "")}
-                    </div>
+              <div className="divide-y">
+                {asArray(knowledge).length === 0 ? (
+                  <div className="p-3 text-sm leading-6 text-muted-foreground">
+                    No retrieved KB, SOP, QA, or compliance references yet.
                   </div>
-                );
-              })}
-            </div>
+                ) : null}
+                {asArray(knowledge).map((event, index) => {
+                  const row = asRecord(event);
+                  return (
+                    <div className="p-3" key={index}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-medium text-foreground">
+                          {textOf(row, ["title", "name"])}
+                        </div>
+                        <StatusChip>{textOf(row, ["category", "type"], "KB")}</StatusChip>
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        {textOf(row, ["excerpt", "summary", "detail"], "")}
+                      </p>
+                      <div className="mt-1 text-[11px] text-muted-foreground">
+                        {textOf(row, ["source", "source_path", "path"], "")}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </ScrollArea>
           </SectionPanel>
 
           <SectionPanel title="QA/Compliance Gate" eyebrow="HITL readiness">
             <div className="divide-y">
+              {asArray(qaCompliance).length === 0 ? (
+                <div className="p-3 text-sm leading-6 text-muted-foreground">
+                  No QA or compliance checks yet.
+                </div>
+              ) : null}
               {asArray(qaCompliance).map((event, index) => {
                 const row = asRecord(event);
                 const status = textOf(row, ["status", "result"], "Review");

@@ -25,6 +25,8 @@ services:
     container_name: sagad-console
     environment:
       SAGAD_API_BASE_URL: http://sagad-agent-studio:8010
+      SAGAD_WS_PUBLIC_URL: ${SAGAD_WS_PUBLIC_URL:?Set SAGAD_WS_PUBLIC_URL in .env}
+      SAGAD_REALTIME_SECRET: ${SAGAD_REALTIME_SECRET:?Set SAGAD_REALTIME_SECRET in .env}
       DATABASE_URL: postgresql://${SAGAD_POSTGRES_USER:-sagad}:${SAGAD_POSTGRES_PASSWORD}@sagad-db:5432/${SAGAD_POSTGRES_DB:-sagad_os}
       AUTH_URL: ${AUTH_URL:?Set AUTH_URL in .env}
       AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env}
@@ -50,6 +52,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${SAGAD_POSTGRES_USER:-sagad}:${SAGAD_POSTGRES_PASSWORD}@sagad-db:5432/${SAGAD_POSTGRES_DB:-sagad_os}
       AGENT_STUDIO_INTERNAL_SECRET: ${AGENT_STUDIO_INTERNAL_SECRET:?Set AGENT_STUDIO_INTERNAL_SECRET in .env}
+      SAGAD_REALTIME_SECRET: ${SAGAD_REALTIME_SECRET:?Set SAGAD_REALTIME_SECRET in .env}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4}
       OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}

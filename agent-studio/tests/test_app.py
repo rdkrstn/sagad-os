@@ -1,9 +1,11 @@
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from agent_studio.config import get_settings
 from agent_studio.main import app
+from agent_studio.realtime import create_realtime_token
 from agent_studio.store import store
 
 
@@ -45,6 +47,117 @@ def test_chatwoot_webhook_creates_approval_conversation() -> None:
     assert "Basis:" in payload["draft_reply"]
 
 
+def test_chatwoot_webhook_threads_same_conversation_messages() -> None:
+    first = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "event": "message_created",
+            "id": 1001,
+            "content": "How much does service cost?",
+            "message_type": "incoming",
+            "conversation": {"id": 42},
+            "sender": {"name": "Thread Customer"},
+        },
+    ).json()
+
+    second_response = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "event": "message_created",
+            "id": 1002,
+            "content": "Actually cancel that and refund me.",
+            "message_type": "incoming",
+            "conversation": {"id": 42},
+            "sender": {"name": "Thread Customer"},
+        },
+    )
+
+    assert second_response.status_code == 200
+    second = second_response.json()
+    assert second["id"] == first["id"]
+    assert second["incoming_message"] == "Actually cancel that and refund me."
+    assert second["intent"] == "refund_or_cancellation"
+    assert second["approval_status"] == "needs_approval"
+    assert second["send_status"] == "not_sent"
+    assert [message["body"] for message in second["messages"]] == [
+        "How much does service cost?",
+        "Actually cancel that and refund me.",
+    ]
+
+    listed = client.get("/conversations").json()["conversations"]
+    assert len(listed) == 1
+    assert listed[0]["id"] == first["id"]
+
+
+def test_chatwoot_webhook_retry_is_idempotent_by_message_id() -> None:
+    payload = {
+        "event": "message_created",
+        "id": 2001,
+        "content": "I need help with booking.",
+        "message_type": "incoming",
+        "conversation": {"id": 88},
+        "sender": {"name": "Retry Customer"},
+    }
+
+    first = client.post("/webhooks/chatwoot", json=payload).json()
+    second = client.post("/webhooks/chatwoot", json=payload).json()
+
+    assert second["id"] == first["id"]
+    assert [message["external_message_id"] for message in second["messages"]] == ["2001"]
+    listed = client.get("/conversations").json()["conversations"]
+    assert len(listed) == 1
+
+
+def test_chatwoot_outgoing_private_message_is_ignored() -> None:
+    response = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "event": "message_created",
+            "id": 3001,
+            "content": "Operator reply should not draft.",
+            "message_type": "outgoing",
+            "private": True,
+            "conversation": {"id": 99},
+            "sender": {"name": "Operator"},
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "ignored"
+    assert client.get("/conversations").json()["conversations"] == []
+
+
+def test_conversation_websocket_accepts_valid_realtime_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SAGAD_REALTIME_SECRET", "test-realtime-secret")
+    get_settings.cache_clear()
+    token = create_realtime_token(
+        secret="test-realtime-secret",
+        organization_id="org-test",
+        user_id="1",
+        role="supervisor",
+        ttl_seconds=30,
+    )
+
+    with client.websocket_connect(f"/ws/conversations?token={token}") as websocket:
+        payload = websocket.receive_json()
+
+    assert payload["type"] == "heartbeat"
+    assert payload["organization_id"] == "org-test"
+
+
+def test_conversation_websocket_rejects_invalid_realtime_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SAGAD_REALTIME_SECRET", "test-realtime-secret")
+    get_settings.cache_clear()
+
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/ws/conversations?token=bad-token"):
+            pass
+
+
 def test_reject_does_not_send() -> None:
     created = client.post(
         "/webhooks/chatwoot",
@@ -67,6 +180,8 @@ def test_approve_send_uses_dry_run_without_chatwoot_credentials() -> None:
         "/webhooks/chatwoot",
         json={"content": "Hello", "conversation": {"id": 88}},
     ).json()
+    assert created["intent"] == "general_support"
+    assert "pricing or booking help" in created["draft_reply"]
 
     response = client.post(
         f"/conversations/{created['id']}/approve-send",
@@ -77,6 +192,40 @@ def test_approve_send_uses_dry_run_without_chatwoot_credentials() -> None:
     payload = response.json()
     assert payload["approval_status"] == "sent"
     assert payload["send_status"] == "dry_run"
+
+
+def test_approve_send_records_outbound_message_in_same_thread() -> None:
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "id": 4001,
+            "content": "Hello",
+            "message_type": "incoming",
+            "conversation": {"id": 400},
+        },
+    ).json()
+
+    response = client.post(
+        f"/conversations/{created['id']}/approve-send",
+        json={
+            "approved": True,
+            "supervisor_id": "qa-lead",
+            "edited_reply": "Thanks. What do you need help with?",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == created["id"]
+    assert [message["sender_type"] for message in payload["messages"]] == [
+        "customer",
+        "ai_agent",
+    ]
+    assert [message["body"] for message in payload["messages"]] == [
+        "Hello",
+        "Thanks. What do you need help with?",
+    ]
+    assert len(client.get("/conversations").json()["conversations"]) == 1
 
 
 def test_twenty_disabled_health_state() -> None:

@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS organization_members (
 );
 
 INSERT INTO organizations (slug, name)
-VALUES ('home-services-demo', 'Home Services Demo')
+VALUES ('johnred-workspace', 'Johnred Workspace')
 ON CONFLICT (slug) DO NOTHING;
 
 INSERT INTO users (name, email)
@@ -79,7 +79,7 @@ INSERT INTO profiles (user_id, display_name, default_organization_id)
 SELECT users.id, users.name, organizations.id
 FROM users, organizations
 WHERE users.email = 'owner@sagad.local'
-  AND organizations.slug = 'home-services-demo'
+  AND organizations.slug = 'johnred-workspace'
 ON CONFLICT (user_id) DO UPDATE
 SET default_organization_id = EXCLUDED.default_organization_id,
     updated_at = now();
@@ -88,7 +88,7 @@ INSERT INTO organization_members (organization_id, user_id, role, status)
 SELECT organizations.id, users.id, 'owner', 'active'
 FROM users, organizations
 WHERE users.email = 'owner@sagad.local'
-  AND organizations.slug = 'home-services-demo'
+  AND organizations.slug = 'johnred-workspace'
 ON CONFLICT (organization_id, user_id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS chatwoot_inboxes (
@@ -111,9 +111,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS chatwoot_inboxes_default_idx
   WHERE is_default;
 
 INSERT INTO chatwoot_inboxes (organization_id, name, is_default)
-SELECT id, 'Home Services Demo Chatwoot', true
+SELECT id, 'Johnred Workspace Chatwoot', true
 FROM organizations
-WHERE slug = 'home-services-demo'
+WHERE slug = 'johnred-workspace'
 ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS conversations (
@@ -297,6 +297,78 @@ CREATE TABLE IF NOT EXISTS conversation_summaries (
   embedding vector(1536),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+DROP TABLE IF EXISTS sagad_duplicate_conversation_map;
+
+CREATE TEMP TABLE sagad_duplicate_conversation_map ON COMMIT DROP AS
+WITH ranked AS (
+  SELECT
+    id,
+    FIRST_VALUE(id) OVER (
+      PARTITION BY organization_id, channel, chatwoot_conversation_id
+      ORDER BY updated_at DESC, created_at DESC, id DESC
+    ) AS survivor_id,
+    ROW_NUMBER() OVER (
+      PARTITION BY organization_id, channel, chatwoot_conversation_id
+      ORDER BY updated_at DESC, created_at DESC, id DESC
+    ) AS row_number
+  FROM conversations
+  WHERE chatwoot_conversation_id IS NOT NULL
+)
+SELECT id AS duplicate_id, survivor_id
+FROM ranked
+WHERE row_number > 1;
+
+DELETE FROM conversation_messages duplicate_message
+USING sagad_duplicate_conversation_map duplicate_map,
+      conversation_messages survivor_message
+WHERE duplicate_message.conversation_id = duplicate_map.duplicate_id
+  AND survivor_message.conversation_id = duplicate_map.survivor_id
+  AND duplicate_message.external_message_id IS NOT NULL
+  AND duplicate_message.external_message_id = survivor_message.external_message_id;
+
+UPDATE conversation_messages
+SET conversation_id = sagad_duplicate_conversation_map.survivor_id
+FROM sagad_duplicate_conversation_map
+WHERE conversation_messages.conversation_id = sagad_duplicate_conversation_map.duplicate_id;
+
+UPDATE approvals
+SET conversation_id = sagad_duplicate_conversation_map.survivor_id
+FROM sagad_duplicate_conversation_map
+WHERE approvals.conversation_id = sagad_duplicate_conversation_map.duplicate_id;
+
+UPDATE tool_plans
+SET conversation_id = sagad_duplicate_conversation_map.survivor_id
+FROM sagad_duplicate_conversation_map
+WHERE tool_plans.conversation_id = sagad_duplicate_conversation_map.duplicate_id;
+
+UPDATE tool_results
+SET conversation_id = sagad_duplicate_conversation_map.survivor_id
+FROM sagad_duplicate_conversation_map
+WHERE tool_results.conversation_id = sagad_duplicate_conversation_map.duplicate_id;
+
+UPDATE audit_events
+SET conversation_id = sagad_duplicate_conversation_map.survivor_id
+FROM sagad_duplicate_conversation_map
+WHERE audit_events.conversation_id = sagad_duplicate_conversation_map.duplicate_id;
+
+UPDATE retrieval_runs
+SET conversation_id = sagad_duplicate_conversation_map.survivor_id
+FROM sagad_duplicate_conversation_map
+WHERE retrieval_runs.conversation_id = sagad_duplicate_conversation_map.duplicate_id;
+
+UPDATE conversation_summaries
+SET conversation_id = sagad_duplicate_conversation_map.survivor_id
+FROM sagad_duplicate_conversation_map
+WHERE conversation_summaries.conversation_id = sagad_duplicate_conversation_map.duplicate_id;
+
+DELETE FROM conversations
+USING sagad_duplicate_conversation_map
+WHERE conversations.id = sagad_duplicate_conversation_map.duplicate_id;
+
+CREATE UNIQUE INDEX IF NOT EXISTS conversations_chatwoot_thread_idx
+  ON conversations(organization_id, channel, chatwoot_conversation_id)
+  WHERE chatwoot_conversation_id IS NOT NULL;
 
 DO $$
 DECLARE
