@@ -32,6 +32,7 @@ IntegrationStatus = Literal[
 ]
 ToolExecutionStatus = Literal["planned", "dry_run", "blocked", "succeeded", "failed"]
 ToolRiskLevel = Literal["low", "medium", "high"]
+IntegrationProvider = Literal["chatwoot", "twenty"]
 
 
 class KnowledgeHit(BaseModel):
@@ -164,6 +165,52 @@ class ConversationListResponse(BaseModel):
 
 class IntegrationListResponse(BaseModel):
     integrations: list[ExternalIntegrationStatus]
+
+
+class IntegrationConnection(BaseModel):
+    provider: IntegrationProvider
+    name: str
+    kind: IntegrationKind
+    status: IntegrationStatus
+    configured: bool = False
+    enabled: bool = False
+    external: bool = True
+    base_url: str | None = None
+    account_id: str | None = None
+    inbox_id: str | None = None
+    api_mode: str | None = None
+    dry_run: bool = True
+    writes_enabled: bool = False
+    has_api_access_token: bool = False
+    has_webhook_token: bool = False
+    has_api_key: bool = False
+    missing: list[str] = Field(default_factory=list)
+    detail: str
+    updated_at: datetime | None = None
+
+
+class IntegrationConnectionListResponse(BaseModel):
+    connections: list[IntegrationConnection]
+
+
+class IntegrationConnectionUpsertRequest(BaseModel):
+    base_url: str | None = None
+    account_id: str | None = None
+    inbox_id: str | None = None
+    api_access_token: str | None = None
+    webhook_token: str | None = None
+    api_key: str | None = None
+    api_mode: str | None = "graphql"
+    enabled: bool = True
+    dry_run: bool = True
+    allow_writes: bool = False
+
+
+class IntegrationConnectionTestResponse(BaseModel):
+    provider: IntegrationProvider
+    status: IntegrationStatus
+    detail: str
+    connection: IntegrationConnection
 
 
 class ApprovalRequest(BaseModel):

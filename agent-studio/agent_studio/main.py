@@ -9,6 +9,12 @@ from agent_studio.chatwoot import send_approved_reply
 from agent_studio.config import get_settings
 from agent_studio.db import initialize_database
 from agent_studio.graph import graph
+from agent_studio.integration_config import (
+    ADMIN_ROLES,
+    configured_settings,
+    connection_test_result,
+    integration_config_store,
+)
 from agent_studio.realtime import realtime_manager, verify_realtime_token
 from agent_studio.retrieval import retriever
 from agent_studio.schemas import (
@@ -26,7 +32,12 @@ from agent_studio.schemas import (
     ExternalIntegrationStatus,
     HealthResponse,
     IgnoredWebhookResponse,
+    IntegrationConnection,
+    IntegrationConnectionListResponse,
+    IntegrationConnectionTestResponse,
+    IntegrationConnectionUpsertRequest,
     IntegrationListResponse,
+    IntegrationProvider,
 )
 from agent_studio.store import StoreContext, store
 from agent_studio.twenty import TwentyAdapter, twenty_status
@@ -128,8 +139,8 @@ def _message_already_recorded(
     return any(message.external_message_id == message_id for message in record.messages)
 
 
-def _verify_webhook_token(token: str | None) -> None:
-    settings = get_settings()
+def _verify_webhook_token(token: str | None, context: StoreContext | None = None) -> None:
+    settings = configured_settings(get_settings(), context)
     if settings.chatwoot_webhook_token and token != settings.chatwoot_webhook_token:
         raise HTTPException(status_code=401, detail="Invalid Chatwoot webhook token.")
 
@@ -140,12 +151,41 @@ def _verify_internal_secret(token: str | None) -> None:
         raise HTTPException(status_code=401, detail="Invalid Agent Studio internal secret.")
 
 
-def _integration_statuses() -> list[ExternalIntegrationStatus]:
-    settings = get_settings()
+def _require_integration_admin(context: StoreContext) -> None:
+    if context.role not in ADMIN_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail="Integration configuration requires an owner or admin role.",
+        )
+
+
+def _integration_status_from_connection(connection: IntegrationConnection) -> ExternalIntegrationStatus:
+    return ExternalIntegrationStatus(
+        provider=connection.name,
+        kind=connection.kind,
+        status=connection.status,
+        external=connection.external,
+        base_url=connection.base_url,
+        mode=connection.api_mode or ("webhook + approved send" if connection.provider == "chatwoot" else None),
+        dry_run=connection.dry_run,
+        writes_enabled=connection.writes_enabled,
+        detail=connection.detail,
+    )
+
+
+def _integration_statuses(context: StoreContext | None = None) -> list[ExternalIntegrationStatus]:
+    settings = configured_settings(get_settings(), context)
     chatwoot_status = "ready" if settings.chatwoot_send_enabled else "dry_run"
     langsmith_ready = bool(settings.langsmith_api_key and settings.langsmith_tracing)
+    configured_connections = {
+        connection.provider: connection for connection in integration_config_store.list(context=context)
+    }
+    chatwoot_connection = configured_connections.get("chatwoot")
+    twenty_connection = configured_connections.get("twenty")
     return [
-        ExternalIntegrationStatus(
+        _integration_status_from_connection(chatwoot_connection)
+        if chatwoot_connection and chatwoot_connection.configured
+        else ExternalIntegrationStatus(
             provider="Chatwoot",
             kind="channel",
             status=chatwoot_status,
@@ -160,7 +200,11 @@ def _integration_statuses() -> list[ExternalIntegrationStatus]:
                 else "Chatwoot inbound works locally; outbound send is dry-run until credentials are set."
             ),
         ),
-        twenty_status(settings),
+        (
+            _integration_status_from_connection(twenty_connection)
+            if twenty_connection and twenty_connection.configured
+            else twenty_status(settings)
+        ),
         ExternalIntegrationStatus(
             provider="Markdown Knowledge Packs",
             kind="knowledge",
@@ -231,7 +275,7 @@ def _realtime_event(
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    settings = get_settings()
+    settings = configured_settings(get_settings())
     return HealthResponse(
         status="healthy",
         service="agent-studio",
@@ -242,13 +286,90 @@ def health() -> HealthResponse:
 
 
 @app.get("/integrations", response_model=IntegrationListResponse)
-def list_integrations() -> IntegrationListResponse:
-    return IntegrationListResponse(integrations=_integration_statuses())
+def list_integrations(
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> IntegrationListResponse:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    return IntegrationListResponse(integrations=_integration_statuses(context))
 
 
 @app.get("/integrations/twenty/health", response_model=CrmProviderStatus)
-def get_twenty_health() -> CrmProviderStatus:
-    return twenty_status(get_settings())
+def get_twenty_health(
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> CrmProviderStatus:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    return twenty_status(configured_settings(get_settings(), context))
+
+
+@app.get("/integration-configs", response_model=IntegrationConnectionListResponse)
+def list_integration_configs(
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> IntegrationConnectionListResponse:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    return IntegrationConnectionListResponse(
+        connections=integration_config_store.list(context=context),
+    )
+
+
+@app.put("/integration-configs/{provider}", response_model=IntegrationConnection)
+def upsert_integration_config(
+    provider: IntegrationProvider,
+    request: IntegrationConnectionUpsertRequest,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> IntegrationConnection:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    _require_integration_admin(context)
+    return integration_config_store.upsert(provider, request, context=context)
+
+
+@app.post("/integration-configs/{provider}/disable", response_model=IntegrationConnection)
+def disable_integration_config(
+    provider: IntegrationProvider,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> IntegrationConnection:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    _require_integration_admin(context)
+    return integration_config_store.disable(provider, context=context)
+
+
+@app.post("/integration-configs/{provider}/test", response_model=IntegrationConnectionTestResponse)
+def test_integration_config(
+    provider: IntegrationProvider,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> IntegrationConnectionTestResponse:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    _require_integration_admin(context)
+    status_value, detail, connection = connection_test_result(provider, context=context)
+    return IntegrationConnectionTestResponse(
+        provider=provider,
+        status=status_value,
+        detail=detail,
+        connection=connection,
+    )
 
 
 @app.websocket("/ws/conversations")
@@ -291,8 +412,8 @@ async def receive_chatwoot_webhook(
     x_sagad_user_id: Annotated[str | None, Header()] = None,
     x_sagad_role: Annotated[str | None, Header()] = None,
 ) -> ConversationRecord | IgnoredWebhookResponse:
-    _verify_webhook_token(x_chatwoot_token)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    _verify_webhook_token(x_chatwoot_token, context)
 
     if _is_ignored_chatwoot_message(payload):
         response.status_code = status.HTTP_202_ACCEPTED
@@ -435,7 +556,7 @@ async def approve_send(
 
     content = request.edited_reply or record.draft_reply
     result = await send_approved_reply(
-        settings=get_settings(),
+        settings=configured_settings(get_settings(), context),
         chatwoot_conversation_id=record.chatwoot_conversation_id,
         content=content,
     )
@@ -484,7 +605,7 @@ async def crm_lookup_contact(
 ) -> CrmToolResponse:
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
-    crm_context, plan, result = await TwentyAdapter(get_settings()).lookup_contact(
+    crm_context, plan, result = await TwentyAdapter(configured_settings(get_settings(), context)).lookup_contact(
         request.query,
         conversation_id=request.conversation_id,
     )
@@ -509,7 +630,7 @@ async def crm_create_note(
     _require_supervisor_approval(request.approved)
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
-    plan, result = await TwentyAdapter(get_settings()).create_note(
+    plan, result = await TwentyAdapter(configured_settings(get_settings(), context)).create_note(
         request.contact_id,
         request.note,
         conversation_id=request.conversation_id,
@@ -535,7 +656,7 @@ async def crm_create_task(
     _require_supervisor_approval(request.approved)
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
-    plan, result = await TwentyAdapter(get_settings()).create_task(
+    plan, result = await TwentyAdapter(configured_settings(get_settings(), context)).create_task(
         request.contact_id,
         request.title,
         due_at=request.due_at,
@@ -563,7 +684,7 @@ async def crm_update_lead_stage(
     _require_supervisor_approval(request.approved)
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
-    plan, result = await TwentyAdapter(get_settings()).update_lead_stage(
+    plan, result = await TwentyAdapter(configured_settings(get_settings(), context)).update_lead_stage(
         request.contact_id,
         request.lead_stage,
         conversation_id=request.conversation_id,

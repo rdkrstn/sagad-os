@@ -49,13 +49,19 @@ flowchart LR
 
 ### Sagad Console
 
-The supervisor UI for queues, approvals, conversations, agent performance, contact drivers, QA/SOP review, knowledge inventory, integrations, and settings.
+The supervisor UI for queues, approvals, conversations, agent performance, contact drivers, QA/SOP review, knowledge inventory, the operator/admin Integrations page, and Settings.
+
+The console direction follows the SagadOS Premium Open Ops design system: calm, modular, inspectable, and operator-focused. Product surfaces should show visible system state, clear borders, restrained navy/teal accents, and transparent ownership rather than AI-magic or glossy SaaS framing.
+
+Integrations is for operator health monitoring and Owner/Admin connection setup. Developer payloads, DTO contracts, webhook samples, and low-level tool details belong under `Settings -> Advanced`, not in the main integrations page.
 
 Location: `v1/`
 
 ### Agent Studio
 
 The backend orchestration layer. It owns typed LangGraph state, LangChain tools, adapter policy, approval gates, knowledge retrieval, draft generation, trace metadata, and approved external actions.
+
+Agent Studio also owns provider connection configuration. Chatwoot and Twenty CRM credentials are saved through Agent Studio and stored as encrypted Sagad Postgres secret versions when `DATABASE_URL` is configured. Browser code only receives redacted status fields such as configured flags, health, missing fields, and dry-run/write-gate state.
 
 It also includes `langgraph.json` for official LangSmith Studio visual debugging of the local `sagad_conversation` graph. Studio is for graph design and inspection; the Sagad Console is for supervisor operations.
 
@@ -71,7 +77,7 @@ Sagad OS coordinates external systems through Agent Studio adapters:
 - LangSmith for traces and observability.
 - MCP/FastMCP as a future tool exposure layer behind Agent Studio.
 
-Browser code must not call provider APIs directly.
+Browser code must not call provider APIs directly. Owner and Admin users may edit connection setup through the console; Supervisor users get read-only integration health for monitoring and review.
 
 ## Demo Videos
 
@@ -144,6 +150,10 @@ Useful local endpoints:
 - `GET /health`
 - `GET /integrations`
 - `GET /integrations/twenty/health`
+- `GET /integration-configs`
+- `PUT /integration-configs/{provider}`
+- `POST /integration-configs/{provider}/disable`
+- `POST /integration-configs/{provider}/test`
 - `POST /webhooks/chatwoot`
 - `GET /conversations`
 - `GET /conversations/{id}`
@@ -179,6 +189,8 @@ Default ports:
 - Sagad Postgres/pgvector: `5433`
 
 ## Integration Path
+
+Owners and Admins configure Chatwoot and Twenty CRM from the operator/admin Integrations page. Agent Studio stores the connection metadata and encrypts provider secrets in Sagad Postgres when persistence is enabled. Supervisors can see setup health, dry-run state, and missing-field guidance, but cannot edit provider credentials.
 
 The first live milestone is:
 
@@ -217,7 +229,7 @@ VPS
 `-- Agent Studio
 ```
 
-The current preview includes the first database and auth foundation: Auth.js for console sessions, Sagad Postgres with pgvector in preview compose, tenant-scoped Sagad tables, and durable Agent Studio conversation/approval/tool/audit rows when `DATABASE_URL` is configured. Production still needs hardened secret management, backups, migration operations, encrypted tenant secrets, auth runbooks, and pgvector-backed retrieval validation.
+The current preview includes the first database and auth foundation: Auth.js for console sessions, Sagad Postgres with pgvector in preview compose, tenant-scoped Sagad tables, durable Agent Studio conversation/approval/tool/audit rows, and the accepted encrypted integration-secret storage model when `DATABASE_URL` is configured. Production still needs hardened key management, backups, migration operations, auth runbooks, and pgvector-backed retrieval validation.
 
 ## CI/CD And Versioning
 
@@ -241,15 +253,18 @@ Current:
 
 - Next.js supervisor console preview.
 - Agent Studio FastAPI + LangGraph backend preview.
-- Mocked home-services operating data.
-- Chatwoot and Twenty integration boundaries.
+- Empty Johnred Workspace fallback with explicit demo fixtures only when needed.
+- Chatwoot and Twenty operator/admin setup and monitoring boundaries.
 - Docker and CI scaffolding.
 - Auth.js console session foundation.
 - Sagad Postgres/pgvector schema foundation.
 - Optional Agent Studio Postgres persistence for conversations, approvals, tool rows, and audit events.
+- Accepted Agent Studio encrypted connection config contract for Chatwoot and Twenty.
 
 Next:
 
+- Operator/admin Integrations page wired to Agent Studio connection config endpoints.
+- `Settings -> Advanced` developer view for payloads, DTO contracts, and webhook/tool samples.
 - Live Chatwoot webhook loop.
 - Twenty CRM read-only context.
 - Human-in-the-loop approved send back to Chatwoot.

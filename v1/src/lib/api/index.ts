@@ -88,6 +88,32 @@ interface AgentStudioConversationList {
   conversations: AgentStudioConversation[];
 }
 
+export interface IntegrationConnectionView {
+  provider: "chatwoot" | "twenty";
+  name: string;
+  kind: string;
+  status: string;
+  configured: boolean;
+  enabled: boolean;
+  external: boolean;
+  base_url: string | null;
+  account_id: string | null;
+  inbox_id: string | null;
+  api_mode: string | null;
+  dry_run: boolean;
+  writes_enabled: boolean;
+  has_api_access_token: boolean;
+  has_webhook_token: boolean;
+  has_api_key: boolean;
+  missing: string[];
+  detail: string;
+  updated_at: string | null;
+}
+
+interface IntegrationConnectionList {
+  connections: IntegrationConnectionView[];
+}
+
 const demoNow = "2026-06-04T09:00:00+08:00";
 const clone = <T>(value: T): T => structuredClone(value);
 
@@ -140,6 +166,29 @@ async function fetchAgentStudioConversations(): Promise<AgentStudioConversation[
 
     const payload = (await response.json()) as AgentStudioConversationList;
     return Array.isArray(payload.conversations) ? payload.conversations : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchAgentStudioIntegrationConnections(): Promise<IntegrationConnectionView[] | null> {
+  const baseUrl = agentStudioBaseUrl();
+  if (!baseUrl) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/integration-configs`, {
+      headers: await agentStudioHeaders(),
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as IntegrationConnectionList;
+    return Array.isArray(payload.connections) ? payload.connections : null;
   } catch {
     return null;
   }
@@ -1326,6 +1375,59 @@ export async function getSopRefs(): Promise<SopView[]> {
 
 export async function getMcpTools(): Promise<ToolView[]> {
   return clone([...previewToolViews(), ...mockMcpTools.map(toToolView)]);
+}
+
+export async function getIntegrationConnections(): Promise<IntegrationConnectionView[]> {
+  const liveConnections = await fetchAgentStudioIntegrationConnections();
+
+  return clone(
+    liveConnections ?? [
+      {
+        provider: "chatwoot",
+        name: "Chatwoot",
+        kind: "channel",
+        status: "unconfigured",
+        configured: false,
+        enabled: false,
+        external: true,
+        base_url: null,
+        account_id: null,
+        inbox_id: null,
+        api_mode: null,
+        dry_run: true,
+        writes_enabled: false,
+        has_api_access_token: false,
+        has_webhook_token: false,
+        has_api_key: false,
+        missing: ["base_url", "account_id", "api_access_token"],
+        detail:
+          "Chatwoot configuration is managed by Agent Studio. Set SAGAD_API_BASE_URL to load live status.",
+        updated_at: null,
+      },
+      {
+        provider: "twenty",
+        name: "Twenty CRM",
+        kind: "crm",
+        status: "unconfigured",
+        configured: false,
+        enabled: false,
+        external: true,
+        base_url: null,
+        account_id: null,
+        inbox_id: null,
+        api_mode: "graphql",
+        dry_run: true,
+        writes_enabled: false,
+        has_api_access_token: false,
+        has_webhook_token: false,
+        has_api_key: false,
+        missing: ["base_url", "api_key"],
+        detail:
+          "Twenty CRM is external. Store credentials in Agent Studio before enabling reads.",
+        updated_at: null,
+      },
+    ],
+  );
 }
 
 export type {

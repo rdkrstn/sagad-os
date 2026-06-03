@@ -1,4 +1,9 @@
+"use client";
+
+import { useMemo, useState, type ChangeEvent, type FormEvent } from "react";
+import Link from "next/link";
 import { PageHeader } from "@/components/layout/page-header";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,161 +14,465 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
-import {
-  asArray,
-  asRecord,
-  textOf,
-  type LooseRecord,
-} from "@/components/ui/data-access";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MetricStrip } from "@/components/ui/metric-strip";
-import { Progress } from "@/components/ui/progress";
 import { SectionPanel } from "@/components/ui/section-panel";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { StatusChip, toneFromStatus } from "@/components/ui/status-chip";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import {
-  Cable,
+  Activity,
   CheckCircle2,
-  Code2,
+  CircleDashed,
+  Copy,
   DatabaseZap,
-  Filter,
+  LockKeyhole,
   MessageSquareText,
   PlugZap,
-  Search,
-  ServerCog,
-  ShieldAlert,
-  Webhook,
-  Wrench,
+  RefreshCcw,
+  Save,
+  Settings,
+  ShieldCheck,
+  TestTube2,
+  Unplug,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import type { IntegrationConnectionView } from "@/lib/api/sagad-api";
 
-const defaultToolRows: LooseRecord[] = [
-  {
-    name: "crm.lookup_contact",
-    system: "Twenty CRM",
-    owner: "Revenue Ops",
-    providerStatus: "Twenty external",
-    health: "Dry-run",
-    description: "Retrieve CRM identity, lead stage, and routing metadata through Agent Studio.",
-    samplePayload: '{\n  "query": "Johnred Demafeliz",\n  "provider": "twenty"\n}',
-  },
-  {
-    name: "chatwoot.messages.send_approved",
-    system: "Chatwoot",
-    owner: "Support Ops",
-    providerStatus: "External channel",
-    health: "HITL only",
-    description: "Send a supervisor-approved reply back to Chatwoot.",
-    samplePayload: '{\n  "conversation_id": "42",\n  "approved": true\n}',
-  },
-  {
-    name: "knowledge.retrieve_context",
-    system: "Markdown Knowledge Packs",
-    owner: "QA Ops",
-    providerStatus: "Local source",
-    health: "Ready",
-    description: "Retrieve KB/SOP/QA/compliance context for a conversation.",
-    samplePayload: '{\n  "intent": "general_support",\n  "risk_level": "low"\n}',
-  },
-];
+type IntegrationProvider = IntegrationConnectionView["provider"];
 
-const providerCards: {
-  name: string;
+type ProviderForm = {
+  base_url: string;
+  account_id: string;
+  inbox_id: string;
+  api_access_token: string;
+  webhook_token: string;
+  api_key: string;
+  api_mode: string;
+  enabled: boolean;
+  dry_run: boolean;
+  allow_writes: boolean;
+};
+
+type ActionState = {
+  provider: IntegrationProvider | "global";
+  status: "idle" | "saving" | "testing" | "disabling" | "success" | "error";
+  message: string;
+};
+
+type FutureProviderRow = {
+  provider: string;
   role: string;
   status: string;
-  detail: string;
+  owner: string;
+  access: string;
+  nextStep: string;
+};
+
+type PrimaryProviderMeta = {
+  provider: IntegrationProvider;
+  title: string;
+  role: string;
+  owner: string;
+  description: string;
   icon: LucideIcon;
-}[] = [
+  accentClassName: string;
+};
+
+const providerMeta: PrimaryProviderMeta[] = [
   {
-    name: "Chatwoot",
-    role: "Channel adapter",
-    status: "Ready",
-    detail: "Inbound webhook and HITL approved-send path.",
+    provider: "chatwoot",
+    title: "Chatwoot",
+    role: "Channel intake and approved delivery",
+    owner: "Supervisor Ops",
+    description:
+      "Receives inbound conversations and sends only supervisor-approved replies through Agent Studio.",
     icon: MessageSquareText,
+    accentClassName: "border-[#008F7A]/40 bg-[#008F7A]/10 text-[#007C6B]",
   },
   {
-    name: "Twenty CRM",
-    role: "External CRM",
-    status: "External / dry-run",
-    detail: "Hosted separately on your VPS; credentials stay in Agent Studio.",
+    provider: "twenty",
+    title: "Twenty CRM",
+    role: "External CRM context",
+    owner: "Revenue Ops",
+    description:
+      "Supplies contact context from an externally hosted Twenty instance. Credentials stay server-side.",
     icon: DatabaseZap,
+    accentClassName: "border-[#2F80FF]/35 bg-[#2F80FF]/10 text-[#174EA6]",
   },
+];
+
+const futureProviderRows: FutureProviderRow[] = [
   {
-    name: "Markdown Knowledge Packs",
-    role: "Context source",
-    status: "Ready",
-    detail: "KB, SOP, QA, compliance, escalation, and template records.",
-    icon: CheckCircle2,
-  },
-  {
-    name: "LangSmith",
-    role: "Observability",
+    provider: "LangSmith",
+    role: "Trace observability",
     status: "Optional",
-    detail: "Trace metadata when environment variables are configured.",
-    icon: Cable,
+    owner: "AI Ops",
+    access: "Read-only",
+    nextStep: "Show trace links when Agent Studio environment variables exist.",
   },
   {
-    name: "Generic Webhooks",
-    role: "Connector primitive",
+    provider: "Markdown Knowledge Packs",
+    role: "Governed context source",
+    status: "Ready",
+    owner: "QA Ops",
+    access: "Local source",
+    nextStep: "Keep KB/SOP/QA/compliance content versioned as Markdown.",
+  },
+  {
+    provider: "Generic Webhooks",
+    role: "Provider-neutral handoff",
     status: "Planned",
-    detail: "Provider-neutral inbound and outbound webhooks governed by Agent Studio.",
-    icon: Webhook,
+    owner: "Platform",
+    access: "Approval-gated",
+    nextStep: "Enable after retries, signing, and audit metadata are stable.",
   },
   {
-    name: "Future MCP",
+    provider: "Future MCP Servers",
     role: "Tool facade",
     status: "Planned",
-    detail: "Provider-neutral tools behind Agent Studio policy gates.",
-    icon: ServerCog,
+    owner: "Platform",
+    access: "Server-side only",
+    nextStep: "Expose only through Agent Studio policy gates.",
   },
 ];
 
-const readinessChecks: {
-  label: string;
-  icon: LucideIcon;
-  status: string;
-}[] = [
-  { label: "MCP server manifest", icon: Cable, status: "Planned" },
-  { label: "Twenty external CRM gates", icon: DatabaseZap, status: "Dry-run" },
-  { label: "Approval-safe send path", icon: CheckCircle2, status: "Review" },
-  { label: "Tool error envelopes", icon: ShieldAlert, status: "Pending" },
-];
-
-function matchesStatus(row: LooseRecord, terms: string[]) {
-  const status = textOf(row, ["health", "status"], "Planned").toLowerCase();
-  return terms.some((term) => status.includes(term));
+function blankConnection(provider: IntegrationProvider): IntegrationConnectionView {
+  return {
+    provider,
+    name: provider === "chatwoot" ? "Chatwoot" : "Twenty CRM",
+    kind: provider === "chatwoot" ? "channel" : "crm",
+    status: "unconfigured",
+    configured: false,
+    enabled: false,
+    external: true,
+    base_url: null,
+    account_id: null,
+    inbox_id: null,
+    api_mode: provider === "twenty" ? "graphql" : null,
+    dry_run: true,
+    writes_enabled: false,
+    has_api_access_token: false,
+    has_webhook_token: false,
+    has_api_key: false,
+    missing:
+      provider === "chatwoot"
+        ? ["base_url", "account_id", "api_access_token"]
+        : ["base_url", "api_key"],
+    detail:
+      provider === "chatwoot"
+        ? "Chatwoot is not configured yet."
+        : "Twenty CRM is not configured yet.",
+    updated_at: null,
+  };
 }
 
-export function ToolCatalog({ tools }: { tools: unknown }) {
-  const rows = asArray(tools).map(asRecord);
-  const displayRows = rows.length > 0 ? rows : defaultToolRows;
-  const connectedCount = displayRows.filter((row) =>
-    matchesStatus(row, ["active", "healthy", "ok", "connected"]),
-  ).length;
-  const reviewCount = displayRows.filter((row) =>
-    matchesStatus(row, ["pending", "planned", "review"]),
-  ).length;
-  const systemCount = new Set(
-    displayRows.map((row) => textOf(row, ["system", "provider", "crm"], "CRM")),
-  ).size;
-  const readiness =
-    displayRows.length > 0
-      ? Math.round((connectedCount / displayRows.length) * 100)
-      : 0;
+function initialConnections(
+  connections: IntegrationConnectionView[],
+): Record<IntegrationProvider, IntegrationConnectionView> {
+  const fallback = {
+    chatwoot: blankConnection("chatwoot"),
+    twenty: blankConnection("twenty"),
+  };
+
+  return connections.reduce((next, connection) => {
+    next[connection.provider] = connection;
+    return next;
+  }, fallback);
+}
+
+function formFromConnection(connection: IntegrationConnectionView): ProviderForm {
+  return {
+    base_url: connection.base_url ?? "",
+    account_id: connection.account_id ?? "",
+    inbox_id: connection.inbox_id ?? "",
+    api_access_token: "",
+    webhook_token: "",
+    api_key: "",
+    api_mode: connection.api_mode ?? "graphql",
+    enabled: connection.enabled,
+    dry_run: connection.dry_run,
+    allow_writes: connection.writes_enabled,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isIntegrationConnection(value: unknown): value is IntegrationConnectionView {
+  return (
+    isRecord(value) &&
+    (value.provider === "chatwoot" || value.provider === "twenty") &&
+    typeof value.name === "string" &&
+    typeof value.status === "string"
+  );
+}
+
+function detailFromPayload(payload: unknown): string {
+  if (isRecord(payload) && typeof payload.detail === "string") {
+    return payload.detail;
+  }
+  return "Request failed. Check Agent Studio logs for the provider response.";
+}
+
+function statusLabel(connection: IntegrationConnectionView): string {
+  if (!connection.enabled && connection.configured) {
+    return "Disabled";
+  }
+  if (!connection.configured) {
+    return "Unconfigured";
+  }
+  if (connection.dry_run) {
+    return "Dry-run";
+  }
+  return connection.status === "ready" ? "Ready" : connection.status;
+}
+
+function readinessStep(
+  label: string,
+  ready: boolean,
+  detail: string,
+): { label: string; ready: boolean; detail: string } {
+  return { label, ready, detail };
+}
+
+function connectionSteps(connection: IntegrationConnectionView) {
+  if (connection.provider === "chatwoot") {
+    return [
+      readinessStep("Base URL", Boolean(connection.base_url), "Chatwoot public URL is set."),
+      readinessStep("Account ID", Boolean(connection.account_id), "Account maps sends to the right Chatwoot workspace."),
+      readinessStep("API token", connection.has_api_access_token, "Token is stored encrypted in Agent Studio."),
+      readinessStep("Webhook token", connection.has_webhook_token, "Inbound webhooks are signed before drafting."),
+    ];
+  }
+
+  return [
+    readinessStep("Base URL", Boolean(connection.base_url), "Twenty public or internal URL is set."),
+    readinessStep("API key", connection.has_api_key, "Key is stored encrypted in Agent Studio."),
+    readinessStep("Read mode", connection.configured, "Contact lookup can be tested before writes."),
+    readinessStep("Write policy", connection.writes_enabled, "Writes require approval, dry-run off, and write gates."),
+  ];
+}
+
+async function parseJson(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text) {
+    return {};
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return { detail: text };
+  }
+}
+
+export function ToolCatalog({
+  connections,
+  canManage,
+  currentRole,
+}: {
+  connections: IntegrationConnectionView[];
+  canManage: boolean;
+  currentRole: string;
+}) {
+  const [connectionState, setConnectionState] = useState(
+    initialConnections(connections),
+  );
+  const [forms, setForms] = useState<Record<IntegrationProvider, ProviderForm>>({
+    chatwoot: formFromConnection(connectionState.chatwoot),
+    twenty: formFromConnection(connectionState.twenty),
+  });
+  const [action, setAction] = useState<ActionState>({
+    provider: "global",
+    status: "idle",
+    message: "",
+  });
+
+  const configuredCount = useMemo(
+    () =>
+      Object.values(connectionState).filter(
+        (connection) => connection.configured && connection.enabled,
+      ).length,
+    [connectionState],
+  );
+  const dryRunCount = useMemo(
+    () => Object.values(connectionState).filter((connection) => connection.dry_run)
+      .length,
+    [connectionState],
+  );
+  const missingCount = useMemo(
+    () =>
+      Object.values(connectionState).reduce(
+        (total, connection) => total + connection.missing.length,
+        0,
+      ),
+    [connectionState],
+  );
+
+  const updateForm = (
+    provider: IntegrationProvider,
+    key: keyof ProviderForm,
+    value: string | boolean,
+  ) => {
+    setForms((current) => ({
+      ...current,
+      [provider]: {
+        ...current[provider],
+        [key]: value,
+      },
+    }));
+  };
+
+  const saveConnection = async (
+    provider: IntegrationProvider,
+    event: FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault();
+    if (!canManage) {
+      setAction({
+        provider,
+        status: "error",
+        message: "Owner or Admin role is required to edit integrations.",
+      });
+      return;
+    }
+
+    setAction({ provider, status: "saving", message: "Saving connection..." });
+    const form = forms[provider];
+    const payload =
+      provider === "chatwoot"
+        ? {
+            base_url: form.base_url || null,
+            account_id: form.account_id || null,
+            inbox_id: form.inbox_id || null,
+            api_access_token: form.api_access_token || null,
+            webhook_token: form.webhook_token || null,
+            enabled: form.enabled,
+            dry_run: form.dry_run,
+            allow_writes: form.allow_writes,
+          }
+        : {
+            base_url: form.base_url || null,
+            api_key: form.api_key || null,
+            api_mode: form.api_mode || "graphql",
+            enabled: form.enabled,
+            dry_run: form.dry_run,
+            allow_writes: form.allow_writes,
+          };
+
+    const response = await fetch(`/api/integrations/${provider}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const responsePayload = await parseJson(response);
+
+    if (!response.ok || !isIntegrationConnection(responsePayload)) {
+      setAction({
+        provider,
+        status: "error",
+        message: detailFromPayload(responsePayload),
+      });
+      return;
+    }
+
+    setConnectionState((current) => ({
+      ...current,
+      [provider]: responsePayload,
+    }));
+    setForms((current) => ({
+      ...current,
+      [provider]: {
+        ...formFromConnection(responsePayload),
+        api_access_token: "",
+        webhook_token: "",
+        api_key: "",
+      },
+    }));
+    setAction({
+      provider,
+      status: "success",
+      message: `${responsePayload.name} connection saved.`,
+    });
+  };
+
+  const testConnection = async (provider: IntegrationProvider) => {
+    if (!canManage) {
+      setAction({
+        provider,
+        status: "error",
+        message: "Owner or Admin role is required to test integrations.",
+      });
+      return;
+    }
+
+    setAction({ provider, status: "testing", message: "Testing connection..." });
+    const response = await fetch(`/api/integrations/${provider}/test`, {
+      method: "POST",
+    });
+    const payload = await parseJson(response);
+
+    if (!response.ok) {
+      setAction({ provider, status: "error", message: detailFromPayload(payload) });
+      return;
+    }
+
+    const connection = isRecord(payload) ? payload.connection : null;
+    if (isIntegrationConnection(connection)) {
+      setConnectionState((current) => ({ ...current, [provider]: connection }));
+    }
+    setAction({
+      provider,
+      status: "success",
+      message: detailFromPayload(payload),
+    });
+  };
+
+  const disableConnection = async (provider: IntegrationProvider) => {
+    if (!canManage) {
+      setAction({
+        provider,
+        status: "error",
+        message: "Owner or Admin role is required to disable integrations.",
+      });
+      return;
+    }
+
+    setAction({ provider, status: "disabling", message: "Disabling connection..." });
+    const response = await fetch(`/api/integrations/${provider}`, {
+      method: "DELETE",
+    });
+    const payload = await parseJson(response);
+
+    if (!response.ok || !isIntegrationConnection(payload)) {
+      setAction({ provider, status: "error", message: detailFromPayload(payload) });
+      return;
+    }
+
+    setConnectionState((current) => ({ ...current, [provider]: payload }));
+    setForms((current) => ({ ...current, [provider]: formFromConnection(payload) }));
+    setAction({
+      provider,
+      status: "success",
+      message: `${payload.name} disabled.`,
+    });
+  };
+
+  const copyWebhookPath = async () => {
+    await navigator.clipboard.writeText("/webhooks/chatwoot");
+    setAction({
+      provider: "chatwoot",
+      status: "success",
+      message: "Copied Agent Studio webhook path. Use it behind the public Agent Studio proxy.",
+    });
+  };
 
   return (
     <>
       <PageHeader
-        description="Adapter catalog for external systems. Sagad OS does not replace every tool; it coordinates them through Agent Studio."
+        description="Configure and monitor the external systems Agent Studio owns. Operators see health and next actions; developer payloads live under Settings Advanced."
+        meta="Monitor + setup"
         title="Integrations"
       />
 
@@ -171,253 +480,479 @@ export function ToolCatalog({ tools }: { tools: unknown }) {
         <MetricStrip
           items={[
             {
-              label: "Tools",
-              value: displayRows.length,
-              detail: "Adapter contracts",
-              icon: Wrench,
-            },
-            {
-              label: "Connected",
-              value: connectedCount,
-              detail: "Ready or healthy",
+              label: "Primary adapters",
+              value: 2,
+              detail: "Chatwoot and Twenty",
               icon: PlugZap,
             },
             {
-              label: "Needs work",
-              value: reviewCount,
-              detail: "Planned, review, or pending",
-              icon: ShieldAlert,
+              label: "Enabled",
+              value: configuredCount,
+              detail: "Configured and active",
+              icon: CheckCircle2,
             },
             {
-              label: "Systems",
-              value: systemCount,
-              detail: "Channels, CRM, KB, webhooks",
-              icon: DatabaseZap,
+              label: "Dry-run paths",
+              value: dryRunCount,
+              detail: "Safe by default",
+              icon: LockKeyhole,
+            },
+            {
+              label: "Missing fields",
+              value: missingCount,
+              detail: "Setup gaps remaining",
+              icon: Activity,
             },
           ]}
         />
 
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {providerCards.map(({ name, role, status, detail, icon: Icon }) => (
-            <Card className="shadow-xs" key={name}>
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <CardTitle className="text-sm">{name}</CardTitle>
-                    <CardDescription>{role}</CardDescription>
-                  </div>
-                  <span className="flex size-8 items-center justify-center rounded-md border bg-muted/50 text-muted-foreground">
-                    <Icon aria-hidden="true" size={16} />
-                  </span>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <StatusChip tone={toneFromStatus(status)}>{status}</StatusChip>
-                <p className="text-xs leading-5 text-muted-foreground">{detail}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-
-        <Tabs defaultValue="catalog" className="gap-4">
-          <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-xs xl:flex-row xl:items-center xl:justify-between">
-            <TabsList className="w-full sm:w-fit">
-              <TabsTrigger value="catalog">Catalog</TabsTrigger>
-              <TabsTrigger value="payloads">Payloads</TabsTrigger>
-              <TabsTrigger value="readiness">Readiness</TabsTrigger>
-            </TabsList>
-            <div className="grid gap-2 sm:grid-cols-[minmax(180px,1fr)_160px_160px_auto] xl:min-w-[680px]">
-              <div className="relative">
-                <Search
-                  aria-hidden="true"
-                  className="pointer-events-none absolute left-2.5 top-2 size-4 text-muted-foreground"
-                />
-                <Input
-                  className="bg-background pl-8"
-                  placeholder="Search tool, system, or owner"
-                  readOnly
-                />
-              </div>
-              <Select defaultValue="all" disabled>
-                <SelectTrigger className="w-full bg-background">
-                  <SelectValue placeholder="System" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All systems</SelectItem>
-                  <SelectItem value="crm">Twenty CRM</SelectItem>
-                  <SelectItem value="chatwoot">Chatwoot</SelectItem>
-                  <SelectItem value="knowledge">Knowledge</SelectItem>
-                  <SelectItem value="webhooks">Webhooks</SelectItem>
-                  <SelectItem value="mcp">MCP</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select defaultValue="all" disabled>
-                <SelectTrigger className="w-full bg-background">
-                  <SelectValue placeholder="Health" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All health</SelectItem>
-                  <SelectItem value="ready">Ready</SelectItem>
-                  <SelectItem value="planned">Planned</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button variant="outline">
-                <Filter aria-hidden="true" />
-                Filter
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+          <SectionPanel
+            action={
+              <Button asChild variant="outline">
+                <Link href="/settings">
+                  <Settings aria-hidden="true" />
+                  Advanced
+                </Link>
               </Button>
-            </div>
-          </div>
-
-          <TabsContent value="catalog" className="mt-0">
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-              <SectionPanel title="Integration Catalog" eyebrow="Adapter-first">
-                <DataTable
-                  columns={[
-                    {
-                      key: "tool",
-                      label: "Tool",
-                      render: (row: LooseRecord) => (
-                        <div className="min-w-0 md:min-w-[220px]">
-                          <div className="break-all font-medium text-foreground md:break-normal">
-                            {textOf(row, ["name", "tool", "id"])}
-                          </div>
-                          <div className="line-clamp-2 break-words text-muted-foreground">
-                            {textOf(row, ["description", "purpose"], "")}
-                          </div>
-                        </div>
-                      ),
-                    },
-                    {
-                      key: "system",
-                      label: "System",
-                      render: (row: LooseRecord) => (
-                        <div className="space-y-1">
-                          <Badge variant="secondary">
-                            {textOf(row, ["system", "provider", "crm"], "CRM")}
-                          </Badge>
-                          <div className="text-[11px] text-muted-foreground">
-                            {textOf(row, ["providerStatus", "deployment"], "External")}
-                          </div>
-                        </div>
-                      ),
-                    },
-                    {
-                      key: "owner",
-                      label: "Owner",
-                      render: (row: LooseRecord) =>
-                        textOf(row, ["owner", "team"], "Ops"),
-                    },
-                    {
-                      key: "health",
-                      label: "Health",
-                      render: (row: LooseRecord) => {
-                        const status = textOf(row, ["health", "status"], "Planned");
-                        return (
-                          <StatusChip tone={toneFromStatus(status)}>
-                            {status}
-                          </StatusChip>
-                        );
-                      },
-                    },
-                  ]}
-                  emptyLabel="No MCP or CRM tools are connected yet."
-                  rows={displayRows}
-                />
-              </SectionPanel>
-
-              <SectionPanel title="Adapter Readiness" eyebrow="Runtime contract">
-                <div className="space-y-4 p-4">
-                  <div>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="font-medium text-foreground">
-                        Connected tools
-                      </span>
-                      <span className="tabular-nums text-muted-foreground">
-                        {readiness}%
-                      </span>
-                    </div>
-                    <Progress className="mt-2" value={readiness} />
-                  </div>
-                  <div className="grid gap-2">
-                    {[
-                      ["Schema validation", "Pending"],
-                      ["HITL approval route", "Planned"],
-                      ["Retry and timeout policy", "Review"],
-                    ].map(([label, status]) => (
-                      <div
-                        className="flex items-center justify-between rounded-lg border bg-background px-3 py-2 text-xs"
-                        key={label}
-                      >
-                        <span className="text-muted-foreground">{label}</span>
-                        <StatusChip tone={toneFromStatus(status)}>
-                          {status}
-                        </StatusChip>
+            }
+            eyebrow="Admin monitor"
+            title="Provider Status"
+          >
+            <DataTable
+              columns={[
+                {
+                  key: "name",
+                  label: "Provider",
+                  render: (row: IntegrationConnectionView) => (
+                    <div className="space-y-1">
+                      <div className="font-medium text-foreground">
+                        {row.name}
                       </div>
-                    ))}
-                  </div>
-                </div>
-              </SectionPanel>
-            </div>
-          </TabsContent>
+                      <div className="text-muted-foreground">
+                        {row.provider === "chatwoot"
+                          ? "Channel intake and approved delivery"
+                          : "External CRM context"}
+                      </div>
+                    </div>
+                  ),
+                },
+                {
+                  key: "status",
+                  label: "Status",
+                  render: (row: IntegrationConnectionView) => (
+                    <StatusChip tone={toneFromStatus(statusLabel(row))}>
+                      {statusLabel(row)}
+                    </StatusChip>
+                  ),
+                },
+                {
+                  key: "base",
+                  label: "Base URL",
+                  render: (row: IntegrationConnectionView) =>
+                    row.base_url ?? "Not set",
+                },
+                {
+                  key: "writes",
+                  label: "Writes",
+                  render: (row: IntegrationConnectionView) =>
+                    row.writes_enabled ? "Enabled" : "Approval gated / off",
+                },
+                {
+                  key: "detail",
+                  label: "Next",
+                  render: (row: IntegrationConnectionView) => row.detail,
+                },
+              ]}
+              rows={[connectionState.chatwoot, connectionState.twenty]}
+            />
+          </SectionPanel>
 
-          <TabsContent value="payloads" className="mt-0">
-            <div className="grid gap-4 lg:grid-cols-2">
-              {displayRows.map((row, index) => (
-                <Card className="shadow-xs" key={index}>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-sm">
-                      <Code2
-                        aria-hidden="true"
-                        className="size-4 text-muted-foreground"
-                      />
-                      {textOf(row, ["name", "tool", "id"])}
-                    </CardTitle>
-                    <CardDescription>
-                      {textOf(row, ["description", "purpose"], "Adapter payload")}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <Label className="mb-2 block" htmlFor={`payload-${index}`}>
-                      Sample request
-                    </Label>
-                    <Textarea
-                      className="min-h-40 resize-none bg-muted/40 font-mono text-xs"
-                      id={`payload-${index}`}
-                      readOnly
-                      value={textOf(
-                        row,
-                        ["samplePayload", "payload", "example"],
-                        "{}",
-                      )}
-                    />
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </TabsContent>
+          <SectionPanel title="Connection Policy" eyebrow="Agent Studio owned">
+            <div className="space-y-4 p-4">
+              <Alert className="border-[#D8D3C8] bg-white">
+                <ShieldCheck aria-hidden="true" />
+                <AlertTitle>Provider credentials stay server-side</AlertTitle>
+                <AlertDescription>
+                  The browser saves config to Sagad routes. Agent Studio owns
+                  encrypted secrets, tests, retries, audit events, and write gates.
+                </AlertDescription>
+              </Alert>
 
-          <TabsContent value="readiness" className="mt-0">
-            <SectionPanel title="Integration Checklist" eyebrow="Adapter states">
-              <div className="grid gap-3 p-4 md:grid-cols-3">
-                {readinessChecks.map(({ label, icon: Icon, status }) => (
+              <div className="grid gap-2 text-xs">
+                {[
+                  ["Current role", currentRole],
+                  ["Edit access", canManage ? "Owner/Admin" : "Read-only"],
+                  ["Chatwoot sends", "HITL only"],
+                  ["Twenty writes", "Dry-run until approved"],
+                ].map(([label, value]) => (
                   <div
-                    className="rounded-lg border bg-background p-4"
+                    className="flex items-center justify-between rounded-lg border border-[#D8D3C8] bg-[#F8F6F1] px-3 py-2"
                     key={label}
                   >
-                    <Icon
-                      aria-hidden="true"
-                      className="mb-3 size-4 text-muted-foreground"
-                    />
-                    <div className="font-medium text-foreground">{label}</div>
-                    <div className="mt-3">
-                      <StatusChip tone={toneFromStatus(status)}>{status}</StatusChip>
-                    </div>
+                    <span className="text-muted-foreground">{label}</span>
+                    <span className="font-medium text-[#08111F]">{value}</span>
                   </div>
                 ))}
               </div>
-            </SectionPanel>
-          </TabsContent>
-        </Tabs>
+
+              {action.message ? (
+                <Alert
+                  className="border-[#D8D3C8] bg-white"
+                  variant={action.status === "error" ? "destructive" : "default"}
+                >
+                  <AlertTitle>
+                    {action.status === "error" ? "Action failed" : "Action result"}
+                  </AlertTitle>
+                  <AlertDescription>{action.message}</AlertDescription>
+                </Alert>
+              ) : null}
+            </div>
+          </SectionPanel>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          {providerMeta.map((meta) => {
+            const connection = connectionState[meta.provider];
+            const form = forms[meta.provider];
+            const Icon = meta.icon;
+
+            return (
+              <Card className="border-[#D8D3C8] bg-white shadow-xs" key={meta.provider}>
+                <CardHeader className="space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <CardTitle>{meta.title}</CardTitle>
+                      <CardDescription>{meta.role}</CardDescription>
+                    </div>
+                    <span
+                      className={`flex size-10 shrink-0 items-center justify-center rounded-lg border ${meta.accentClassName}`}
+                    >
+                      <Icon aria-hidden="true" size={18} />
+                    </span>
+                  </div>
+                  <p className="text-sm leading-6 text-muted-foreground">
+                    {meta.description}
+                  </p>
+                </CardHeader>
+
+                <CardContent className="space-y-4">
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {[
+                      ["Status", statusLabel(connection)],
+                      ["Owner", meta.owner],
+                      ["Mode", connection.dry_run ? "Dry-run" : "Live"],
+                    ].map(([label, value]) => (
+                      <div
+                        className="rounded-lg border border-[#D8D3C8] bg-[#F8F6F1] p-3"
+                        key={label}
+                      >
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                          {label}
+                        </div>
+                        <div className="mt-1 text-sm font-medium text-foreground">
+                          {value}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid gap-2">
+                    {connectionSteps(connection).map((step) => (
+                      <div
+                        className="flex gap-3 rounded-lg border border-[#D8D3C8] bg-white p-3"
+                        key={step.label}
+                      >
+                        {step.ready ? (
+                          <CheckCircle2
+                            aria-hidden="true"
+                            className="mt-0.5 size-4 shrink-0 text-[#008F7A]"
+                          />
+                        ) : (
+                          <CircleDashed
+                            aria-hidden="true"
+                            className="mt-0.5 size-4 shrink-0 text-[#6F746F]"
+                          />
+                        )}
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-foreground">
+                            {step.label}
+                          </div>
+                          <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                            {step.detail}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <form className="space-y-3" onSubmit={(event) => saveConnection(meta.provider, event)}>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`${meta.provider}-base-url`}>Base URL</Label>
+                        <Input
+                          disabled={!canManage}
+                          id={`${meta.provider}-base-url`}
+                          onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                            updateForm(meta.provider, "base_url", event.target.value)
+                          }
+                          placeholder={
+                            meta.provider === "chatwoot"
+                              ? "https://chat.example.com"
+                              : "https://crm.example.com"
+                          }
+                          value={form.base_url}
+                        />
+                      </div>
+
+                      {meta.provider === "chatwoot" ? (
+                        <div className="space-y-1.5">
+                          <Label htmlFor="chatwoot-account-id">Account ID</Label>
+                          <Input
+                            disabled={!canManage}
+                            id="chatwoot-account-id"
+                            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                              updateForm("chatwoot", "account_id", event.target.value)
+                            }
+                            placeholder="1"
+                            value={form.account_id}
+                          />
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <Label htmlFor="twenty-api-mode">API mode</Label>
+                          <Input
+                            disabled={!canManage}
+                            id="twenty-api-mode"
+                            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                              updateForm("twenty", "api_mode", event.target.value)
+                            }
+                            value={form.api_mode}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {meta.provider === "chatwoot" ? (
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="space-y-1.5">
+                          <Label htmlFor="chatwoot-inbox-id">Inbox ID</Label>
+                          <Input
+                            disabled={!canManage}
+                            id="chatwoot-inbox-id"
+                            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                              updateForm("chatwoot", "inbox_id", event.target.value)
+                            }
+                            placeholder="Optional"
+                            value={form.inbox_id}
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="chatwoot-api-token">API token</Label>
+                          <Input
+                            disabled={!canManage}
+                            id="chatwoot-api-token"
+                            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                              updateForm("chatwoot", "api_access_token", event.target.value)
+                            }
+                            placeholder={
+                              connection.has_api_access_token
+                                ? "Stored - leave blank"
+                                : "Required"
+                            }
+                            type="password"
+                            value={form.api_access_token}
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="chatwoot-webhook-token">Webhook token</Label>
+                          <Input
+                            disabled={!canManage}
+                            id="chatwoot-webhook-token"
+                            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                              updateForm("chatwoot", "webhook_token", event.target.value)
+                            }
+                            placeholder={
+                              connection.has_webhook_token
+                                ? "Stored - leave blank"
+                                : "Recommended"
+                            }
+                            type="password"
+                            value={form.webhook_token}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        <Label htmlFor="twenty-api-key">API key</Label>
+                        <Input
+                          disabled={!canManage}
+                          id="twenty-api-key"
+                          onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                            updateForm("twenty", "api_key", event.target.value)
+                          }
+                          placeholder={
+                            connection.has_api_key
+                              ? "Stored - leave blank"
+                              : "Required"
+                          }
+                          type="password"
+                          value={form.api_key}
+                        />
+                      </div>
+                    )}
+
+                    <div className="grid gap-3 rounded-lg border border-[#D8D3C8] bg-[#F8F6F1] p-3 sm:grid-cols-3">
+                      {[
+                        ["Enabled", "enabled", "Adapter can be used by Agent Studio."],
+                        ["Dry-run", "dry_run", "Run safely without live writes."],
+                        ["Allow writes", "allow_writes", "Still requires approval gates."],
+                      ].map(([label, key, helper]) => (
+                        <div className="space-y-2" key={key}>
+                          <div className="flex items-center justify-between gap-3">
+                            <Label className="text-xs" htmlFor={`${meta.provider}-${key}`}>
+                              {label}
+                            </Label>
+                            <Switch
+                              checked={Boolean(form[key as keyof ProviderForm])}
+                              disabled={!canManage}
+                              id={`${meta.provider}-${key}`}
+                              onCheckedChange={(checked: boolean) =>
+                                updateForm(
+                                  meta.provider,
+                                  key as keyof ProviderForm,
+                                  checked,
+                                )
+                              }
+                              size="sm"
+                            />
+                          </div>
+                          <div className="text-[11px] leading-4 text-muted-foreground">
+                            {helper}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        className="bg-[#008F7A] text-white hover:bg-[#007C6B]"
+                        disabled={!canManage || action.status === "saving"}
+                        type="submit"
+                      >
+                        <Save aria-hidden="true" />
+                        Save
+                      </Button>
+                      <Button
+                        disabled={!canManage || action.status === "testing"}
+                        onClick={() => testConnection(meta.provider)}
+                        type="button"
+                        variant="outline"
+                      >
+                        <TestTube2 aria-hidden="true" />
+                        Test
+                      </Button>
+                      <Button
+                        disabled={!canManage || action.status === "disabling"}
+                        onClick={() => disableConnection(meta.provider)}
+                        type="button"
+                        variant="outline"
+                      >
+                        <Unplug aria-hidden="true" />
+                        Disable
+                      </Button>
+                      {meta.provider === "chatwoot" ? (
+                        <Button onClick={copyWebhookPath} type="button" variant="outline">
+                          <Copy aria-hidden="true" />
+                          Copy webhook path
+                        </Button>
+                      ) : null}
+                    </div>
+                  </form>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+
+        <SectionPanel title="Planned Providers" eyebrow="Roadmap, not fake setup">
+          <DataTable
+            columns={[
+              {
+                key: "provider",
+                label: "Provider",
+                render: (row: FutureProviderRow) => (
+                  <div className="space-y-1">
+                    <div className="font-medium text-foreground">
+                      {row.provider}
+                    </div>
+                    <div className="text-muted-foreground">{row.role}</div>
+                  </div>
+                ),
+              },
+              {
+                key: "status",
+                label: "Status",
+                render: (row: FutureProviderRow) => (
+                  <StatusChip tone={toneFromStatus(row.status)}>
+                    {row.status}
+                  </StatusChip>
+                ),
+              },
+              {
+                key: "access",
+                label: "Access",
+                render: (row: FutureProviderRow) => (
+                  <Badge className="border-[#D8D3C8]" variant="outline">
+                    {row.access}
+                  </Badge>
+                ),
+              },
+              {
+                key: "owner",
+                label: "Owner",
+                render: (row: FutureProviderRow) => row.owner,
+              },
+              {
+                key: "next",
+                label: "Activation rule",
+                render: (row: FutureProviderRow) => row.nextStep,
+              },
+            ]}
+            rows={futureProviderRows}
+          />
+        </SectionPanel>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          {[
+            {
+              label: "Monitor first",
+              detail: "Operators see health, owner, and next action before setup work.",
+              icon: Activity,
+            },
+            {
+              label: "No direct provider calls",
+              detail: "Browser routes through Sagad APIs; Agent Studio handles credentials.",
+              icon: ShieldCheck,
+            },
+            {
+              label: "Developer details moved",
+              detail: "Adapter contracts and payloads live under Settings Advanced.",
+              icon: RefreshCcw,
+            },
+          ].map(({ label, detail, icon: Icon }) => (
+            <div
+              className="rounded-lg border border-[#D8D3C8] bg-white p-4"
+              key={label}
+            >
+              <Icon aria-hidden="true" className="mb-3 size-4 text-[#008F7A]" />
+              <div className="text-sm font-medium text-foreground">{label}</div>
+              <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                {detail}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </>
   );

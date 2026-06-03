@@ -14,10 +14,15 @@ Do not call directly from the browser:
 - Supabase;
 - MCP servers;
 - authentication providers;
+- Chatwoot;
+- Uptime Kuma;
+- LangSmith;
 - live CRM APIs;
 - Twenty CRM.
 
-Do not add secrets to v1. The frontend may use `SAGAD_API_BASE_URL` to read the server-side Agent Studio preview API. All Chatwoot credentials, Twenty CRM keys, generic webhook secrets, LangSmith keys, and future tool credentials belong in Agent Studio environment variables.
+Do not add secrets to v1. The frontend may use `SAGAD_API_BASE_URL` to read the server-side Agent Studio preview API. All Chatwoot credentials, Twenty CRM keys, generic webhook secrets, LangSmith keys, and future tool credentials belong in Agent Studio setup/configuration, never browser components.
+
+Integrations is the operator/admin monitor and setup surface. Owner and Admin users can create, update, disable, and test provider setup through Agent Studio. Supervisor users get read-only redacted health and readiness for monitoring. Developer payloads, DTO contracts, headers, and webhook/tool samples belong under `Settings -> Advanced`.
 
 ## Future Backend Direction
 
@@ -28,6 +33,7 @@ The future backend is expected to be Agent Studio, a Python LangGraph service be
 - routing and triage;
 - approvals;
 - tool-call planning;
+- provider connection setup and encrypted secret storage;
 - memory policy;
 - audit records;
 - handoffs;
@@ -45,6 +51,10 @@ The first Agent Studio dev preview exposes these endpoints:
 GET  /health
 GET  /integrations
 GET  /integrations/twenty/health
+GET  /integration-configs
+PUT  /integration-configs/{provider}
+POST /integration-configs/{provider}/disable
+POST /integration-configs/{provider}/test
 POST /webhooks/chatwoot
 GET  /conversations
 GET  /conversations/{id}
@@ -55,6 +65,16 @@ POST /tools/crm/create-note
 POST /tools/crm/create-task
 POST /tools/crm/update-lead-stage
 ```
+
+`GET /integrations` remains the read-only monitor feed for external readiness cards. It should power operational health views in the operator/admin Integrations page.
+
+`GET /integration-configs` returns redacted setup state for `chatwoot` and `twenty`. It includes setup status, missing fields, dry-run/write-gate flags, base URLs, and `has_*` booleans, but never returns raw tokens or API keys. Supervisors can read this status.
+
+`PUT /integration-configs/{provider}` accepts `chatwoot` or `twenty` setup. It requires a trusted Owner or Admin role from the server-side session boundary. Agent Studio stores metadata in `integration_connections`; when Postgres persistence is configured, secret values are stored in `integration_secret_versions` using encrypted secret bytes. `SAGAD_INTEGRATION_ENCRYPTION_KEY` should be set for deployments that save live credentials. The browser must not receive or cache the submitted secret values after save.
+
+`POST /integration-configs/{provider}/disable` disables the configured provider for Owner/Admin users without exposing or deleting secret material in the browser.
+
+`POST /integration-configs/{provider}/test` runs an Agent Studio-side setup check for Owner/Admin users and returns redacted readiness detail. It should report missing configuration, disabled state, dry-run state, or ready state without exposing credential material.
 
 `POST /webhooks/chatwoot` receives a Chatwoot message payload, normalizes the inbound message, classifies intent and risk, retrieves Markdown KB/SOP/QA/compliance context, drafts a reply, runs QA/compliance checks, and stores the conversation as `needs_approval`. One Chatwoot `conversation.id` maps to one Sagad conversation row. New inbound messages append to that thread, regenerate the draft, and reset approval to `needs_approval`. Duplicate webhook retries with the same Chatwoot message id are ignored.
 
@@ -85,6 +105,69 @@ GET /api/realtime-token
 ```
 
 This route is active only for authenticated users and only when `SAGAD_WS_PUBLIC_URL` and `SAGAD_REALTIME_SECRET` are configured.
+
+The console setup proxy exposes browser-safe admin routes that forward to Agent Studio with trusted session headers and the internal secret when configured:
+
+```text
+GET  /api/integrations
+PUT  /api/integrations/{provider}
+POST /api/integrations/{provider}/disable
+POST /api/integrations/{provider}/test
+```
+
+These routes must enforce the same role split: Owner/Admin can edit, disable, and test setup; Supervisor can read redacted health and readiness only. Browser code must never call Chatwoot or Twenty directly.
+
+### Integration Setup Shapes
+
+These setup DTOs are for `Settings -> Advanced` and operator/admin setup implementation. They should not be rendered as the primary Integrations page experience.
+
+```ts
+type IntegrationProvider = "chatwoot" | "twenty";
+
+type IntegrationConnectionDto = {
+  provider: IntegrationProvider;
+  name: string;
+  kind: "channel" | "crm";
+  status:
+    | "ready"
+    | "disabled"
+    | "unconfigured"
+    | "dry_run"
+    | "planned"
+    | "error"
+    | "blocked";
+  configured: boolean;
+  enabled: boolean;
+  external: boolean;
+  base_url: string | null;
+  account_id: string | null;
+  inbox_id: string | null;
+  api_mode: string | null;
+  dry_run: boolean;
+  writes_enabled: boolean;
+  has_api_access_token: boolean;
+  has_webhook_token: boolean;
+  has_api_key: boolean;
+  missing: string[];
+  detail: string;
+  updated_at: string | null;
+};
+```
+
+```ts
+type IntegrationConnectionUpsertRequest = {
+  base_url?: string | null;
+  account_id?: string | null;
+  inbox_id?: string | null;
+  api_access_token?: string | null;
+  webhook_token?: string | null;
+  api_key?: string | null;
+  api_mode?: string | null;
+  enabled?: boolean;
+  dry_run?: boolean;
+  allow_writes?: boolean;
+};
+```
 
 ### Conversation Preview Shape
 
