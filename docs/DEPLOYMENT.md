@@ -16,12 +16,14 @@ Services:
 - `sagad-console`: Next.js supervisor console.
 - `agent-studio`: FastAPI + LangGraph backend preview.
 - `sagad-db`: Postgres 16 with pgvector for Sagad-owned data.
+- `litellm`: optional model gateway, enabled only with the `litellm` compose profile.
 
 Default ports:
 
 - Console: `3000`
 - Agent Studio: `8010`
 - Sagad Postgres/pgvector: `5433` on the host, `5432` inside compose.
+- LiteLLM: `4000` when the optional `litellm` profile is enabled.
 
 ## Console Auth
 
@@ -90,8 +92,11 @@ After local preview deployment:
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/health
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/health/live
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/health/ready
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations/twenty/health
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations/litellm/health
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integration-configs
 ```
 
@@ -99,8 +104,51 @@ After VPS deployment with the local `compose.vps.yaml`, check from inside the Do
 
 ```bash
 docker exec sagad-agent-studio python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8010/health').read().decode())"
+docker exec sagad-agent-studio python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8010/health/ready').read().decode())"
 docker exec sagad-console node -e "fetch('http://sagad-agent-studio:8010/health').then(r=>r.text()).then(console.log)"
 ```
+
+Docker healthchecks use `/health/live` so the container stays alive while provider setup is incomplete. Use `/health/ready` to diagnose database migration or seed failures; it returns a non-200 response when database readiness fails. If `sagad-agent-studio` is unhealthy on the VPS, run:
+
+```bash
+docker inspect --format='{{json .State.Health}}' sagad-agent-studio | python -m json.tool
+docker logs --tail=200 sagad-agent-studio
+docker exec sagad-agent-studio python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8010/health/ready').read().decode())"
+```
+
+## Optional LiteLLM Gateway
+
+LiteLLM is optional. It lets Agent Studio use one OpenAI-compatible gateway for OpenAI and DeepSeek test credits.
+
+Local preview:
+
+```powershell
+docker compose -f compose.preview.yaml --profile litellm up -d --build
+```
+
+VPS preview:
+
+```bash
+docker compose -f compose.vps.yaml --profile litellm up -d --build
+```
+
+Set these values in the real ignored `.env` file:
+
+```env
+LITELLM_ENABLED=true
+LITELLM_BASE_URL=http://sagad-litellm:4000/v1
+LITELLM_MASTER_KEY=replace-with-strong-litellm-key
+OPENAI_API_KEY=replace-with-openai-key
+DEEPSEEK_API_KEY=replace-with-deepseek-key
+```
+
+Then point Agent Studio model calls at the gateway:
+
+```env
+OPENAI_BASE_URL=http://sagad-litellm:4000/v1
+```
+
+Do not expose LiteLLM publicly unless you add authentication, rate limits, and a clear operational reason.
 
 ## VPS Layout
 

@@ -102,6 +102,8 @@ Integrations is for operator health monitoring and Owner/Admin connection setup.
 
 Location: `v1/`
 
+The profile menu also includes a SuperAdmin Console for instance-level visibility: workspaces, users, platform apps, LangGraph app setup, LiteLLM model gateway readiness, and runtime health. This is for self-host operators and maintainers, not daily queue review.
+
 ### Agent Studio
 
 The backend orchestration layer. It owns typed LangGraph state, LangChain tools, adapter policy, approval gates, knowledge retrieval, draft generation, trace metadata, and approved external actions.
@@ -109,6 +111,8 @@ The backend orchestration layer. It owns typed LangGraph state, LangChain tools,
 Agent Studio also owns provider connection configuration. Chatwoot and Twenty CRM credentials are saved through Agent Studio and stored as encrypted Sagad Postgres secret versions when `DATABASE_URL` is configured. Browser code only receives redacted status fields such as configured flags, health, missing fields, and dry-run/write-gate state.
 
 It also includes `langgraph.json` for official LangSmith Studio visual debugging of the local `sagad_conversation` graph. Studio is for graph design and inspection; the Sagad Console is for supervisor operations.
+
+LiteLLM is supported as an optional OpenAI-compatible model gateway so Agent Studio can test OpenAI and DeepSeek credits through one server-side endpoint.
 
 Location: `agent-studio/`
 
@@ -207,8 +211,11 @@ uv run uvicorn agent_studio.main:app --reload --port 8010
 Useful local endpoints:
 
 - `GET /health`
+- `GET /health/live`
+- `GET /health/ready`
 - `GET /integrations`
 - `GET /integrations/twenty/health`
+- `GET /integrations/litellm/health`
 - `GET /integration-configs`
 - `PUT /integration-configs/{provider}`
 - `POST /integration-configs/{provider}/disable`
@@ -224,6 +231,12 @@ Useful local endpoints:
 ```powershell
 docker compose -f compose.preview.yaml build
 docker compose -f compose.preview.yaml up -d
+```
+
+Optional LiteLLM gateway:
+
+```powershell
+docker compose -f compose.preview.yaml --profile litellm up -d --build
 ```
 
 VPS deployments that already use Nginx Proxy Manager and a shared external Docker network can copy the example:
@@ -296,7 +309,10 @@ GitHub Actions currently verify:
 
 - frontend lint, typecheck, and build;
 - Agent Studio tests;
-- container build smoke tests.
+- container build smoke tests;
+- preview compose boot plus Agent Studio health/readiness checks.
+
+The Docker publish workflow can push versioned Sagad Console and Agent Studio images to GitHub Container Registry on tags or manual dispatch. It does not deploy to a VPS yet.
 
 See:
 

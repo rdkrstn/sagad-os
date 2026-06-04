@@ -34,12 +34,23 @@ uv run uvicorn agent_studio.main:app --reload --port 8010
 Useful endpoints:
 
 - `GET /health`
+- `GET /health/live`
+- `GET /health/ready`
 - `GET /integrations`
+- `GET /integrations/litellm/health`
 - `GET /conversations`
 - `POST /webhooks/chatwoot`
 - `POST /conversations/{id}/approve-send`
 
+## Admin Surfaces
+
+The daily console is for AI Ops supervisors. The profile menu includes the SuperAdmin Console for instance health, workspace/user visibility, platform apps, LangGraph app setup, and optional LiteLLM gateway status.
+
+Use the docs below when configuring those layers:
+
+- `docs/superadmin-console.md`
+- `docs/litellm-gateway.md`
+
 ## Mental Model
 
 Sagad OS coordinates tools; it does not replace every tool. Chatwoot receives messages, Agent Studio runs orchestration and adapters, the Console handles supervisor approval, and Sagad Audit records the decision trail.
-

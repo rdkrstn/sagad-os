@@ -89,8 +89,11 @@ uv run uvicorn agent_studio.main:app --reload --port 8010
 Useful dev endpoints:
 
 - `GET /health`
+- `GET /health/live`
+- `GET /health/ready`
 - `GET /integrations`
 - `GET /integrations/twenty/health`
+- `GET /integrations/litellm/health`
 - `GET /integration-configs`
 - `PUT /integration-configs/{provider}`
 - `POST /integration-configs/{provider}/disable`
@@ -135,6 +138,14 @@ The preview compose file starts:
 - Agent Studio on port `8010`.
 - Sagad Postgres/pgvector on host port `5433`.
 
+Optional LiteLLM model gateway:
+
+```powershell
+docker compose -f compose.preview.yaml --profile litellm up -d --build
+```
+
+LiteLLM exposes an OpenAI-compatible `/v1` endpoint for server-side Agent Studio model calls. Use it when testing OpenAI and DeepSeek credits through one gateway.
+
 For a VPS that already uses Nginx Proxy Manager on an external Docker network, copy the example to a local ignored compose file:
 
 ```bash
@@ -173,8 +184,13 @@ Agent Studio:
 - `SAGAD_REALTIME_SECRET`
 - `SAGAD_INTEGRATION_ENCRYPTION_KEY`
 - `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
 - `OPENAI_MODEL`
 - `OPENAI_EMBEDDING_MODEL`
+- `LITELLM_ENABLED`
+- `LITELLM_BASE_URL`
+- `LITELLM_MASTER_KEY`
+- `DEEPSEEK_API_KEY`
 - `CHATWOOT_BASE_URL`
 - `CHATWOOT_ACCOUNT_ID`
 - `CHATWOOT_API_ACCESS_TOKEN`
