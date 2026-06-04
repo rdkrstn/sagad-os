@@ -3,12 +3,10 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock3,
-  Filter,
   MoreHorizontal,
   RadioTower,
   RefreshCw,
   Route,
-  ShieldCheck,
   Users,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
@@ -38,7 +36,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { MetricStrip } from "@/components/ui/metric-strip";
 import { Progress } from "@/components/ui/progress";
 import { SectionPanel } from "@/components/ui/section-panel";
@@ -76,6 +73,22 @@ export function CommandCenter({
   const channelRows = asArray(channelHealth).map(asRecord);
   const approvalLoad = numberOf(metrics, ["approvalLoad", "pendingApprovals"]);
   const riskCount = numberOf(metrics, ["slaRisk", "slaBreaches", "atRisk"]);
+  const messagesReceived = numberOf(metrics, ["messagesReceived", "totalConversations"]);
+  const aiDrafted = numberOf(metrics, ["aiDrafted", "aiDraftedResponses"]);
+  const autoSent = numberOf(metrics, ["autoSent", "autoSentResponses"]);
+  const needsApproval = numberOf(metrics, ["needsApproval", "approvalRequired"]);
+  const escalated = numberOf(metrics, ["escalated"]);
+  const rejected = numberOf(metrics, ["rejected"]);
+  const topIssue = textOf(
+    metrics,
+    ["topIssue"],
+    "No missing knowledge trend detected",
+  );
+  const recommendedAction = textOf(
+    metrics,
+    ["recommendedAction"],
+    "Keep monitoring approval and QA signals.",
+  );
   const readyChannels = channelRows.filter((row) =>
     ["ready", "live", "gated", "optional"].some((status) =>
       textOf(row, ["status", "health"], "").toLowerCase().includes(status),
@@ -95,10 +108,10 @@ export function CommandCenter({
           <div className="min-w-0">
             <CardTitle className="flex items-center gap-2 text-sm">
               <RadioTower aria-hidden="true" className="size-4 text-primary" />
-              Live Ops Snapshot
+              Today&apos;s AI Ops
             </CardTitle>
             <CardDescription>
-              Light-mode control surface for queues, supervision pods, and readiness checks.
+              Golden demo loop: messages in, AI drafts, supervisor exceptions, and audit-ready outcomes.
             </CardDescription>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2 lg:justify-end">
@@ -114,62 +127,47 @@ export function CommandCenter({
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="grid gap-3 p-4 lg:grid-cols-[1fr_auto]">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-lg border bg-background p-3">
-              <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                <Users aria-hidden="true" className="size-3.5" />
-                Pod coverage
+        <CardContent className="grid gap-4 p-4 xl:grid-cols-[1fr_360px]">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {[
+              ["Messages received", messagesReceived],
+              ["AI drafted", aiDrafted],
+              ["Auto-sent", autoSent],
+              ["Needs approval", needsApproval],
+              ["Escalated", escalated],
+              ["Rejected", rejected],
+            ].map(([label, value]) => (
+              <div className="rounded-lg border bg-background p-3" key={label}>
+                <div className="text-xs font-medium text-muted-foreground">
+                  {label}
+                </div>
+                <div className="mt-2 text-2xl font-semibold tabular-nums text-foreground">
+                  {value}
+                </div>
               </div>
-              <div className="mt-2 text-xl font-semibold tabular-nums text-foreground">
-                {podRows.length}
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">Supervision groups online</p>
-            </div>
-            <div className="rounded-lg border bg-background p-3">
-              <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                <Route aria-hidden="true" className="size-3.5" />
-                Active queues
-              </div>
-              <div className="mt-2 text-xl font-semibold tabular-nums text-foreground">
-                {queueRows.length}
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">Routing lanes under watch</p>
-            </div>
-            <div className="rounded-lg border bg-background p-3">
-              <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                <ShieldCheck aria-hidden="true" className="size-3.5" />
-                Readiness checks
-              </div>
-              <div className="mt-2 text-xl font-semibold tabular-nums text-foreground">
-                {readyChannels}/{Math.max(channelRows.length, 1)}
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">Channels reporting usable state</p>
-            </div>
+            ))}
           </div>
-          <div className="flex items-center gap-2 lg:min-w-80">
-            <Input
-              aria-label="Search command center"
-              className="bg-background"
-              placeholder="Search queue, pod, or channel"
-              readOnly
-            />
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                aria-label="Command center filters"
-                className={buttonVariants({ size: "icon", variant: "outline" })}
-              >
-                <Filter aria-hidden="true" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Ops filters</DropdownMenuLabel>
-                <DropdownMenuItem>Show SLA risk</DropdownMenuItem>
-                <DropdownMenuItem>Show approvals</DropdownMenuItem>
-                <DropdownMenuItem>Show live channels</DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem>Reset view</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+          <div className="rounded-lg border bg-[#F8F6F1] p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              Top missing knowledge
+            </div>
+            <div className="mt-2 text-base font-semibold text-foreground">
+              {topIssue}
+            </div>
+            <div className="mt-4 text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              Recommended action
+            </div>
+            <p className="mt-2 text-sm leading-6 text-foreground">
+              {recommendedAction}
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Badge className="border-[#D8D3C8]" variant="outline">
+                {readyChannels}/{Math.max(channelRows.length, 1)} systems ready
+              </Badge>
+              <Badge className="border-[#D8D3C8]" variant="outline">
+                {podRows.length} AI Ops pod
+              </Badge>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -177,9 +175,9 @@ export function CommandCenter({
       <MetricStrip
         items={[
           {
-            label: "Open queue",
-            value: numberOf(metrics, ["openQueue", "openItems", "queueCount"]),
-            detail: "Needs review or active monitoring",
+            label: "Exception queue",
+            value: approvalLoad,
+            detail: "Needs supervisor approval or recovery",
             icon: Activity,
           },
           {
@@ -189,9 +187,9 @@ export function CommandCenter({
             icon: Clock3,
           },
           {
-            label: "Approval load",
-            value: numberOf(metrics, ["approvalLoad", "pendingApprovals"]),
-            detail: "Drafts waiting on supervisor action",
+            label: "Avg trust score",
+            value: textOf(metrics, ["averageConfidence"], "n/a"),
+            detail: "Average confidence across AI drafts",
             icon: AlertTriangle,
           },
           {
@@ -353,7 +351,7 @@ export function CommandCenter({
                   },
                   {
                     key: "confidence",
-                    label: "AI Confidence",
+                    label: "Trust Score",
                     render: (row: LooseRecord) => {
                       const confidence = textOf(row, ["confidence", "avgConfidence"], "n/a");
                       return (

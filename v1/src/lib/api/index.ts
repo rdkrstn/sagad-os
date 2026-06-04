@@ -268,7 +268,7 @@ function routeForIntent(intent: string): string {
   if (intent.includes("pricing")) return "Sales";
   if (intent.includes("support")) return "Support";
   if (intent.includes("tool")) return "Support";
-  if (intent.includes("refund") || intent.includes("cancellation")) return "Retention";
+  if (intent.includes("refund") || intent.includes("cancellation")) return "Support";
   if (intent.includes("unknown")) return "Support";
   return "Supervisor";
 }
@@ -368,6 +368,19 @@ function contactContext(contact: CrmContact | undefined): ViewRecord {
 }
 
 function decisionTrail(conversation: Conversation): ViewRecord[] {
+  if (conversation.auditEvents?.length) {
+    return conversation.auditEvents.map((event) => ({
+      step: event.label,
+      label: event.label,
+      status: event.status,
+      rationale: event.detail,
+      detail: event.detail,
+      actor: titleCase(event.actor),
+      type: event.type,
+      createdAt: event.createdAt,
+    }));
+  }
+
   const route = routeForIntent(conversation.classifier.intent);
   const trail: ViewRecord[] = [
     {
@@ -396,7 +409,7 @@ function decisionTrail(conversation: Conversation): ViewRecord[] {
 
   if (conversation.reviewDecision) {
     trail.push({
-      step: "HITL review",
+      step: "Supervisor approval",
       status: titleCase(conversation.reviewDecision.status),
       rationale: conversation.reviewDecision.reason,
     });
@@ -414,6 +427,21 @@ function decisionTrail(conversation: Conversation): ViewRecord[] {
   }
 
   return trail;
+}
+
+function knowledgeForConversation(conversation: Conversation): ViewRecord[] {
+  const matches = mockSopReferences.filter((reference) =>
+    reference.appliesToIntents.includes(conversation.classifier.intent),
+  );
+  const references = matches.length > 0 ? matches : mockSopReferences.slice(0, 2);
+
+  return references.map((reference, index) => ({
+    title: reference.title,
+    category: reference.section,
+    source: reference.url,
+    score: Number((1 - index * 0.08).toFixed(2)),
+    excerpt: reference.summary,
+  }));
 }
 
 function laneForAgentStudioConversation(conversation: AgentStudioConversation): string {
@@ -516,8 +544,8 @@ function toAgentStudioConversationView(
     channelProvider: "Chatwoot",
     lane,
     queueType: lane,
-    reason: "Agent Studio generated a draft that requires HITL approval before sending.",
-    queueReason: "HITL-only Chatwoot send policy",
+    reason: "Agent Studio generated a draft that requires supervisor approval before sending.",
+    queueReason: "Supervisor-gated Chatwoot send policy",
     intent: titleCase(conversation.intent),
     driver: titleCase(conversation.intent),
     confidence: percent(confidence),
@@ -583,7 +611,7 @@ function toAgentStudioConversationView(
       {
         step: "QA/Compliance gate",
         status: titleCase(conversation.compliance_status),
-        rationale: "HITL-only preview policy requires approval before send.",
+        rationale: "Supervisor-gated preview policy requires approval before send.",
       },
     ],
     aiDecisionTrail: [],
@@ -667,21 +695,20 @@ function toConversationView(conversation: Conversation): ConversationView {
     decisionTrail: decisionTrail(conversation),
     aiDecisionTrail: decisionTrail(conversation),
     channelProvider: "Mock inbox",
-    hitlStatus: conversation.reviewDecision ? "Needs approval" : "Not required",
-    sendStatus: "Mock",
+    hitlStatus: conversation.reviewDecision ? "Needs approval" : "Auto-sent",
+    sendStatus:
+      conversation.messages.some((message) => message.deliveryStatus === "failed")
+        ? "Failed"
+        : conversation.reviewDecision?.status === "pending"
+          ? "Not sent"
+          : conversation.messages.some((message) => message.deliveryStatus === "sent")
+            ? "Sent"
+            : "Drafted",
     complianceStatus: conversation.reviewDecision ? "Needs review" : "Pass",
-    knowledgeContext: [
-      {
-        title: "Sagad OS Knowledge",
-        category: "Mock",
-        source: "src/lib/mocks/home-services.ts",
-        score: 1,
-        excerpt: conversation.classifier.summary,
-      },
-    ],
+    knowledgeContext: knowledgeForConversation(conversation),
     qaCompliance: [
       {
-        label: "HITL policy",
+        label: "Supervisor approval policy",
         status: conversation.reviewDecision ? "Watch" : "Pass",
         detail: conversation.reviewDecision?.reason ?? "No supervisor approval required in mock state.",
       },
@@ -744,7 +771,7 @@ function toDriverView(driver: ContactDriver): DriverView {
       costInteraction: string;
     }
   > = {
-    "driver-pricing": {
+    "driver-sales-sizing": {
       workstream: "Sales",
       platform: "Chatwoot",
       integration: "Twenty CRM",
@@ -753,7 +780,7 @@ function toDriverView(driver: ContactDriver): DriverView {
       fcr: "82%",
       costInteraction: "$0.08",
     },
-    "driver-general-intake": {
+    "driver-order-status": {
       workstream: "Support",
       platform: "Chatwoot",
       integration: "Markdown KB",
@@ -762,7 +789,7 @@ function toDriverView(driver: ContactDriver): DriverView {
       fcr: "74%",
       costInteraction: "$0.04",
     },
-    "driver-account-support": {
+    "driver-refund-policy": {
       workstream: "Support",
       platform: "Chatwoot",
       integration: "Twenty CRM",
@@ -780,8 +807,8 @@ function toDriverView(driver: ContactDriver): DriverView {
       fcr: "42%",
       costInteraction: "$0.19",
     },
-    "driver-takeover": {
-      workstream: "Retention",
+    "driver-angry-escalation": {
+      workstream: "Escalations",
       platform: "Sagad OS",
       integration: "Chatwoot + Twenty",
       csat: "79%",
@@ -908,7 +935,7 @@ function toToolView(tool: McpTool): ToolView {
     crm: "Twenty CRM",
     providerStatus: "Twenty external",
     deployment: "External VPS",
-    mode: tool.requiresApproval ? "HITL gated" : "Server-side read",
+    mode: tool.requiresApproval ? "Supervisor gated" : "Server-side read",
     owner: tool.requiresApproval ? "Supervisor Ops" : "Ops",
     team: tool.requiresApproval ? "Supervisor Ops" : "Ops",
     health: titleCase(tool.status),
@@ -921,7 +948,7 @@ function previewToolViews(): ToolView[] {
   return [
     {
       id: "tool-chatwoot-webhook",
-      name: "crm.create_note",
+      name: "chatwoot.webhook.receive",
       label: "Chatwoot inbound webhook",
       description: "Receive live Chatwoot messages into Agent Studio.",
       status: "available",
@@ -947,7 +974,7 @@ function previewToolViews(): ToolView[] {
     },
     {
       id: "tool-chatwoot-send-approved",
-      name: "crm.create_note",
+      name: "chatwoot.messages.send_approved",
       label: "Send approved Chatwoot reply",
       description: "Send a supervisor-approved reply back to Chatwoot.",
       status: "degraded",
@@ -958,7 +985,7 @@ function previewToolViews(): ToolView[] {
       crm: "Chatwoot",
       owner: "Supervisor Ops",
       team: "Agent Studio",
-      health: "HITL only",
+      health: "Supervisor approval only",
       providerStatus: "External channel",
       mode: "Approved send only",
       samplePayload: JSON.stringify(
@@ -973,7 +1000,7 @@ function previewToolViews(): ToolView[] {
     },
     {
       id: "tool-knowledge-retrieve",
-      name: "crm.lookup_contact",
+      name: "knowledge.retrieve_context",
       label: "Retrieve KB/SOP context",
       description: "Search Markdown knowledge packs with intent and risk filters.",
       status: "available",
@@ -1016,7 +1043,7 @@ function previewToolViews(): ToolView[] {
       mode: "GraphQL read",
       samplePayload: JSON.stringify(
         {
-          query: "Johnred Demafeliz",
+          query: "Riley Chen",
           provider: "twenty",
           source: "agent-studio",
         },
@@ -1068,7 +1095,7 @@ function previewToolViews(): ToolView[] {
       health: "Planned",
       providerStatus: "External connector",
       deployment: "Provider-neutral",
-      mode: "HITL gated webhook",
+      mode: "Supervisor-gated webhook",
       samplePayload: JSON.stringify(
         {
           event_type: "post_approval_followup",
@@ -1081,7 +1108,7 @@ function previewToolViews(): ToolView[] {
     },
     {
       id: "tool-langsmith-trace",
-      name: "crm.create_note",
+      name: "observability.langsmith.trace",
       label: "LangSmith trace metadata",
       description: "Attach graph, tool, approval, and failure metadata to traces when configured.",
       status: "degraded",
@@ -1141,11 +1168,15 @@ function queueHealth(conversations: ConversationView[]): ViewRecord[] {
     return [];
   }
 
-  return ["Sales", "Support", "Retention"].map((queue) => {
+  return ["Sales", "Support", "Refunds", "Escalations"].map((queue) => {
     const rows = conversations.filter(
       (conversation) =>
         String(conversation.driver).includes(queue) ||
         String(conversation.lane).includes(queue) ||
+        (queue === "Refunds" &&
+          String(conversation.driver).toLowerCase().includes("refund")) ||
+        (queue === "Escalations" &&
+          ["Escalated", "Failed tool/send"].includes(String(conversation.lane))) ||
         routeForIntent(conversation.classifier.intent) === queue,
     );
     const averageConfidence =
@@ -1200,7 +1231,7 @@ function channelHealth(conversations: ConversationView[], source: string): ViewR
       detail: "KB/SOP/QA/compliance context visible in review",
     },
     {
-      channel: "HITL Send",
+      channel: "Approved Send",
       status: "Gated",
       volume: hitlCount,
       detail: "Approved-send required before outbound Chatwoot reply",
@@ -1230,9 +1261,9 @@ function attentionSummary(conversations: ConversationView[]): ViewRecord[] {
       count: rows.length,
       total: rows.length,
       items: rows.length,
-      owner: "Unassigned",
-      team: "Unassigned",
-      pod: "Unassigned",
+      owner: "Northstar AI Ops Pod",
+      team: "Northstar AI Ops Pod",
+      pod: "Northstar AI Ops Pod",
       severity:
         group === "Failed tool/send" || group === "Escalated"
           ? "High risk"
@@ -1271,6 +1302,15 @@ export async function getDashboardData(): Promise<DashboardViewData> {
   const conversations =
     liveConversations?.map(toAgentStudioConversationView) ??
     mockConversations.map(toConversationView);
+  const approvalConversations = conversations.filter((conversation) =>
+    ["Approval", "Escalated", "Failed tool/send", "Low confidence"].includes(
+      String(conversation.lane),
+    ),
+  );
+  const highRiskConversations = conversations.filter(
+    (conversation) => conversation.priority === "High risk",
+  );
+  const isDemoSeed = source === "mock";
 
   return clone({
     ...homeServicesDashboardData,
@@ -1284,22 +1324,43 @@ export async function getDashboardData(): Promise<DashboardViewData> {
     lastUpdated: "June 4, 2026 9:00 AM",
     asOf: "June 4, 2026 9:00 AM",
     metrics: {
+      messagesReceived: isDemoSeed ? 128 : conversations.length,
+      totalConversations: isDemoSeed ? 128 : conversations.length,
+      aiDraftedResponses: isDemoSeed ? 91 : conversations.length,
+      aiDrafted: isDemoSeed ? 91 : conversations.length,
+      autoSentResponses: isDemoSeed ? 42 : conversations.filter((conversation) =>
+        String(conversation.sendStatus).toLowerCase().includes("sent"),
+      ).length,
+      autoSent: isDemoSeed ? 42 : conversations.filter((conversation) =>
+        String(conversation.sendStatus).toLowerCase().includes("sent"),
+      ).length,
+      approvalRequired: isDemoSeed ? 31 : approvalConversations.length,
+      needsApproval: isDemoSeed ? 31 : approvalConversations.length,
+      approved: isDemoSeed ? 23 : conversations.filter((conversation) =>
+        String(conversation.hitlStatus).toLowerCase().includes("approved"),
+      ).length,
+      edited: isDemoSeed ? 6 : 0,
+      rejected: isDemoSeed ? 10 : conversations.filter((conversation) =>
+        String(conversation.hitlStatus).toLowerCase().includes("rejected"),
+      ).length,
+      escalated: isDemoSeed ? 8 : conversations.filter(
+        (conversation) => conversation.lane === "Escalated",
+      ).length,
+      averageConfidence: isDemoSeed ? "86%" : percent(
+        conversations.reduce((sum, row) => sum + row.classifier.confidence, 0) /
+          Math.max(1, conversations.length),
+      ),
+      topMissingKnowledgeTopics: ["Refund policy unclear for sale items"],
+      topIssue: "Refund policy unclear for sale items",
+      recommendedAction: "Add SOP rule for sale-item refund exceptions.",
       openQueue: conversations.length,
       openItems: conversations.length,
       queueCount: conversations.length,
-      slaRisk: conversations.filter((conversation) => conversation.priority === "High risk")
-        .length,
-      slaBreaches: conversations.filter(
-        (conversation) => conversation.priority === "High risk",
-      ).length,
-      atRisk: conversations.filter((conversation) => conversation.priority === "High risk")
-        .length,
-      approvalLoad: conversations.filter((conversation) =>
-        ["Approval", "Escalated", "Failed tool/send"].includes(String(conversation.lane)),
-      ).length,
-      pendingApprovals: conversations.filter((conversation) =>
-        ["Approval", "Escalated", "Failed tool/send"].includes(String(conversation.lane)),
-      ).length,
+      slaRisk: highRiskConversations.length,
+      slaBreaches: highRiskConversations.length,
+      atRisk: highRiskConversations.length,
+      approvalLoad: approvalConversations.length,
+      pendingApprovals: approvalConversations.length,
       podsStaffed: mockSupervisorPods.length,
       activePods: mockSupervisorPods.length,
     },

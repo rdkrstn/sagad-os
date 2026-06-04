@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
+  BarChart3,
   Bell,
   Bot,
   BrainCircuit,
@@ -44,22 +45,23 @@ const navSections = [
     label: "Operations",
     items: [
       { href: "/", label: "Command", icon: LayoutDashboard, badge: "Live" },
-      { href: "/queue", label: "Queue", icon: Inbox },
-      { href: "/conversations", label: "Review", icon: ClipboardCheck },
+      { href: "/queue", label: "Exceptions", icon: Inbox },
+      { href: "/conversations", label: "Live Work", icon: ClipboardCheck },
+      { href: "/reports", label: "Reports", icon: BarChart3 },
     ],
   },
   {
     label: "Orchestration",
     items: [
-      { href: "/agents", label: "Agents & Pods", icon: Bot },
-      { href: "/drivers", label: "Contact Drivers", icon: Route },
+      { href: "/agents", label: "AI Pods", icon: Bot },
+      { href: "/drivers", label: "Drivers", icon: Route },
     ],
   },
   {
     label: "Context Engineering",
     items: [
+      { href: "/qa", label: "QA", icon: ShieldCheck },
       { href: "/knowledge", label: "Knowledge", icon: BrainCircuit },
-      { href: "/qa", label: "QA/SOP", icon: ShieldCheck },
     ],
   },
   {
@@ -171,7 +173,7 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
             <div className="flex items-center justify-between gap-2 text-xs font-medium text-[#08111F]">
               <span className="flex min-w-0 items-center gap-2">
                 <Activity className="shrink-0 text-[#008F7A]" size={14} />
-                <span className="truncate">Johnred Workspace</span>
+                <span className="truncate">Northstar Workspace</span>
               </span>
               <Settings
                 aria-hidden="true"

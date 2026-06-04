@@ -322,7 +322,7 @@ const advancedAdapters: AdvancedAdapter[] = [
 const providerStatuses: ProviderStatus[] = [
   {
     provider: "Chatwoot",
-    rawStatus: "External channel / HITL only",
+    rawStatus: "External channel / supervisor approval only",
     browserBoundary: "No direct browser provider calls",
     debugNote: "Send only through the supervisor approval endpoint.",
   },

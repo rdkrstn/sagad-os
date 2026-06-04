@@ -6,19 +6,36 @@ It coordinates inboxes, CRMs, knowledge bases, approvals, QA, observability, and
 
 > Status: early preview. Sagad OS is not production-hardened yet.
 
+## What Ships In v0.1
+
+Sagad OS is a self-hosted open-source reference OS with Chatwoot and Twenty adapters, two AI agents, SOP/RAG knowledge, confidence thresholds, a supervisor approval queue, audit logs, basic AI Ops reporting, seed demo data, Docker setup, and contributor docs.
+
+The repo should make these things obvious quickly:
+
+- Sagad OS is for AI-native BPO, agency, and service operations.
+- It connects to existing tools instead of replacing them.
+- It uses agents, approved knowledge, supervisor approvals, and audit logs.
+- It is self-hostable.
+- Chatwoot and Twenty are reference adapters.
+- Developers can build more adapters.
+- Operators can supervise AI safely.
+
 ## What It Does
 
-Sagad OS is built around one operating loop:
+Sagad OS is built around the golden demo loop:
 
 ```text
-customer message
--> channel intake
--> AI orchestration
--> knowledge and tool context
--> draft response
--> human approval
--> approved customer reply or external action
--> audit and trace
+customer message enters Chatwoot
+-> Sagad OS classifies the message
+-> Sales Agent or Support Agent is selected
+-> agent pulls from approved SOP / knowledge base
+-> agent drafts a response
+-> trust score is calculated
+-> high-trust response can auto-send
+-> low-trust response enters the approval queue
+-> supervisor approves, edits, rejects, or escalates
+-> Sagad OS logs the full decision trail
+-> dashboard shows automation rate, approvals, rejections, and missing knowledge
 ```
 
 The first target workflow follows the canonical blueprint: customer channels flow into Chatwoot, Agent Studio orchestrates the conversation with governed knowledge, policy checks, tool adapters, and LangSmith traces, then the Supervisor Console approves or escalates before any reply is delivered.
@@ -46,6 +63,34 @@ flowchart LR
   Studio --> Chatwoot
   Studio --> LangSmith
 ```
+
+## Product Modules
+
+| Module | Responsibility |
+|---|---|
+| Sagad Core | The orchestration engine |
+| Sagad Agents | Sales and Support AI agents |
+| Sagad Knowledge | Approved SOP, policy, FAQ, and retrieval layer |
+| Sagad Approvals | Human supervisor review queue |
+| Sagad Adapters | Chatwoot, Twenty, webhooks, and future tools |
+| Sagad Audit | Trace logs for every AI decision |
+| Sagad Console | Operator UI for supervisors and admins |
+
+## Demo Workspace
+
+Do not bring your own data first. The preview starts with `Northstar Apparel Support` demo data:
+
+- Chatwoot demo inbox conversations;
+- Twenty CRM-style contacts;
+- demo refund policy;
+- demo shipping FAQ;
+- demo escalation rules;
+- AI-drafted replies;
+- approval states;
+- audit logs;
+- basic AI Ops reports.
+
+The first screen shows `TODAY'S AI OPS` metrics, including messages received, AI drafted replies, auto-sent replies, supervisor approvals, escalations, rejections, and the top missing knowledge topic.
 
 ### Sagad Console
 
@@ -98,6 +143,7 @@ Planned walkthroughs:
 |-- v1/                 # Next.js supervisor console
 |-- agent-studio/       # FastAPI + LangGraph backend preview
 |-- docs/blueprints/    # Architecture and implementation blueprints
+|-- docs/*.md           # Getting started, architecture, adapters, agents, knowledge, approvals, audit, deployment, roadmap
 |-- docs/CI-CD.md       # CI and future CD model
 |-- docs/DEPLOYMENT.md  # Container and VPS deployment notes
 |-- docs/VERSIONING.md  # Release/versioning policy
@@ -119,6 +165,19 @@ Planned walkthroughs:
 ## Quick Start
 
 Read `QUICKSTART.md` for the full setup guide.
+
+New contributors can also start with:
+
+- `docs/getting-started.md`
+- `docs/architecture.md`
+- `docs/adapters.md`
+- `docs/agents.md`
+- `docs/rag-pipeline.md`
+- `docs/approval-queue.md`
+- `docs/audit-log.md`
+- `docs/DEPLOYMENT.md`
+- `docs/contributing.md`
+- `docs/roadmap.md`
 
 ### Frontend
 
@@ -253,7 +312,8 @@ Current:
 
 - Next.js supervisor console preview.
 - Agent Studio FastAPI + LangGraph backend preview.
-- Empty Johnred Workspace fallback with explicit demo fixtures only when needed.
+- Northstar Apparel Support seeded demo workspace.
+- Golden demo loop with sample conversations, drafts, approvals, audit trail events, and basic AI Ops metrics.
 - Chatwoot and Twenty operator/admin setup and monitoring boundaries.
 - Docker and CI scaffolding.
 - Auth.js console session foundation.
