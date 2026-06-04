@@ -1,5 +1,11 @@
-# Home Services Pricing Guidance
+# Northstar Apparel Sales And Shipping FAQ
 
-Use approved starting ranges only. Do not promise a final quote without service details, location, and availability.
+Use approved answer language for common Northstar Apparel support and sales questions. The demo company is intentionally seeded so a new self-hosted install does not start empty.
 
-For pricing leads, ask for the service type, city or ZIP code, and urgency. If the user asks for HVAC, plumbing, electrical, cleaning, or repair pricing, give a cautious range and move toward booking or estimate qualification.
+For sizing or purchase questions, answer with fit guidance and one clear next step. If the buyer is between sizes, say most customers size up for a relaxed fit.
+
+For order status questions, summarize only the approved status from the CRM/order context. Do not expose full delivery addresses in chat.
+
+For shipping questions, approved language is:
+
+"Your order is in transit. The latest carrier scan shows the current delivery estimate. I can also send the tracking link if you want it."

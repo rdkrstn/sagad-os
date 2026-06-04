@@ -51,6 +51,12 @@ export type ReviewDecisionStatus =
   | "escalated";
 
 export type McpToolName =
+  | "chatwoot.webhook.receive"
+  | "chatwoot.messages.send_approved"
+  | "knowledge.retrieve_context"
+  | "webhook.outbound.trigger"
+  | "observability.langsmith.trace"
+  | "mcp.tool_layer.dispatch"
   | "crm.lookup_contact"
   | "crm.create_note"
   | "crm.create_task"
@@ -71,6 +77,17 @@ export type ResumeAction =
   | "assign_human"
   | "retry_tool"
   | "none";
+
+export type AuditTrailEventType =
+  | "message_received"
+  | "intent_classified"
+  | "agent_selected"
+  | "knowledge_retrieved"
+  | "draft_generated"
+  | "confidence_scored"
+  | "approval_required"
+  | "supervisor_action"
+  | "final_response_sent";
 
 export interface MoneyAmount {
   amount: number;
@@ -224,6 +241,24 @@ export interface LangGraphRunSummary {
   lastUpdatedAt: ISODateTime;
 }
 
+export interface AuditTrailEvent {
+  id: string;
+  conversationId: string;
+  type: AuditTrailEventType;
+  label: string;
+  status: string;
+  actor:
+    | "chatwoot"
+    | "sagad_core"
+    | "sagad_agents"
+    | "sagad_knowledge"
+    | "sagad_approvals"
+    | "sagad_audit"
+    | "supervisor";
+  detail: string;
+  createdAt: ISODateTime;
+}
+
 export interface Conversation {
   id: string;
   contactId: string;
@@ -242,13 +277,14 @@ export interface Conversation {
   qaScore?: QaScore;
   langGraphRun: LangGraphRunSummary;
   toolCallIds: string[];
+  auditEvents?: AuditTrailEvent[];
 }
 
 export interface DashboardData {
   account: {
     id: string;
     name: string;
-    industry: "home_services" | "internal_ops";
+    industry: "home_services" | "internal_ops" | "retail" | "bpo";
     timezone: string;
   };
   conversations: Conversation[];

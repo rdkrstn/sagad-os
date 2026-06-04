@@ -8,8 +8,8 @@ Sagad OS is an open-source, self-hostable AI operations platform for AI-native B
 
 Sagad OS has three core runtime surfaces:
 
-- `v1/`: Next.js supervisor console for queues, approvals, conversations, agent performance, contact drivers, knowledge, QA, the operator/admin Integrations page, and settings.
-- `agent-studio/`: Python FastAPI + LangGraph backend preview for orchestration, typed state, adapter policy, tool planning, HITL gates, and approved sends.
+- `v1/`: Next.js supervisor console for exceptions, approvals, live work, AI pods, drivers, knowledge, QA, integrations, and settings.
+- `agent-studio/`: Python FastAPI + LangGraph backend preview for orchestration, typed state, adapter policy, tool planning, supervisor approval gates, and approved sends.
 - `docs/blueprints/`: architecture docs, diagrams, and implementation phases.
 
 External systems connect through Agent Studio adapters:
@@ -21,6 +21,8 @@ External systems connect through Agent Studio adapters:
 - FastMCP/MCP is a future tool exposure layer behind Agent Studio.
 
 Browser code must not call Chatwoot, Twenty, Uptime Kuma, LangSmith, MCP, or client internal systems directly.
+
+The default preview is seeded with `Northstar Apparel Support` demo data: Chatwoot-style conversations, Twenty-style contacts, approved SOPs, AI drafts, approval states, audit logs, and basic AI Ops metrics.
 
 The console direction follows the SagadOS Premium Open Ops design system: calm, modular, inspectable, transparent, and operator-focused. The UI should show routes, states, modules, logs, docs, and configuration without AI-magic framing.
 
@@ -41,6 +43,7 @@ The Integrations page is operator/admin-facing: Owner and Admin users can set up
 |-- v1/                 # Next.js supervisor console
 |-- agent-studio/       # FastAPI + LangGraph backend preview
 |-- docs/blueprints/    # Canonical architecture and study docs
+|-- docs/*.md           # contributor-first product and architecture docs
 |-- docs/CI-CD.md       # CI and future CD model
 |-- docs/DEPLOYMENT.md  # container and VPS deployment notes
 |-- docs/VERSIONING.md  # release/versioning policy
@@ -71,7 +74,7 @@ npx tsc --noEmit --pretty false
 npm run build
 ```
 
-The console uses typed mock data by default. It can read Agent Studio through `SAGAD_API_BASE_URL`. Auth.js is wired for email magic-link sessions when `DATABASE_URL`, `AUTH_SECRET`, `AUTH_URL`, `EMAIL_SERVER`, and `EMAIL_FROM` are configured. Google OAuth appears on the sign-in page when `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` are set.
+The console uses typed Northstar demo data by default. It can read Agent Studio through `SAGAD_API_BASE_URL`. Auth.js is wired for email magic-link sessions when `DATABASE_URL`, `AUTH_SECRET`, `AUTH_URL`, `EMAIL_SERVER`, and `EMAIL_FROM` are configured. Google OAuth appears on the sign-in page when `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` are set.
 
 ## Run Agent Studio
 
@@ -113,7 +116,7 @@ uv run langgraph dev
 
 Open the Studio URL printed by the CLI. It usually points to LangSmith Studio with `baseUrl=http://127.0.0.1:2024`.
 
-Use Studio to inspect graph state, run nodes, debug transitions, and test the local `sagad_conversation` graph. Use the Sagad Console for supervisor operations and HITL review. Current local Studio dev should use Python 3.12; `.python-version` pins that for `uv`.
+Use Studio to inspect graph state, run nodes, debug transitions, and test the local `sagad_conversation` graph. Use the Sagad Console for supervisor operations and approval review. Current local Studio dev should use Python 3.12; `.python-version` pins that for `uv`.
 
 On Windows, keep `PYTHONUTF8=1` set for LangGraph CLI commands to avoid PowerShell code page errors when the CLI prints Unicode help text.
 

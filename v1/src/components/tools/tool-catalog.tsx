@@ -583,7 +583,7 @@ export function ToolCatalog({
                 {[
                   ["Current role", currentRole],
                   ["Edit access", canManage ? "Owner/Admin" : "Read-only"],
-                  ["Chatwoot sends", "HITL only"],
+                  ["Chatwoot sends", "Supervisor approval only"],
                   ["Twenty writes", "Dry-run until approved"],
                 ].map(([label, value]) => (
                   <div

@@ -44,7 +44,7 @@ const lanes = [
   {
     label: "Low confidence",
     icon: ShieldAlert,
-    detail: "AI confidence below supervisor threshold",
+    detail: "Trust score below supervisor threshold",
   },
   {
     label: "Escalated",
@@ -113,7 +113,7 @@ export function AttentionQueue({ conversations }: { conversations: unknown }) {
     },
     {
       key: "confidence",
-      label: "Confidence",
+      label: "Trust Score",
       className: "text-right tabular-nums",
       render: (row: LooseRecord) =>
         textOf(row, ["confidence", "aiConfidence"], "n/a"),
@@ -168,15 +168,15 @@ export function AttentionQueue({ conversations }: { conversations: unknown }) {
   return (
     <>
       <PageHeader
-        description="Items that require supervisor review before the AI can continue or a customer reply can be sent."
-        title="Attention Queue"
+        description="Exceptions that need supervisor review before the AI can continue, send, or recover a failed action."
+        title="Exceptions"
       />
 
       <Card className="mb-4 gap-0 border-border/80 py-0 shadow-xs">
         <CardContent className="grid gap-3 p-4 xl:grid-cols-[1fr_auto]">
           <div className="grid gap-3 sm:grid-cols-3">
             <div>
-              <p className="text-xs font-medium text-muted-foreground">Open reviews</p>
+              <p className="text-xs font-medium text-muted-foreground">Open exceptions</p>
               <p className="mt-1 text-2xl font-semibold tabular-nums text-foreground">
                 {rows.length}
               </p>
@@ -188,7 +188,7 @@ export function AttentionQueue({ conversations }: { conversations: unknown }) {
               </p>
             </div>
             <div>
-              <p className="text-xs font-medium text-muted-foreground">Approval lane</p>
+              <p className="text-xs font-medium text-muted-foreground">Approval queue</p>
               <p className="mt-1 text-2xl font-semibold tabular-nums text-foreground">
                 {approvalRows.length}
               </p>
@@ -286,8 +286,8 @@ export function AttentionQueue({ conversations }: { conversations: unknown }) {
         <TabsContent value="all">
           <SectionPanel
             action={<Badge variant="secondary">{rows.length} items</Badge>}
-            title="Review Worklist"
-            eyebrow="Queue"
+            title="Exception Worklist"
+            eyebrow="Supervisor queue"
           >
             <DataTable columns={tableColumns} rows={rows} />
           </SectionPanel>
@@ -296,7 +296,7 @@ export function AttentionQueue({ conversations }: { conversations: unknown }) {
           <SectionPanel
             action={<Badge variant="secondary">{approvalRows.length} items</Badge>}
             title="Approval Worklist"
-            eyebrow="Queue"
+            eyebrow="Supervisor queue"
           >
             <DataTable columns={tableColumns} rows={approvalRows} />
           </SectionPanel>
@@ -304,8 +304,8 @@ export function AttentionQueue({ conversations }: { conversations: unknown }) {
         <TabsContent value="confidence">
           <SectionPanel
             action={<Badge variant="secondary">{lowConfidenceRows.length} items</Badge>}
-            title="Low Confidence Worklist"
-            eyebrow="Queue"
+            title="Low Trust Score Worklist"
+            eyebrow="Supervisor queue"
           >
             <DataTable columns={tableColumns} rows={lowConfidenceRows} />
           </SectionPanel>
@@ -314,7 +314,7 @@ export function AttentionQueue({ conversations }: { conversations: unknown }) {
           <SectionPanel
             action={<Badge variant="secondary">{escalatedRows.length} items</Badge>}
             title="Escalated Worklist"
-            eyebrow="Queue"
+            eyebrow="Supervisor queue"
           >
             <DataTable columns={tableColumns} rows={escalatedRows} />
           </SectionPanel>
@@ -323,7 +323,7 @@ export function AttentionQueue({ conversations }: { conversations: unknown }) {
           <SectionPanel
             action={<Badge variant="secondary">{failedRows.length} items</Badge>}
             title="Failed Tool/Send Worklist"
-            eyebrow="Queue"
+            eyebrow="Supervisor queue"
           >
             <DataTable columns={tableColumns} rows={failedRows} />
           </SectionPanel>

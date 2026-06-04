@@ -140,7 +140,7 @@ export function ConversationReview({
   return (
     <>
       <PageHeader
-        description="Inspect the thread, AI reasoning trail, CRM context, and approval actions before a reply leaves the console."
+        description="Inspect the thread, audit trail, CRM context, approved answer source, and supervisor actions before a reply leaves the console."
         title="Conversation Review"
       />
 
@@ -152,7 +152,7 @@ export function ConversationReview({
                 {list.length} active
               </span>
               <Badge className="h-6" variant="outline">
-                HITL queue
+                Approval queue
               </Badge>
             </div>
           </div>
@@ -232,7 +232,7 @@ export function ConversationReview({
             <div className="grid grid-cols-2 gap-3 border-b bg-muted/30 p-4 text-xs md:grid-cols-4">
               {[
                 ["Intent", textOf(primary, ["intent", "driver"], "Unknown")],
-                ["Confidence", textOf(primary, ["confidence", "aiConfidence"], "n/a")],
+                ["Trust Score", textOf(primary, ["confidence", "aiConfidence"], "n/a")],
                 ["Risk", textOf(primary, ["severity", "priority"], "Normal")],
                 ["Send", textOf(primary, ["sendStatus", "hitlStatus"], "Review")],
               ].map(([label, value]) => (
@@ -295,7 +295,7 @@ export function ConversationReview({
         </div>
 
         <div className="space-y-4">
-          <SectionPanel title="AI Decision Trail" eyebrow="Reasoning log">
+          <SectionPanel title="Audit Trail" eyebrow="Decision log">
             <div className="divide-y">
               {asArray(trail).length === 0 ? (
                 <div className="p-3 text-sm leading-6 text-muted-foreground">
@@ -322,7 +322,7 @@ export function ConversationReview({
             </div>
           </SectionPanel>
 
-          <SectionPanel title="Knowledge Context" eyebrow="KB/SOP/QA">
+          <SectionPanel title="Approved Answer Source" eyebrow="Knowledge / SOP / QA">
             <ScrollArea className="h-[320px]">
               <div className="divide-y">
                 {asArray(knowledge).length === 0 ? (
@@ -353,7 +353,7 @@ export function ConversationReview({
             </ScrollArea>
           </SectionPanel>
 
-          <SectionPanel title="QA/Compliance Gate" eyebrow="HITL readiness">
+          <SectionPanel title="QA/Compliance Gate" eyebrow="Approval readiness">
             <div className="divide-y">
               {asArray(qaCompliance).length === 0 ? (
                 <div className="p-3 text-sm leading-6 text-muted-foreground">
