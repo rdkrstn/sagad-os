@@ -240,6 +240,41 @@ def test_twenty_disabled_health_state() -> None:
     assert payload["external"] is True
 
 
+def test_litellm_disabled_health_state() -> None:
+    response = client.get("/integrations/litellm/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "LiteLLM Gateway"
+    assert payload["status"] == "disabled"
+    assert payload["kind"] == "tool_layer"
+
+
+def test_litellm_enabled_without_base_url_reports_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_ENABLED", "true")
+    monkeypatch.delenv("LITELLM_BASE_URL", raising=False)
+    get_settings.cache_clear()
+
+    response = client.get("/integrations/litellm/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "LiteLLM Gateway"
+    assert payload["status"] == "unconfigured"
+    assert "LITELLM_BASE_URL" in payload["detail"]
+
+
+def test_health_ready_returns_preview_readiness() -> None:
+    response = client.get("/health/ready")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["service"] == "agent-studio"
+    assert payload["knowledge_records"] >= 1
+
+
 def test_integrations_use_generic_webhooks_not_n8n() -> None:
     response = client.get("/integrations")
 
@@ -247,6 +282,7 @@ def test_integrations_use_generic_webhooks_not_n8n() -> None:
     integrations = response.json()["integrations"]
     providers = [item["provider"] for item in integrations]
     assert "Generic Webhooks" in providers
+    assert "LiteLLM Gateway" in providers
     assert "n8n" not in providers
     webhook = next(item for item in integrations if item["provider"] == "Generic Webhooks")
     assert webhook["kind"] == "webhook"

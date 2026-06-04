@@ -34,8 +34,13 @@ class Settings(BaseModel):
     sagad_realtime_secret: str | None = None
     sagad_integration_encryption_key: str | None = None
     openai_api_key: str | None = None
+    openai_base_url: str | None = None
     openai_model: str = "gpt-5.4"
     openai_embedding_model: str = "text-embedding-3-small"
+    litellm_enabled: bool = False
+    litellm_base_url: str | None = None
+    litellm_master_key: str | None = None
+    deepseek_api_key: str | None = None
 
     @property
     def chatwoot_send_enabled(self) -> bool:
@@ -63,6 +68,20 @@ class Settings(BaseModel):
             and not self.twenty_dry_run
         )
 
+    @property
+    def model_gateway_base_url(self) -> str | None:
+        return self.openai_base_url or self.litellm_base_url
+
+    @property
+    def litellm_configured(self) -> bool:
+        return bool(self.litellm_enabled and self.litellm_base_url)
+
+    @property
+    def litellm_health_base_url(self) -> str | None:
+        if not self.litellm_base_url:
+            return None
+        return self.litellm_base_url.removesuffix("/v1").rstrip("/")
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -86,9 +105,14 @@ def get_settings() -> Settings:
         sagad_realtime_secret=os.getenv("SAGAD_REALTIME_SECRET"),
         sagad_integration_encryption_key=os.getenv("SAGAD_INTEGRATION_ENCRYPTION_KEY"),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
+        openai_base_url=os.getenv("OPENAI_BASE_URL"),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5.4"),
         openai_embedding_model=os.getenv(
             "OPENAI_EMBEDDING_MODEL",
             "text-embedding-3-small",
         ),
+        litellm_enabled=_bool_env("LITELLM_ENABLED", False),
+        litellm_base_url=os.getenv("LITELLM_BASE_URL"),
+        litellm_master_key=os.getenv("LITELLM_MASTER_KEY"),
+        deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
     )

@@ -51,16 +51,43 @@ services:
       AGENT_STUDIO_INTERNAL_SECRET: sagad-preview-internal-secret-change-me
       SAGAD_INTEGRATION_ENCRYPTION_KEY: sagad-preview-integration-encryption-key-change-me
       SAGAD_REALTIME_SECRET: sagad-preview-realtime-secret-change-me
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      LITELLM_ENABLED: ${LITELLM_ENABLED:-false}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000/v1}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
     ports:
       - "8010:8010"
     depends_on:
       sagad-db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5).read()\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health/live', timeout=5).read()\""]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  litellm:
+    image: docker.litellm.ai/berriai/litellm:main-stable
+    profiles:
+      - litellm
+    command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sagad-preview-litellm-key-change-me}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    volumes:
+      - ./infra/litellm/config.example.yaml:/app/config.yaml:ro
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     restart: unless-stopped
 
 volumes:

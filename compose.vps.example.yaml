@@ -55,8 +55,13 @@ services:
       SAGAD_INTEGRATION_ENCRYPTION_KEY: ${SAGAD_INTEGRATION_ENCRYPTION_KEY:?Set SAGAD_INTEGRATION_ENCRYPTION_KEY in .env}
       SAGAD_REALTIME_SECRET: ${SAGAD_REALTIME_SECRET:?Set SAGAD_REALTIME_SECRET in .env}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4}
       OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      LITELLM_ENABLED: ${LITELLM_ENABLED:-false}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://sagad-litellm:4000/v1}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-}
       CHATWOOT_ACCOUNT_ID: ${CHATWOOT_ACCOUNT_ID:-}
       CHATWOOT_API_ACCESS_TOKEN: ${CHATWOOT_API_ACCESS_TOKEN:-}
@@ -77,10 +82,35 @@ services:
       sagad-db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5).read()\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health/live', timeout=5).read()\""]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 20s
+    networks:
+      - client_internal_network
+    restart: unless-stopped
+
+  litellm:
+    image: docker.litellm.ai/berriai/litellm:main-stable
+    container_name: sagad-litellm
+    profiles:
+      - litellm
+    command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    volumes:
+      - ./infra/litellm/config.example.yaml:/app/config.yaml:ro
+    expose:
+      - "4000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     networks:
       - client_internal_network
     restart: unless-stopped

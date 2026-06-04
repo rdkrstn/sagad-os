@@ -3,9 +3,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException, Response, WebSocket, WebSocketDisconnect, status
 
 from agent_studio.chatwoot import send_approved_reply
+from agent_studio.config import Settings
 from agent_studio.config import get_settings
 from agent_studio.db import initialize_database
 from agent_studio.graph import graph
@@ -173,6 +175,65 @@ def _integration_status_from_connection(connection: IntegrationConnection) -> Ex
     )
 
 
+def _litellm_status(settings: Settings, detail: str | None = None) -> ExternalIntegrationStatus:
+    if not settings.litellm_enabled:
+        return ExternalIntegrationStatus(
+            provider="LiteLLM Gateway",
+            kind="tool_layer",
+            status="disabled",
+            external=False,
+            base_url=settings.litellm_base_url,
+            mode="OpenAI-compatible /v1 model gateway",
+            dry_run=True,
+            writes_enabled=False,
+            detail="LiteLLM is optional and disabled. Enable it to route OpenAI and DeepSeek test traffic through one gateway.",
+        )
+
+    if not settings.litellm_base_url:
+        return ExternalIntegrationStatus(
+            provider="LiteLLM Gateway",
+            kind="tool_layer",
+            status="unconfigured",
+            external=False,
+            mode="OpenAI-compatible /v1 model gateway",
+            dry_run=True,
+            writes_enabled=False,
+            detail="Set LITELLM_BASE_URL before enabling the LiteLLM gateway.",
+        )
+
+    return ExternalIntegrationStatus(
+        provider="LiteLLM Gateway",
+        kind="tool_layer",
+        status="ready" if detail is None else "error",
+        external=False,
+        base_url=settings.litellm_base_url,
+        mode="OpenAI-compatible /v1 model gateway",
+        dry_run=False,
+        writes_enabled=False,
+        detail=detail
+        or "LiteLLM is enabled for Agent Studio model calls through an OpenAI-compatible gateway.",
+    )
+
+
+async def _probe_litellm(settings: Settings) -> ExternalIntegrationStatus:
+    status_payload = _litellm_status(settings)
+    if status_payload.status in {"disabled", "unconfigured"}:
+        return status_payload
+
+    health_base_url = settings.litellm_health_base_url
+    if not health_base_url:
+        return _litellm_status(settings, "LiteLLM base URL could not be normalized for health checks.")
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get(f"{health_base_url}/health/readiness")
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        return _litellm_status(settings, f"LiteLLM readiness check failed: {exc.__class__.__name__}.")
+
+    return status_payload
+
+
 def _integration_statuses(context: StoreContext | None = None) -> list[ExternalIntegrationStatus]:
     settings = configured_settings(get_settings(), context)
     chatwoot_status = "ready" if settings.chatwoot_send_enabled else "dry_run"
@@ -225,6 +286,7 @@ def _integration_statuses(context: StoreContext | None = None) -> list[ExternalI
             writes_enabled=False,
             detail="Trace links are attached when LangSmith environment variables are configured.",
         ),
+        _litellm_status(settings),
         ExternalIntegrationStatus(
             provider="Generic Webhooks",
             kind="webhook",
@@ -275,7 +337,7 @@ def _realtime_event(
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    settings = configured_settings(get_settings())
+    settings = get_settings()
     return HealthResponse(
         status="healthy",
         service="agent-studio",
@@ -283,6 +345,45 @@ def health() -> HealthResponse:
         chatwoot_send_enabled=settings.chatwoot_send_enabled,
         twenty_status=twenty_status(settings),
     )
+
+
+@app.get("/health/live")
+def health_live() -> dict[str, str]:
+    return {"status": "alive", "service": "agent-studio"}
+
+
+@app.get("/health/ready")
+def health_ready() -> dict[str, object]:
+    settings = get_settings()
+    database_ready = True
+    database_detail = "DATABASE_URL is not configured; using in-memory preview stores."
+    if settings.database_url:
+        try:
+            initialize_database(settings)
+            database_detail = "Database migrations and seed checks completed."
+        except Exception as exc:
+            database_ready = False
+            database_detail = f"Database readiness failed: {exc.__class__.__name__}."
+
+    if not database_ready:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "status": "not_ready",
+                "service": "agent-studio",
+                "database_ready": False,
+                "database_detail": database_detail,
+                "knowledge_records": len(retriever.records),
+            },
+        )
+
+    return {
+        "status": "ready" if database_ready else "not_ready",
+        "service": "agent-studio",
+        "database_ready": database_ready,
+        "database_detail": database_detail,
+        "knowledge_records": len(retriever.records),
+    }
 
 
 @app.get("/integrations", response_model=IntegrationListResponse)
@@ -307,6 +408,14 @@ def get_twenty_health(
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
     return twenty_status(configured_settings(get_settings(), context))
+
+
+@app.get("/integrations/litellm/health", response_model=ExternalIntegrationStatus)
+async def get_litellm_health(
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> ExternalIntegrationStatus:
+    _verify_internal_secret(x_sagad_internal_secret)
+    return await _probe_litellm(get_settings())
 
 
 @app.get("/integration-configs", response_model=IntegrationConnectionListResponse)

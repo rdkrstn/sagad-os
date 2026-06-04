@@ -11,6 +11,7 @@ Agent Studio is also the adapter boundary. External tools such as Twenty CRM, Ch
 - Output: approved Chatwoot send attempt from `POST /conversations/{id}/approve-send`.
 - Output: integration readiness from `GET /integrations`.
 - Output: Twenty CRM status from `GET /integrations/twenty/health`.
+- Output: LiteLLM gateway status from `GET /integrations/litellm/health`.
 - Output: realtime conversation events from `WS /ws/conversations`.
 
 Chatwoot threading rule: one Chatwoot `conversation.id` maps to one Sagad conversation. New inbound customer messages append to the thread, regenerate the latest draft, and reset approval to `needs_approval`. Duplicate webhook retries with the same Chatwoot message id are idempotent. Outgoing or private Chatwoot messages are ignored.
@@ -35,10 +36,17 @@ Chatwoot threading rule: one Chatwoot `conversation.id` maps to one Sagad conver
 - `LANGSMITH_API_KEY`
 - `LANGSMITH_PROJECT`
 - `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
 - `OPENAI_MODEL`
 - `OPENAI_EMBEDDING_MODEL`
+- `LITELLM_ENABLED`
+- `LITELLM_BASE_URL`
+- `LITELLM_MASTER_KEY`
+- `DEEPSEEK_API_KEY`
 
 OpenAI and LangSmith variables are optional in this deterministic dev preview. Chatwoot send runs as `dry_run` when Chatwoot credentials are not set. Twenty CRM is disabled and dry-run by default; live writes require `TWENTY_ENABLED=true`, `TWENTY_DRY_RUN=false`, `TWENTY_ALLOW_WRITES=true`, and an explicit supervisor approval payload.
+
+LiteLLM is optional. When enabled, `OPENAI_BASE_URL` can point model calls to `http://litellm:4000/v1` or `http://sagad-litellm:4000/v1` so OpenAI and DeepSeek traffic uses one OpenAI-compatible gateway.
 
 `DATABASE_URL` is optional. When unset, Agent Studio uses the in-memory development store. When set to a Postgres-compatible URL, Agent Studio runs SQL migrations from `migrations/`, enables the Sagad schema foundation, and stores conversations, inbound messages, approvals, CRM tool plans, CRM tool results, and audit events through `psycopg`. `AGENT_STUDIO_INTERNAL_SECRET` protects privileged console-to-Agent-Studio routes when configured. `SAGAD_REALTIME_SECRET` verifies short-lived WebSocket tokens minted by the console.
 
@@ -83,8 +91,11 @@ Health check:
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/health
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/health/live
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/health/ready
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations/twenty/health
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations/litellm/health
 ```
 
 See [Twenty External VPS](docs/twenty-external-vps.md) for the CRM hosting boundary.

@@ -8,21 +8,32 @@ import {
   Bell,
   Bot,
   BrainCircuit,
+  BookOpen,
   ClipboardCheck,
   Gauge,
   Inbox,
   LayoutDashboard,
+  LogOut,
   Menu,
   PlugZap,
   Route,
   Search,
   Settings,
   ShieldCheck,
+  UserCog,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -253,11 +264,50 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
                 <TooltipContent>Alerts</TooltipContent>
               </Tooltip>
               <Separator className="hidden h-6 md:block" orientation="vertical" />
-              <Avatar className="size-8">
-                <AvatarFallback className="bg-[#08111F] text-xs text-white">
-                  JD
-                </AvatarFallback>
-              </Avatar>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button className="size-8 rounded-full p-0" variant="ghost">
+                    <Avatar className="size-8">
+                      <AvatarFallback className="bg-[#08111F] text-xs text-white">
+                        JD
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="sr-only">Open user menu</span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel>
+                    <div className="text-xs font-medium text-foreground">Johnred Workspace</div>
+                    <div className="mt-0.5 text-[11px] text-muted-foreground">Owner preview</div>
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <Link href="/settings">
+                      <UserCog aria-hidden="true" size={14} />
+                      Profile settings
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href="/superadmin">
+                      <ShieldCheck aria-hidden="true" size={14} />
+                      SuperAdmin Console
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href="/settings">
+                      <BookOpen aria-hidden="true" size={14} />
+                      Read documentation
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <Link href="/api/auth/signout">
+                      <LogOut aria-hidden="true" size={14} />
+                      Log out
+                    </Link>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
         </header>

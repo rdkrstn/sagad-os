@@ -91,3 +91,32 @@ jobs:
           context: ./agent-studio
           push: false
           tags: agent-studio:ci
+
+  compose-smoke:
+    name: Docker Compose Smoke
+    runs-on: ubuntu-latest
+    needs:
+      - containers
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Boot preview stack and verify Agent Studio health
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cleanup() {
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              docker compose -f compose.preview.yaml ps || true
+              docker compose -f compose.preview.yaml logs --no-color sagad-db agent-studio sagad-console || true
+            fi
+            docker compose -f compose.preview.yaml down -v --remove-orphans || true
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          docker compose -f compose.preview.yaml up -d --build --wait --wait-timeout 240
+          curl --fail --show-error --silent http://127.0.0.1:8010/health
+          curl --fail --show-error --silent http://127.0.0.1:8010/health/ready
