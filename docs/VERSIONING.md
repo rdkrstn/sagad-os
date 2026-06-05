@@ -49,4 +49,9 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Image publishing is not enabled yet.
+7. Watch GitHub Actions:
+
+- `release-check.yml` verifies version file alignment and changelog coverage.
+- `docker-publish.yml` builds, scans, and publishes the Sagad Console and Agent Studio images to GHCR.
+
+Do not deploy a tag until both release workflows pass.

@@ -1,21 +1,35 @@
 # CI/CD
 
-Sagad OS uses GitHub Actions for continuous integration.
+Sagad OS uses GitHub Actions for CI, release validation, and Docker image publishing. CD is intentionally manual for now so self-host operators can learn the deploy flow before automation hides it.
 
-## Current CI
+## Pull Request Gate
 
 Workflow: `.github/workflows/ci.yml`
 
-The workflow runs on pushes to `main` and on pull requests.
+The workflow runs on pull requests and pushes to `main`.
 
-Jobs:
+Required jobs:
 
-- Frontend: `npm ci`, `npm run lint`, `npx tsc --noEmit --pretty false`, `npm run build`.
-- Agent Studio: `uv sync`, `uv run pytest`.
-- Container builds: Docker build smoke tests for `v1/` and `agent-studio/`.
-- Docker Compose smoke: boots `compose.preview.yaml`, waits for service health, then verifies `GET /health` and `GET /health/ready` on Agent Studio.
+- Security scan: `gitleaks` secret scan plus Trivy filesystem scan for high and critical vulnerabilities.
+- Frontend: `npm ci`, production dependency audit, `npm run lint`, `npx tsc --noEmit --pretty false`, and `npm run build`.
+- Agent Studio: Python 3.12, `uv sync`, pgvector migration smoke check, and `uv run pytest` with the optional Postgres persistence test enabled.
+- Container builds: Docker Buildx builds both runtime images, loads them locally, and scans each image with Trivy.
+- Compose smoke: validates `compose.preview.yaml`, boots Sagad Postgres, Agent Studio, and the Console, then verifies `/health`, `/health/live`, `/health/ready`, and console-to-Agent-Studio internal connectivity.
 
-If the compose smoke test fails, the workflow prints `sagad-db`, `agent-studio`, and `sagad-console` logs so unhealthy containers can be diagnosed from the pull request.
+If the compose smoke test fails, CI prints service status and logs for `sagad-db`, `agent-studio`, and `sagad-console`.
+
+## Release Gate
+
+Workflow: `.github/workflows/release-check.yml`
+
+Release tags must use `vX.Y.Z`.
+
+The release check verifies:
+
+- `VERSION` matches the tag without the `v` prefix;
+- `v1/package.json` matches `VERSION`;
+- `agent-studio/pyproject.toml` matches `VERSION`;
+- `CHANGELOG.md` contains an entry for the release version.
 
 ## Docker Publish
 
@@ -31,23 +45,54 @@ It publishes two GitHub Container Registry images:
 - `ghcr.io/<owner>/sagad-os-console`
 - `ghcr.io/<owner>/sagad-os-agent-studio`
 
-Published tags include:
+Before publish, each image is built locally and scanned with Trivy. Published images include Git tag, semantic-version, major/minor, and `sha-...` tags. The publish job also asks Docker Buildx to attach SBOM and provenance attestations.
 
-- the Git tag when the workflow runs from a version tag;
-- a `sha-...` tag for the exact commit.
+## Manual VPS Deploy Flow
 
-The current workflow does not deploy to a VPS. That is intentional until the target environment and managed-hosting model are finalized. A VPS can either build locally from source or pull the GHCR images after a tagged release.
+Until automated CD exists, deploy from the VPS:
 
-## Future CD
+```bash
+cd ~/apps/sagad-os
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+docker compose -f compose.vps.yaml config --quiet
+docker compose -f compose.vps.yaml up -d --build
+docker compose -f compose.vps.yaml ps
+docker exec sagad-agent-studio python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8010/health/ready').read().decode())"
+```
 
-Recommended stages:
+For GHCR-based releases later, replace the local build step with image pulls after the tagged release workflow succeeds.
 
-1. CI validates source and container builds.
-2. CI boots the preview compose stack and verifies Agent Studio health.
-3. Release workflow builds versioned images.
-4. Images are pushed to GitHub Container Registry.
-5. A deployment workflow updates the target self-hosted or managed environment.
-6. Deployment verifies `GET /health`, `GET /health/ready`, and provider readiness endpoints.
+## Rollback Flow
+
+Keep rollback boring:
+
+```bash
+cd ~/apps/sagad-os
+git log --oneline -5
+git checkout <previous-good-sha-or-tag>
+docker compose -f compose.vps.yaml up -d --build
+docker exec sagad-agent-studio python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8010/health/ready').read().decode())"
+```
+
+Before production, add database backup/restore steps around migrations. Do not rely on Git rollback alone after schema-changing releases.
+
+## Observability Boundaries
+
+- Uptime Kuma answers: is the service reachable?
+- Sentry answers: did the console or backend crash?
+- LangSmith answers: why did the graph or AI agent behave this way?
+- Sagad Diagnostics answers: what provider/webhook/tool action failed?
+
+Sentry is optional. The repo should run without it, but deployments may set:
+
+```env
+SENTRY_DSN=
+SENTRY_ENVIRONMENT=preview
+SENTRY_RELEASE=
+SENTRY_TRACES_SAMPLE_RATE=0.1
+```
 
 ## Required Secrets Later
 

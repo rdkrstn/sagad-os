@@ -130,6 +130,47 @@ docker exec sagad-console node -e "fetch('http://sagad-agent-studio:8010/diagnos
 
 Use `docker logs` only when the diagnostics endpoint, health endpoint, or console route cannot be reached.
 
+## CI-Gated VPS Deploy
+
+Before deploying a branch or tag to the VPS, make sure GitHub Actions has passed:
+
+- Security Scan;
+- Frontend;
+- Agent Studio;
+- Container Builds;
+- Docker Compose Smoke;
+- Release Check for version tags.
+
+Deploy manually until the release flow is stable:
+
+```bash
+cd ~/apps/sagad-os
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+docker compose -f compose.vps.yaml config --quiet
+docker compose -f compose.vps.yaml up -d --build
+docker compose -f compose.vps.yaml ps
+```
+
+Then verify:
+
+```bash
+docker exec sagad-agent-studio python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8010/health/live').read().decode())"
+docker exec sagad-agent-studio python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8010/health/ready').read().decode())"
+docker exec sagad-console node -e "fetch('http://sagad-agent-studio:8010/health/live').then(r=>r.text()).then(console.log)"
+```
+
+Rollback is also manual:
+
+```bash
+git log --oneline -5
+git checkout <previous-good-sha-or-tag>
+docker compose -f compose.vps.yaml up -d --build
+```
+
+For schema-changing releases, take a database backup before deploy. Git rollback does not automatically reverse database migrations.
+
 ## Optional LiteLLM Gateway
 
 LiteLLM is optional. It lets Agent Studio use one OpenAI-compatible gateway for OpenAI and DeepSeek test credits.
@@ -163,6 +204,21 @@ OPENAI_BASE_URL=http://sagad-litellm:4000/v1
 ```
 
 Do not expose LiteLLM publicly unless you add authentication, rate limits, and a clear operational reason.
+
+## Optional Sentry Monitoring
+
+Sentry is optional runtime crash monitoring. It should not be required for local contributors or self-host smoke tests.
+
+Use Sentry for frontend/backend exceptions. Use LangSmith for graph and agent traces. Use Uptime Kuma for uptime. Use Sagad Diagnostics for provider/webhook/tool failures.
+
+Example env:
+
+```env
+SENTRY_DSN=
+SENTRY_ENVIRONMENT=preview
+SENTRY_RELEASE=
+SENTRY_TRACES_SAMPLE_RATE=0.1
+```
 
 ## VPS Layout
 

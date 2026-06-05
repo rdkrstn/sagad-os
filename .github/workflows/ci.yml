@@ -10,9 +10,34 @@ permissions:
   contents: read
 
 jobs:
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Filesystem vulnerability scan
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: fs
+          scan-ref: .
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
+    needs:
+      - security
     defaults:
       run:
         working-directory: v1
@@ -30,6 +55,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Dependency audit
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Lint
         run: npm run lint
 
@@ -42,6 +70,22 @@ jobs:
   agent-studio:
     name: Agent Studio
     runs-on: ubuntu-latest
+    needs:
+      - security
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: sagad_os_ci
+          POSTGRES_USER: sagad
+          POSTGRES_PASSWORD: sagad_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sagad -d sagad_os_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: agent-studio
@@ -62,7 +106,34 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      - name: Migration smoke check
+        env:
+          DATABASE_URL: postgresql://sagad:sagad_ci_password@127.0.0.1:5432/sagad_os_ci
+        run: |
+          uv run python - <<'PY'
+          import os
+
+          import psycopg
+
+          from agent_studio.config import Settings
+          from agent_studio.db import initialize_database
+
+          settings = Settings(database_url=os.environ["DATABASE_URL"])
+          initialize_database(settings)
+
+          with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
+              with connection.cursor() as cursor:
+                  cursor.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+                  assert cursor.fetchone(), "pgvector extension was not enabled"
+                  cursor.execute("SELECT to_regclass('public.knowledge_ingestion_jobs')")
+                  assert cursor.fetchone()[0], "knowledge_ingestion_jobs table is missing"
+                  cursor.execute("SELECT to_regclass('public.conversations')")
+                  assert cursor.fetchone()[0], "conversations table is missing"
+          PY
+
       - name: Test
+        env:
+          AGENT_STUDIO_TEST_DATABASE_URL: postgresql://sagad:sagad_ci_password@127.0.0.1:5432/sagad_os_ci
         run: uv run pytest
 
   containers:
@@ -83,14 +154,32 @@ jobs:
         with:
           context: ./v1
           push: false
+          load: true
           tags: sagad-console:ci
+
+      - name: Scan Sagad Console image
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: sagad-console:ci
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+          exit-code: "1"
 
       - name: Build Agent Studio image
         uses: docker/build-push-action@v6
         with:
           context: ./agent-studio
           push: false
+          load: true
           tags: agent-studio:ci
+
+      - name: Scan Agent Studio image
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: agent-studio:ci
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+          exit-code: "1"
 
   compose-smoke:
     name: Docker Compose Smoke
@@ -117,6 +206,9 @@ jobs:
           }
           trap cleanup EXIT
 
+          docker compose -f compose.preview.yaml config --quiet
           docker compose -f compose.preview.yaml up -d --build --wait --wait-timeout 240
           curl --fail --show-error --silent http://127.0.0.1:8010/health
+          curl --fail --show-error --silent http://127.0.0.1:8010/health/live
           curl --fail --show-error --silent http://127.0.0.1:8010/health/ready
+          docker compose -f compose.preview.yaml exec -T sagad-console node -e "fetch('http://agent-studio:8010/health/live').then(r => { if (!r.ok) process.exit(1); return r.text(); }).then(console.log)"
