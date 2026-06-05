@@ -230,6 +230,113 @@ def test_approve_send_records_outbound_message_in_same_thread() -> None:
     assert len(client.get("/conversations").json()["conversations"]) == 1
 
 
+def test_approve_send_failure_records_chatwoot_tool_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHATWOOT_BASE_URL", "https://chat.example.test")
+    monkeypatch.setenv("CHATWOOT_ACCOUNT_ID", "1")
+    monkeypatch.setenv("CHATWOOT_API_ACCESS_TOKEN", "bad-token")
+    monkeypatch.setenv("CHATWOOT_DRY_RUN", "false")
+    get_settings.cache_clear()
+
+    async def mock_post(
+        self: httpx.AsyncClient,
+        url: str,
+        **kwargs: object,
+    ) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"errors": ["You need to sign in or sign up before continuing."]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "id": 5001,
+            "content": "How much is an AC tune-up?",
+            "message_type": "incoming",
+            "conversation": {"id": 500},
+            "sender": {"name": "Send Failure Customer"},
+        },
+    ).json()
+
+    response = client.post(
+        f"/conversations/{created['id']}/approve-send",
+        json={"approved": True, "supervisor_id": "qa-lead"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["approval_status"] == "send_failed"
+    assert payload["send_status"] == "failed"
+    assert payload["tool_results"][0]["provider"] == "Chatwoot"
+    assert payload["tool_results"][0]["status"] == "failed"
+    assert "HTTP 401" in payload["tool_results"][0]["detail"]
+    assert payload["tool_results"][0]["data"]["http_status"] == 401
+    assert "sign in or sign up" in payload["tool_results"][0]["data"]["response_excerpt"]
+
+    events = client.get(
+        "/diagnostics/events",
+        params={"conversation_id": created["id"]},
+    ).json()["events"]
+    assert any(event["event_type"] == "chatwoot.send.failed" for event in events)
+
+
+def test_integration_configs_show_runtime_chatwoot_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHATWOOT_BASE_URL", "https://chat.example.test")
+    monkeypatch.setenv("CHATWOOT_ACCOUNT_ID", "1")
+    monkeypatch.setenv("CHATWOOT_API_ACCESS_TOKEN", "runtime-token")
+    monkeypatch.setenv("CHATWOOT_WEBHOOK_TOKEN", "runtime-webhook")
+    monkeypatch.setenv("CHATWOOT_DRY_RUN", "false")
+    get_settings.cache_clear()
+
+    response = client.get(
+        "/integration-configs",
+        headers={"X-Sagad-Role": "supervisor"},
+    )
+
+    assert response.status_code == 200
+    chatwoot = next(
+        item for item in response.json()["connections"] if item["provider"] == "chatwoot"
+    )
+    assert chatwoot["configured"] is True
+    assert chatwoot["enabled"] is True
+    assert chatwoot["status"] == "ready"
+    assert chatwoot["base_url"] == "https://chat.example.test"
+    assert chatwoot["has_api_access_token"] is True
+    assert chatwoot["has_webhook_token"] is True
+    assert "environment variables" in chatwoot["detail"]
+    assert "runtime-token" not in response.text
+
+
+def test_diagnostics_events_are_listed_after_webhook() -> None:
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "id": 5101,
+            "content": "I need support.",
+            "message_type": "incoming",
+            "conversation": {"id": 510},
+            "sender": {"name": "Diagnostics Customer"},
+        },
+    ).json()
+
+    response = client.get(
+        "/diagnostics/events",
+        params={"conversation_id": created["id"]},
+    )
+
+    assert response.status_code == 200
+    events = response.json()["events"]
+    assert any(event["event_type"] == "chatwoot.webhook.persisted" for event in events)
+    assert all(event["conversation_id"] == created["id"] for event in events)
+
+
 def test_twenty_disabled_health_state() -> None:
     response = client.get("/integrations/twenty/health")
 

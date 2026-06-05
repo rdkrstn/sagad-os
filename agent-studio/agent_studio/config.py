@@ -21,6 +21,7 @@ class Settings(BaseModel):
     chatwoot_account_id: str | None = None
     chatwoot_api_access_token: str | None = None
     chatwoot_webhook_token: str | None = None
+    chatwoot_dry_run: bool = False
     twenty_enabled: bool = False
     twenty_base_url: str | None = None
     twenty_api_key: str | None = None
@@ -44,6 +45,10 @@ class Settings(BaseModel):
 
     @property
     def chatwoot_send_enabled(self) -> bool:
+        return self.chatwoot_configured and not self.chatwoot_dry_run
+
+    @property
+    def chatwoot_configured(self) -> bool:
         return all(
             [
                 self.chatwoot_base_url,
@@ -92,6 +97,7 @@ def get_settings() -> Settings:
         chatwoot_account_id=os.getenv("CHATWOOT_ACCOUNT_ID"),
         chatwoot_api_access_token=os.getenv("CHATWOOT_API_ACCESS_TOKEN"),
         chatwoot_webhook_token=os.getenv("CHATWOOT_WEBHOOK_TOKEN"),
+        chatwoot_dry_run=_bool_env("CHATWOOT_DRY_RUN", False),
         twenty_enabled=_bool_env("TWENTY_ENABLED", False),
         twenty_base_url=os.getenv("TWENTY_BASE_URL"),
         twenty_api_key=os.getenv("TWENTY_API_KEY"),

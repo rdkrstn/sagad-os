@@ -84,6 +84,11 @@ export function ConversationReview({
   );
   const knowledge = nestedArray(primary, ["knowledgeContext", "retrievedKnowledge"]);
   const qaCompliance = nestedArray(primary, ["qaCompliance", "qaFindings"]);
+  const toolResults = nestedArray(primary, [
+    "toolResults",
+    "tool_results",
+    "deliveryResults",
+  ]);
 
   function setDraftReply(value: string): void {
     if (!primaryId) {
@@ -124,13 +129,40 @@ export function ConversationReview({
         },
       );
 
+      const payload = (await response.json()) as unknown;
       if (!response.ok) {
-        const payload = (await response.json()) as { detail?: string };
-        setActionMessage(payload.detail ?? "Agent Studio action failed.");
+        const row = asRecord(payload);
+        setActionMessage(textOf(row, ["detail"], "Agent Studio action failed."));
         return;
       }
 
-      setActionMessage(approved ? "Approved. Send status updated." : "Rejected.");
+      if (!approved) {
+        setActionMessage("Rejected.");
+      } else {
+        const row = asRecord(payload);
+        const sendStatus = textOf(row, ["send_status", "sendStatus"], "unknown")
+          .toLowerCase()
+          .replaceAll(" ", "_");
+        const returnedToolResults = nestedArray(row, [
+          "tool_results",
+          "toolResults",
+          "deliveryResults",
+        ]).map(asRecord);
+        const latestToolResult = returnedToolResults.at(-1) ?? {};
+        const toolDetail = textOf(latestToolResult, ["detail"], "");
+
+        if (sendStatus === "failed") {
+          setActionMessage(
+            `Send failed: ${toolDetail || "Agent Studio recorded a provider failure."}`,
+          );
+        } else if (sendStatus === "dry_run") {
+          setActionMessage("Approved. Chatwoot send stayed in dry-run.");
+        } else if (sendStatus === "sent") {
+          setActionMessage("Approved. Reply sent to Chatwoot.");
+        } else {
+          setActionMessage("Approved. Send status updated.");
+        }
+      }
       startTransition(() => router.refresh());
     } catch {
       setActionMessage("Could not reach the approval endpoint.");
@@ -374,6 +406,57 @@ export function ConversationReview({
                     <p className="mt-1 text-xs leading-5 text-muted-foreground">
                       {textOf(row, ["detail", "description"], "")}
                     </p>
+                  </div>
+                );
+              })}
+            </div>
+          </SectionPanel>
+
+          <SectionPanel title="Tool & Delivery Results" eyebrow="Backend diagnostics">
+            <div className="divide-y">
+              {asArray(toolResults).length === 0 ? (
+                <div className="p-3 text-sm leading-6 text-muted-foreground">
+                  No provider delivery result has been recorded for this conversation yet.
+                </div>
+              ) : null}
+              {asArray(toolResults).map((event, index) => {
+                const row = asRecord(event);
+                const data = asRecord(row.data);
+                const status = textOf(row, ["status", "result"], "Logged");
+                const httpStatus =
+                  textOf(row, ["httpStatus", "http_status"], "") ||
+                  textOf(data, ["http_status"], "");
+                const responseExcerpt =
+                  textOf(row, ["responseExcerpt", "response_excerpt"], "") ||
+                  textOf(data, ["response_excerpt"], "");
+                const errorType =
+                  textOf(row, ["errorType", "error_type"], "") ||
+                  textOf(data, ["error_type"], "");
+
+                return (
+                  <div className="space-y-2 p-3" key={index}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-medium text-foreground">
+                        {textOf(row, ["toolName", "tool_name", "name"], "Provider action")}
+                      </div>
+                      <StatusChip tone={toneFromStatus(status)}>{status}</StatusChip>
+                    </div>
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      {textOf(row, ["detail", "description"], "No detail recorded.")}
+                    </p>
+                    {httpStatus || errorType ? (
+                      <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                        {httpStatus ? (
+                          <Badge variant="outline">HTTP {httpStatus}</Badge>
+                        ) : null}
+                        {errorType ? <Badge variant="outline">{errorType}</Badge> : null}
+                      </div>
+                    ) : null}
+                    {responseExcerpt ? (
+                      <pre className="max-h-24 overflow-auto rounded-md border bg-muted/30 p-2 text-[11px] leading-4 text-muted-foreground">
+                        {responseExcerpt}
+                      </pre>
+                    ) : null}
                   </div>
                 );
               })}

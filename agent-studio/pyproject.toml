@@ -3,6 +3,7 @@ name = "agent-studio"
 version = "0.1.0"
 description = "Sagad Agent Studio dev backend for Chatwoot HITL preview."
 readme = "README.md"
+license = "AGPL-3.0-only"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115.0",

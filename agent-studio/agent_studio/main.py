@@ -1,10 +1,11 @@
-from datetime import datetime, timezone
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+import logging
 from typing import Annotated
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Response, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, Header, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
 
 from agent_studio.chatwoot import send_approved_reply
 from agent_studio.config import Settings
@@ -15,6 +16,7 @@ from agent_studio.integration_config import (
     ADMIN_ROLES,
     configured_settings,
     connection_test_result,
+    integration_connections_for_display,
     integration_config_store,
 )
 from agent_studio.realtime import realtime_manager, verify_realtime_token
@@ -31,6 +33,8 @@ from agent_studio.schemas import (
     CrmProviderStatus,
     CrmToolResponse,
     CrmUpdateLeadStageRequest,
+    DiagnosticEvent,
+    DiagnosticEventListResponse,
     ExternalIntegrationStatus,
     HealthResponse,
     IgnoredWebhookResponse,
@@ -40,6 +44,8 @@ from agent_studio.schemas import (
     IntegrationConnectionUpsertRequest,
     IntegrationListResponse,
     IntegrationProvider,
+    ToolPlan,
+    ToolResult,
 )
 from agent_studio.store import StoreContext, store
 from agent_studio.twenty import TwentyAdapter, twenty_status
@@ -52,6 +58,47 @@ async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Sagad Agent Studio", version="0.1.0", lifespan=lifespan)
+logger = logging.getLogger("agent_studio")
+
+
+def _record_diagnostic_event(
+    *,
+    event_type: str,
+    summary: str,
+    status_value: str = "info",
+    conversation_id: str | None = None,
+    payload: dict[str, object] | None = None,
+    context: StoreContext | None = None,
+    actor_type: str = "system",
+    actor_id: str | None = None,
+) -> None:
+    try:
+        event = DiagnosticEvent(
+            conversation_id=conversation_id,
+            event_type=event_type,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            status=status_value,  # type: ignore[arg-type]
+            summary=summary,
+            payload=payload or {},
+        )
+        store.record_event(event, context=context)
+    except Exception as exc:  # pragma: no cover - diagnostics must not break runtime
+        logger.warning(
+            "diagnostics.record_failed event_type=%s error=%s",
+            event_type,
+            exc.__class__.__name__,
+        )
+
+
+def _log_event(
+    level: int,
+    event_type: str,
+    summary: str,
+    **fields: object,
+) -> None:
+    field_text = " ".join(f"{key}={value}" for key, value in fields.items())
+    logger.log(level, "%s %s %s", event_type, summary, field_text)
 
 
 def _trusted_context(
@@ -310,6 +357,54 @@ def _integration_statuses(context: StoreContext | None = None) -> list[ExternalI
     ]
 
 
+def _chatwoot_tool_payload(result: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in result.items()
+        if key not in {"provider", "action", "status", "detail"}
+        and value is not None
+    }
+
+
+def _chatwoot_send_tool_result(
+    record: ConversationRecord,
+    result: dict[str, object],
+    *,
+    content: str,
+) -> tuple[ToolPlan, ToolResult]:
+    status_value = str(result.get("status", "failed"))
+    tool_status = {
+        "sent": "succeeded",
+        "dry_run": "dry_run",
+        "failed": "failed",
+    }.get(status_value, "failed")
+    plan = ToolPlan(
+        provider="Chatwoot",
+        tool_name="chatwoot.messages.send_approved",
+        action="send supervisor-approved reply",
+        risk_level=record.risk_level,
+        requires_approval=True,
+        approved=True,
+        dry_run=status_value == "dry_run",
+        args={
+            "chatwoot_conversation_id": record.chatwoot_conversation_id,
+            "content_preview": content[:160],
+        },
+    )
+    return (
+        plan,
+        ToolResult(
+            plan_id=plan.id,
+            provider="Chatwoot",
+            tool_name="chatwoot.messages.send_approved",
+            status=tool_status,  # type: ignore[arg-type]
+            detail=str(result.get("detail", "Chatwoot send completed.")),
+            external_id=str(result["external_id"]) if result.get("external_id") else None,
+            data=_chatwoot_tool_payload(result),
+        ),
+    )
+
+
 def _require_supervisor_approval(approved: bool) -> None:
     if not approved:
         raise HTTPException(
@@ -428,7 +523,27 @@ def list_integration_configs(
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
     return IntegrationConnectionListResponse(
-        connections=integration_config_store.list(context=context),
+        connections=integration_connections_for_display(get_settings(), context=context),
+    )
+
+
+@app.get("/diagnostics/events", response_model=DiagnosticEventListResponse)
+def list_diagnostic_events(
+    conversation_id: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> DiagnosticEventListResponse:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    return DiagnosticEventListResponse(
+        events=store.list_events(
+            conversation_id=conversation_id,
+            limit=limit,
+            context=context,
+        ),
     )
 
 
@@ -522,20 +637,80 @@ async def receive_chatwoot_webhook(
     x_sagad_role: Annotated[str | None, Header()] = None,
 ) -> ConversationRecord | IgnoredWebhookResponse:
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
-    _verify_webhook_token(x_chatwoot_token, context)
+    conversation_id = _sagad_conversation_id(payload)
+    chatwoot_message_id = _message_id(payload)
+    log_fields = {
+        "chatwoot_conversation_id": _conversation_id(payload),
+        "chatwoot_message_id": chatwoot_message_id,
+        "event": payload.event,
+        "message_type": payload.message_type,
+        "private": payload.private,
+        "token_present": bool(x_chatwoot_token),
+    }
+    _log_event(logging.INFO, "chatwoot.webhook.received", "Webhook request received.", **log_fields)
+    _record_diagnostic_event(
+        event_type="chatwoot.webhook.received",
+        summary="Chatwoot webhook request received.",
+        status_value="info",
+        conversation_id=conversation_id,
+        payload=log_fields,
+        context=context,
+    )
+    try:
+        _verify_webhook_token(x_chatwoot_token, context)
+    except HTTPException:
+        _log_event(
+            logging.WARNING,
+            "chatwoot.webhook.rejected_token",
+            "Webhook rejected because the token did not match.",
+            **log_fields,
+        )
+        _record_diagnostic_event(
+            event_type="chatwoot.webhook.rejected_token",
+            summary="Webhook rejected because the token did not match.",
+            status_value="warning",
+            conversation_id=conversation_id,
+            payload=log_fields,
+            context=context,
+        )
+        raise
 
     if _is_ignored_chatwoot_message(payload):
+        _log_event(logging.INFO, "chatwoot.webhook.ignored", "Webhook event ignored.", **log_fields)
+        _record_diagnostic_event(
+            event_type="chatwoot.webhook.ignored",
+            summary="Chatwoot webhook event ignored because it is not an inbound customer message.",
+            status_value="info",
+            conversation_id=conversation_id,
+            payload=log_fields,
+            context=context,
+        )
         response.status_code = status.HTTP_202_ACCEPTED
         return IgnoredWebhookResponse(reason="Chatwoot event is not an inbound customer message.")
 
     incoming_message = payload.content or ""
     if not incoming_message.strip():
+        _record_diagnostic_event(
+            event_type="chatwoot.webhook.invalid_payload",
+            summary="Webhook payload did not include message content.",
+            status_value="error",
+            conversation_id=conversation_id,
+            payload=log_fields,
+            context=context,
+        )
         raise HTTPException(status_code=400, detail="Webhook payload did not include message content.")
 
-    conversation_id = _sagad_conversation_id(payload)
-    chatwoot_message_id = _message_id(payload)
     existing_record = store.get(conversation_id, context=context) if conversation_id else None
     if _message_already_recorded(existing_record, chatwoot_message_id):
+        _log_event(logging.INFO, "chatwoot.webhook.duplicate", "Duplicate webhook retry ignored.", **log_fields)
+        _record_diagnostic_event(
+            event_type="chatwoot.webhook.duplicate",
+            summary="Duplicate Chatwoot webhook retry ignored.",
+            status_value="info",
+            conversation_id=conversation_id,
+            payload=log_fields,
+            context=context,
+        )
         return existing_record
 
     initial_state = {
@@ -577,6 +752,26 @@ async def receive_chatwoot_webhook(
     if conversation_id:
         record.id = conversation_id
     saved = store.save(record, context=context)
+    _log_event(
+        logging.INFO,
+        "chatwoot.webhook.persisted",
+        "Inbound message persisted and draft generated.",
+        sagad_conversation_id=saved.id,
+        **log_fields,
+    )
+    _record_diagnostic_event(
+        event_type="chatwoot.webhook.persisted",
+        summary="Inbound message persisted and draft generated.",
+        status_value="success",
+        conversation_id=saved.id,
+        payload={
+            **log_fields,
+            "intent": saved.intent,
+            "risk_level": saved.risk_level,
+            "approval_status": saved.approval_status,
+        },
+        context=context,
+    )
     await realtime_manager.broadcast(
         context.organization_id,
         _realtime_event(
@@ -664,14 +859,40 @@ async def approve_send(
         raise HTTPException(status_code=409, detail="Conversation is not waiting for approval.")
 
     content = request.edited_reply or record.draft_reply
+    _log_event(
+        logging.INFO,
+        "chatwoot.send.attempt",
+        "Supervisor approved reply; attempting Chatwoot send.",
+        sagad_conversation_id=record.id,
+        chatwoot_conversation_id=record.chatwoot_conversation_id,
+    )
+    _record_diagnostic_event(
+        event_type="chatwoot.send.attempt",
+        summary="Supervisor approved reply; attempting Chatwoot send.",
+        status_value="info",
+        conversation_id=record.id,
+        payload={
+            "chatwoot_conversation_id": record.chatwoot_conversation_id,
+            "supervisor_id": request.supervisor_id,
+            "edited": bool(request.edited_reply),
+        },
+        context=context,
+        actor_type="user",
+        actor_id=request.supervisor_id,
+    )
     result = await send_approved_reply(
         settings=configured_settings(get_settings(), context),
         chatwoot_conversation_id=record.chatwoot_conversation_id,
         content=content,
     )
+    plan, tool_result = _chatwoot_send_tool_result(record, result, content=content)
     record.draft_reply = content
     record.approval_status = "sent" if result["status"] in {"sent", "dry_run"} else "send_failed"
     record.send_status = result["status"]
+    if all(existing.id != plan.id for existing in record.tool_plans):
+        record.tool_plans.append(plan)
+    if all(existing.id != tool_result.id for existing in record.tool_results):
+        record.tool_results.append(tool_result)
     if result["status"] in {"sent", "dry_run"}:
         record.messages.append(
             ConversationMessageRecord(
@@ -681,17 +902,58 @@ async def approve_send(
                 payload={
                     "approval": "supervisor_approved",
                     "send_status": result["status"],
+                    "tool_result_id": tool_result.id,
                 },
             ),
         )
     record.updated_at = datetime.now(timezone.utc)
     saved = store.save(record, context=context)
+    store.record_tool_execution(
+        plan,
+        tool_result,
+        conversation_id=saved.id,
+        context=context,
+    )
     store.record_approval(
         saved,
         supervisor_id=request.supervisor_id,
         approved=True,
         edited_reply=request.edited_reply,
         context=context,
+    )
+    event_status = "success" if result["status"] in {"sent", "dry_run"} else "error"
+    event_type = (
+        "chatwoot.send.succeeded"
+        if result["status"] == "sent"
+        else "chatwoot.send.dry_run"
+        if result["status"] == "dry_run"
+        else "chatwoot.send.failed"
+    )
+    log_level = logging.INFO if event_status != "error" else logging.ERROR
+    _log_event(
+        log_level,
+        event_type,
+        str(result.get("detail", "Chatwoot send completed.")),
+        sagad_conversation_id=saved.id,
+        chatwoot_conversation_id=saved.chatwoot_conversation_id,
+        send_status=saved.send_status,
+        http_status=result.get("http_status"),
+        error_type=result.get("error_type"),
+    )
+    _record_diagnostic_event(
+        event_type=event_type,
+        summary=str(result.get("detail", "Chatwoot send completed.")),
+        status_value=event_status,
+        conversation_id=saved.id,
+        payload={
+            "send_status": saved.send_status,
+            "approval_status": saved.approval_status,
+            "tool_result_id": tool_result.id,
+            "provider_result": _chatwoot_tool_payload(result),
+        },
+        context=context,
+        actor_type="user",
+        actor_id=request.supervisor_id,
     )
     await realtime_manager.broadcast(
         context.organization_id,

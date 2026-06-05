@@ -52,6 +52,29 @@ interface AgentStudioQaFinding {
   detail: string;
 }
 
+interface AgentStudioToolPlan {
+  id: string;
+  provider: string;
+  tool_name: string;
+  action: string;
+  risk_level: "low" | "medium" | "high";
+  requires_approval: boolean;
+  approved: boolean;
+  dry_run: boolean;
+  args: Record<string, unknown>;
+}
+
+interface AgentStudioToolResult {
+  id: string;
+  plan_id: string;
+  provider: string;
+  tool_name: string;
+  status: "planned" | "dry_run" | "blocked" | "succeeded" | "failed";
+  detail: string;
+  external_id: string | null;
+  data: Record<string, unknown>;
+}
+
 interface AgentStudioConversationMessage {
   id: string;
   sender_type: "customer" | "ai_agent" | "human_agent" | "system" | "tool";
@@ -73,6 +96,8 @@ interface AgentStudioConversation {
   intent: string;
   risk_level: "low" | "medium" | "high";
   retrieved_knowledge: AgentStudioKnowledgeHit[];
+  tool_plans: AgentStudioToolPlan[];
+  tool_results: AgentStudioToolResult[];
   draft_reply: string;
   qa_findings: AgentStudioQaFinding[];
   compliance_status: "pass" | "needs_review" | "blocked";
@@ -485,6 +510,39 @@ function toAgentStudioConversationView(
     status: titleCase(finding.status),
     detail: finding.detail,
   }));
+  const toolResults = (conversation.tool_results ?? []).map((result) => ({
+    id: result.id,
+    planId: result.plan_id,
+    provider: result.provider,
+    toolName: result.tool_name,
+    status: titleCase(result.status),
+    detail: result.detail,
+    externalId: result.external_id,
+    data: result.data,
+    httpStatus:
+      typeof result.data.http_status === "number"
+        ? result.data.http_status
+        : null,
+    responseExcerpt:
+      typeof result.data.response_excerpt === "string"
+        ? result.data.response_excerpt
+        : "",
+    targetUrl:
+      typeof result.data.target_url === "string" ? result.data.target_url : "",
+    errorType:
+      typeof result.data.error_type === "string" ? result.data.error_type : "",
+  }));
+  const toolPlans = (conversation.tool_plans ?? []).map((plan) => ({
+    id: plan.id,
+    provider: plan.provider,
+    toolName: plan.tool_name,
+    action: plan.action,
+    riskLevel: titleCase(plan.risk_level),
+    requiresApproval: plan.requires_approval,
+    approved: plan.approved,
+    dryRun: plan.dry_run,
+    args: plan.args,
+  }));
   const threadMessages =
     conversation.messages && conversation.messages.length > 0
       ? conversation.messages
@@ -536,7 +594,10 @@ function toAgentStudioConversationView(
       traceUrl: conversation.trace_url ?? "LangSmith not configured",
       lastUpdatedAt: conversation.updated_at,
     },
-    toolCallIds: [],
+    toolCallIds: toolResults.map((result) => result.id),
+    toolPlans,
+    toolResults,
+    deliveryResults: toolResults,
     customerName: conversation.customer_name,
     contact: conversation.customer_name,
     name: conversation.customer_name,
@@ -613,6 +674,11 @@ function toAgentStudioConversationView(
         status: titleCase(conversation.compliance_status),
         rationale: "Supervisor-gated preview policy requires approval before send.",
       },
+      ...toolResults.map((result) => ({
+        step: result.toolName,
+        status: result.status,
+        rationale: result.detail,
+      })),
     ],
     aiDecisionTrail: [],
     messages: threadMessages.map((message) => ({
@@ -944,6 +1010,8 @@ function toToolView(tool: McpTool): ToolView {
   };
 }
 
+
+// TODO: Replace with real fetch from Agent Studio once API is available, and remove mockMcpTools from the tool views list.
 function previewToolViews(): ToolView[] {
   return [
     {
@@ -1163,6 +1231,7 @@ function previewToolViews(): ToolView[] {
   ];
 }
 
+// TODO: Replace with real fetch from Agent Studio once API is available, and remove mockConversations from the lane and queue health lists.
 function queueHealth(conversations: ConversationView[]): ViewRecord[] {
   if (conversations.length === 0) {
     return [];
@@ -1206,6 +1275,7 @@ function queueHealth(conversations: ConversationView[]): ViewRecord[] {
   });
 }
 
+// TODO: Replace with real fetch from Agent Studio once API is available, and remove mockConversations from the channel health list.
 function channelHealth(conversations: ConversationView[], source: string): ViewRecord[] {
   const chatwootCount = conversations.filter(
     (conversation) => conversation.channelProvider === "Chatwoot",
@@ -1250,6 +1320,7 @@ function attentionSummary(conversations: ConversationView[]): ViewRecord[] {
     return [];
   }
 
+  // TODO: Replace with real fetch from Agent Studio once API is available, and remove mockConversations from the attention summary list.
   const groups = ["Approval", "Low confidence", "Escalated", "Failed tool/send"];
 
   return groups.map((group) => {
@@ -1296,6 +1367,7 @@ function supervisorPodViews(): ViewRecord[] {
   });
 }
 
+// TODO: Replace with real fetch from Agent Studio once API is available, and remove mockConversations from the dashboard data.
 export async function getDashboardData(): Promise<DashboardViewData> {
   const liveConversations = await fetchAgentStudioConversations();
   const source = liveConversations ? "agent-studio" : "mock";
@@ -1438,6 +1510,7 @@ export async function getMcpTools(): Promise<ToolView[]> {
   return clone([...previewToolViews(), ...mockMcpTools.map(toToolView)]);
 }
 
+// TODO: Replace with real fetch from Agent Studio once API is available, and remove mockMcpTools from the tool connections list.
 export async function getIntegrationConnections(): Promise<IntegrationConnectionView[]> {
   const liveConnections = await fetchAgentStudioIntegrationConnections();
 

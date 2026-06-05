@@ -24,8 +24,7 @@ from agent_studio.store import StoreContext
 
 
 ADMIN_ROLES = {"owner", "admin"}
-
-
+# TODO: Consider adding caching to the PostgresIntegrationConfigStore for efficiency, with appropriate invalidation on updates.
 @dataclass
 class IntegrationConnectionRecord:
     provider: IntegrationProvider
@@ -164,6 +163,76 @@ def _connection_from_record(record: IntegrationConnectionRecord | None, provider
         detail=detail,
         updated_at=record.updated_at,
     )
+
+
+def _runtime_connection_from_settings(
+    settings: Settings,
+    provider: IntegrationProvider,
+) -> IntegrationConnection:
+    if provider == "chatwoot":
+        has_runtime_values = any(
+            [
+                settings.chatwoot_base_url,
+                settings.chatwoot_account_id,
+                settings.chatwoot_api_access_token,
+                settings.chatwoot_webhook_token,
+            ],
+        )
+        record = (
+            IntegrationConnectionRecord(
+                provider="chatwoot",
+                base_url=settings.chatwoot_base_url,
+                account_id=settings.chatwoot_account_id,
+                api_access_token="env-set" if settings.chatwoot_api_access_token else None,
+                webhook_token="env-set" if settings.chatwoot_webhook_token else None,
+                enabled=has_runtime_values,
+                dry_run=settings.chatwoot_dry_run,
+                allow_writes=settings.chatwoot_send_enabled,
+            )
+            if has_runtime_values
+            else None
+        )
+    else:
+        has_runtime_values = any(
+            [
+                settings.twenty_base_url,
+                settings.twenty_api_key,
+                settings.twenty_enabled,
+            ],
+        )
+        record = (
+            IntegrationConnectionRecord(
+                provider="twenty",
+                base_url=settings.twenty_base_url,
+                api_mode=settings.twenty_api_mode,
+                api_key="env-set" if settings.twenty_api_key else None,
+                enabled=settings.twenty_enabled,
+                dry_run=settings.twenty_dry_run,
+                allow_writes=settings.twenty_allow_writes,
+            )
+            if has_runtime_values
+            else None
+        )
+
+    connection = _connection_from_record(record, provider)
+    if connection.configured:
+        connection.detail = f"{connection.name} is configured from Agent Studio environment variables."
+    return connection
+
+
+def integration_connections_for_display(
+    settings: Settings,
+    context: StoreContext | None = None,
+) -> list[IntegrationConnection]:
+    connections: list[IntegrationConnection] = []
+    for provider in ("chatwoot", "twenty"):
+        saved = _connection_from_record(
+            integration_config_store.get(provider, context=context),
+            provider,
+        )
+        runtime = _runtime_connection_from_settings(settings, provider)
+        connections.append(saved if saved.configured else runtime)
+    return connections
 
 
 def _connection_detail(
@@ -486,10 +555,12 @@ def configured_settings(
     if chatwoot and chatwoot.enabled:
         updates.update(
             {
-                "chatwoot_base_url": chatwoot.base_url,
-                "chatwoot_account_id": chatwoot.account_id,
-                "chatwoot_api_access_token": chatwoot.api_access_token,
+                "chatwoot_base_url": chatwoot.base_url or settings.chatwoot_base_url,
+                "chatwoot_account_id": chatwoot.account_id or settings.chatwoot_account_id,
+                "chatwoot_api_access_token": chatwoot.api_access_token
+                or settings.chatwoot_api_access_token,
                 "chatwoot_webhook_token": chatwoot.webhook_token or settings.chatwoot_webhook_token,
+                "chatwoot_dry_run": chatwoot.dry_run,
             },
         )
     if twenty and twenty.enabled:
