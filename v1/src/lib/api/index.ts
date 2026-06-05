@@ -113,6 +113,58 @@ interface AgentStudioConversationList {
   conversations: AgentStudioConversation[];
 }
 
+interface AgentStudioKnowledgeDocument {
+  id: string;
+  source_id: string | null;
+  job_id: string | null;
+  pack_slug: string;
+  category: string;
+  source_path: string;
+  title: string;
+  content: string;
+  content_hash: string;
+  version: number;
+  approval_status: "needs_review" | "approved" | "archived";
+  chunk_count: number;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AgentStudioKnowledgeDocumentList {
+  documents: AgentStudioKnowledgeDocument[];
+}
+
+interface AgentStudioKnowledgeIngestionError {
+  id: string;
+  job_id: string;
+  source_path: string;
+  error_code: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+interface AgentStudioKnowledgeIngestionJob {
+  id: string;
+  source_id: string;
+  source_name: string;
+  source_type: string;
+  status: string;
+  total_files: number;
+  processed_files: number;
+  failed_files: number;
+  summary: string;
+  metadata: Record<string, unknown>;
+  errors: AgentStudioKnowledgeIngestionError[];
+  created_at: string;
+  updated_at: string;
+}
+
+interface AgentStudioKnowledgeIngestionJobList {
+  jobs: AgentStudioKnowledgeIngestionJob[];
+}
+
 export interface IntegrationConnectionView {
   provider: "chatwoot" | "twenty";
   name: string;
@@ -214,6 +266,52 @@ async function fetchAgentStudioIntegrationConnections(): Promise<IntegrationConn
 
     const payload = (await response.json()) as IntegrationConnectionList;
     return Array.isArray(payload.connections) ? payload.connections : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchAgentStudioKnowledgeDocuments(): Promise<AgentStudioKnowledgeDocument[] | null> {
+  const baseUrl = agentStudioBaseUrl();
+  if (!baseUrl) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/knowledge/documents`, {
+      headers: await agentStudioHeaders(),
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as AgentStudioKnowledgeDocumentList;
+    return Array.isArray(payload.documents) ? payload.documents : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchAgentStudioKnowledgeJobs(): Promise<AgentStudioKnowledgeIngestionJob[] | null> {
+  const baseUrl = agentStudioBaseUrl();
+  if (!baseUrl) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/knowledge/ingestion-jobs`, {
+      headers: await agentStudioHeaders(),
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as AgentStudioKnowledgeIngestionJobList;
+    return Array.isArray(payload.jobs) ? payload.jobs : null;
   } catch {
     return null;
   }
@@ -1500,6 +1598,109 @@ export async function getContactDrivers(): Promise<DriverView[]> {
 
 export async function getSopReferences(): Promise<SopView[]> {
   return clone(mockSopReferences.map(toSopView));
+}
+
+export async function getKnowledgeIngestionOverview(): Promise<ViewRecord> {
+  const [liveDocuments, liveJobs] = await Promise.all([
+    fetchAgentStudioKnowledgeDocuments(),
+    fetchAgentStudioKnowledgeJobs(),
+  ]);
+  const documents =
+    liveDocuments?.map((document) => ({
+      id: document.id,
+      title: document.title,
+      category: titleCase(document.category),
+      type: titleCase(document.category),
+      sourcePath: document.source_path,
+      source: document.pack_slug,
+      owner: "Knowledge Ops",
+      status: titleCase(document.approval_status),
+      approvalStatus: document.approval_status,
+      version: document.version,
+      chunks: document.chunk_count,
+      summary: document.content.slice(0, 180),
+      updatedAt: document.updated_at,
+      metadata: document.metadata,
+    })) ?? mockSopReferences.map(toSopView);
+
+  const jobs =
+    liveJobs?.map((job) => ({
+      id: job.id,
+      source: job.source_name,
+      sourceType: titleCase(job.source_type),
+      status: titleCase(job.status),
+      processed: job.processed_files,
+      failed: job.failed_files,
+      total: job.total_files,
+      summary: job.summary,
+      updatedAt: job.updated_at,
+      errors: job.errors,
+    })) ?? [
+      {
+        id: "demo-job-local-files",
+        source: "Manual Upload",
+        sourceType: "Local Files",
+        status: "Needs Review",
+        processed: 3,
+        failed: 0,
+        total: 3,
+        summary: "Demo SOP, refund policy, and shipping FAQ are waiting for review.",
+        updatedAt: demoNow,
+        errors: [],
+      },
+    ];
+
+  const sources = [
+    {
+      name: "Manual Uploads",
+      type: "Files",
+      status: "Ready",
+      sync: "Manual",
+      detail: "MD, TXT, PDF, DOCX, XLSX, CSV, and transcripts through Agent Studio.",
+    },
+    {
+      name: "Markdown Knowledge Packs",
+      type: "Local source",
+      status: "Ready",
+      sync: "Manual re-index",
+      detail: "Seed KB, SOP, QA, compliance, escalation, and template records.",
+    },
+    {
+      name: "Google Drive",
+      type: "Cloud source",
+      status: "Planned",
+      sync: "24h planned",
+      detail: "Future source adapter behind Agent Studio; not browser-direct.",
+    },
+    {
+      name: "Websites",
+      type: "Public URLs",
+      status: "Planned",
+      sync: "Weekly planned",
+      detail: "Future public source adapter with manual refresh.",
+    },
+  ];
+
+  return clone({
+    documents,
+    jobs,
+    sources,
+    missingKnowledge: [
+      {
+        topic: "Sale-item refund exceptions",
+        count: 7,
+        severity: "High",
+        recommendedAction: "Add or approve a SOP rule for sale-item refund handling.",
+      },
+      {
+        topic: "Warranty proof requirements",
+        count: 4,
+        severity: "Medium",
+        recommendedAction: "Upload warranty verification script and approve for Support Agent.",
+      },
+    ],
+    source: liveDocuments || liveJobs ? "agent-studio" : "mock",
+  });
 }
 
 export async function getSopRefs(): Promise<SopView[]> {

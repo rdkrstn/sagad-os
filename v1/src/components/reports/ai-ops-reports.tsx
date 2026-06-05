@@ -35,7 +35,7 @@ export function AiOpsReports({ data }: { data: unknown }) {
   const attention = asArray(
     dashboard.attentionSummary ?? dashboard.attentionItems,
   ).map(asRecord);
-
+// TODO: This component is currently using mock data and does not have real API connections. Once the Agent Studio APIs are available, update the data fetching logic to retrieve real metrics, conversations, and attention summary data, and remove the default dashboard fallback. Also, consider breaking this into smaller components for each section of the report for better maintainability and readability.
   const topIssue = textOf(
     metrics,
     ["topIssue"],
@@ -49,6 +49,7 @@ export function AiOpsReports({ data }: { data: unknown }) {
 
   return (
     <>
+    {/* TODO: This component is currently using mock data and does not have real API connections. Once the Agent Studio APIs are available, update the data fetching logic to retrieve real metrics, conversations, and attention summary data, and remove the default dashboard fallback. Also, consider breaking this into smaller components for each section of the report for better maintainability and readability.  */}
       <PageHeader
         description="Basic AI Ops reporting for automation, approvals, rejections, escalations, trust score, and missing knowledge."
         meta={textOf(dashboard, ["lastUpdated", "asOf"], "Demo data")}
@@ -126,7 +127,7 @@ export function AiOpsReports({ data }: { data: unknown }) {
           );
         })}
       </div>
-
+{/* TODO: This component is currently using mock data and does not have real API connections. Once the Agent Studio APIs are available, update the data fetching logic to retrieve real metrics, conversations, and attention summary data, and remove the default dashboard fallback. Also, consider breaking this into smaller components for each section of the report for better maintainability and readability.   */}
       <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
         <SectionPanel
           action={<Badge variant="outline">{attention.length} signals</Badge>}
@@ -169,7 +170,7 @@ export function AiOpsReports({ data }: { data: unknown }) {
             rows={attention}
           />
         </SectionPanel>
-
+{/* TODO: This component is currently using mock data and does not have real API connections. Once the Agent Studio APIs are available, update the data fetching logic to retrieve real metrics, conversations, and attention summary data, and remove the default dashboard fallback. Also, consider breaking this into smaller components for each section of the report for better maintainability and readability.   */}
         <SectionPanel eyebrow="Knowledge gaps" title="Recommended Action">
           <div className="space-y-4 p-4">
             <div className="rounded-lg border bg-[#F8F6F1] p-4">
@@ -248,4 +249,3 @@ export function AiOpsReports({ data }: { data: unknown }) {
     </>
   );
 }
-

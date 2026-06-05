@@ -1,316 +1,375 @@
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
+import { MetricStrip } from "@/components/ui/metric-strip";
+import { SectionPanel } from "@/components/ui/section-panel";
+import { StatusChip, toneFromStatus } from "@/components/ui/status-chip";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   asArray,
   asRecord,
   textOf,
   type LooseRecord,
 } from "@/components/ui/data-access";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { MetricStrip } from "@/components/ui/metric-strip";
-import { SectionPanel } from "@/components/ui/section-panel";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { StatusChip, toneFromStatus } from "@/components/ui/status-chip";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
-import {
+  AlertTriangle,
   CheckCircle2,
-  Clock3,
   Database,
-  FileSearch,
-  Filter,
-  RefreshCcw,
-  ShieldCheck,
+  FileCheck2,
+  FileClock,
+  FolderSync,
+  LibraryBig,
+  UploadCloud,
 } from "lucide-react";
 
-const defaultReferenceRows: LooseRecord[] = [
-  {
-    title: "Buyer qualification FAQ",
-    type: "FAQ",
-    owner: "Sales Ops",
-    updatedAt: "Needs adapter sync",
-    status: "Draft",
-    summary: "Qualification criteria and objection handling for inbound buyers.",
-  },
-  {
-    title: "Listing verification SOP",
-    type: "SOP",
-    owner: "Listing Ops",
-    updatedAt: "Pending source",
-    status: "Review",
-    summary: "Required checks before a property answer can be sent.",
-  },
-  {
-    title: "Fallback escalation playbook",
-    type: "Playbook",
-    owner: "Supervisor",
-    updatedAt: "Pending source",
-    status: "Queued",
-    summary: "Escalation copy and routing rules for uncertain answers.",
-  },
-];
-
-function hasStatus(row: LooseRecord, terms: string[]) {
-  const status = textOf(row, ["status", "health"], "Draft").toLowerCase();
-  return terms.some((term) => status.includes(term));
+function numberOf(row: LooseRecord, keys: string[], fallback = 0): number {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "number") {
+      return value;
+    }
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return fallback;
 }
 
-export function KnowledgeInventory({ references }: { references: unknown }) {
-  const rows = asArray(references).map(asRecord);
-  const displayRows = rows.length > 0 ? rows : defaultReferenceRows;
-  const readyCount = displayRows.filter((row) =>
-    hasStatus(row, ["active", "approved", "healthy", "ok"]),
+function rowsFromOverview(overview: unknown, key: string): LooseRecord[] {
+  return asArray(asRecord(overview)[key]).map(asRecord);
+}
+
+function statusTone(row: LooseRecord): ReturnType<typeof toneFromStatus> {
+  return toneFromStatus(textOf(row, ["status", "approvalStatus"], "Unknown"));
+}
+
+export function KnowledgeInventory({ overview }: { overview: unknown }) {
+  const root = asRecord(overview);
+  const documents = rowsFromOverview(root, "documents");
+  const jobs = rowsFromOverview(root, "jobs");
+  const sources = rowsFromOverview(root, "sources");
+  const missingKnowledge = rowsFromOverview(root, "missingKnowledge");
+  const liveSource = textOf(root, ["source"], "mock");
+  const reviewCount = documents.filter((row) =>
+    textOf(row, ["approvalStatus", "status"], "").toLowerCase().includes("review"),
   ).length;
-  const reviewCount = displayRows.filter((row) =>
-    hasStatus(row, ["pending", "review", "draft", "queued"]),
+  const approvedCount = documents.filter((row) =>
+    textOf(row, ["approvalStatus", "status"], "").toLowerCase().includes("approved"),
   ).length;
-  const ownerCount = new Set(
-    displayRows.map((row) => textOf(row, ["owner", "team"], "Ops")),
-  ).size;
+  const failedJobs = jobs.filter((row) => numberOf(row, ["failed"]) > 0).length;
 
   return (
     <>
       <PageHeader
-        description="Inventory of FAQs, process docs, verification scripts, playbooks, and SOP references available to the agents."
-        title="KB/SOP Inventory"
+        description="Approved answer source for SOPs, policies, transcripts, spreadsheets, documents, and future connected sources."
+        meta={liveSource === "agent-studio" ? "Agent Studio live" : "Preview fallback"}
+        title="Knowledge"
       />
 
       <div className="space-y-4">
         <MetricStrip
           items={[
             {
-              label: "References",
-              value: displayRows.length,
-              detail: "Indexed knowledge objects",
-              icon: Database,
+              label: "Sources",
+              value: sources.length,
+              detail: "Manual now, Drive later",
+              icon: FolderSync,
             },
             {
-              label: "Ready",
-              value: readyCount,
-              detail: "Approved for agent grounding",
-              icon: CheckCircle2,
+              label: "Documents",
+              value: documents.length,
+              detail: "Imported knowledge records",
+              icon: LibraryBig,
             },
             {
               label: "Needs review",
               value: reviewCount,
-              detail: "Draft, queued, or pending",
-              icon: Clock3,
+              detail: "Not available to agents yet",
+              icon: FileClock,
             },
             {
-              label: "Owners",
-              value: ownerCount,
-              detail: "Mapped accountability lanes",
-              icon: ShieldCheck,
+              label: "Approved",
+              value: approvedCount,
+              detail: "Retrieval eligible chunks",
+              icon: FileCheck2,
             },
           ]}
         />
 
-        <Tabs defaultValue="library" className="gap-4">
-          <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-xs lg:flex-row lg:items-center lg:justify-between">
-            <TabsList className="w-full sm:w-fit">
-              <TabsTrigger value="library">Library</TabsTrigger>
-              <TabsTrigger value="coverage">Coverage</TabsTrigger>
-              <TabsTrigger value="audit">Audit</TabsTrigger>
-            </TabsList>
-            <div className="grid gap-2 sm:grid-cols-[minmax(180px,1fr)_160px_160px_auto] lg:min-w-[680px]">
-              <div className="relative">
-                <FileSearch
-                  aria-hidden="true"
-                  className="pointer-events-none absolute left-2.5 top-2 size-4 text-muted-foreground"
-                />
-                <Input
-                  className="bg-background pl-8"
-                  placeholder="Search title, owner, or answer"
-                  readOnly
-                />
-              </div>
-              <Select defaultValue="all" disabled>
-                <SelectTrigger className="w-full bg-background">
-                  <SelectValue placeholder="Type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All types</SelectItem>
-                  <SelectItem value="faq">FAQ</SelectItem>
-                  <SelectItem value="sop">SOP</SelectItem>
-                  <SelectItem value="playbook">Playbook</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select defaultValue="all" disabled>
-                <SelectTrigger className="w-full bg-background">
-                  <SelectValue placeholder="Status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All statuses</SelectItem>
-                  <SelectItem value="ready">Ready</SelectItem>
-                  <SelectItem value="review">Review</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button variant="outline">
-                <Filter aria-hidden="true" />
-                Filter
-              </Button>
-            </div>
-          </div>
+        <Tabs defaultValue="sources" className="space-y-4">
+          <TabsList>
+            <TabsTrigger value="sources">Sources</TabsTrigger>
+            <TabsTrigger value="documents">Documents</TabsTrigger>
+            <TabsTrigger value="review">Review Queue</TabsTrigger>
+            <TabsTrigger value="jobs">Ingestion Jobs</TabsTrigger>
+            <TabsTrigger value="missing">Missing Knowledge</TabsTrigger>
+          </TabsList>
 
-          <TabsContent value="library" className="mt-0">
+          <TabsContent value="sources" className="mt-0">
+            <SectionPanel title="Content Sources" eyebrow="Ingestion">
+              <DataTable
+                columns={[
+                  {
+                    key: "name",
+                    label: "Source",
+                    render: (row) => (
+                      <div>
+                        <div className="font-medium text-foreground">
+                          {textOf(row, ["name"])}
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          {textOf(row, ["detail"])}
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "type",
+                    label: "Type",
+                    render: (row) => <Badge variant="secondary">{textOf(row, ["type"])}</Badge>,
+                  },
+                  {
+                    key: "sync",
+                    label: "Sync",
+                    render: (row) => textOf(row, ["sync"], "Manual"),
+                  },
+                  {
+                    key: "status",
+                    label: "Status",
+                    render: (row) => (
+                      <StatusChip tone={statusTone(row)}>
+                        {textOf(row, ["status"], "Unknown")}
+                      </StatusChip>
+                    ),
+                  },
+                ]}
+                emptyLabel="No content sources are configured."
+                rows={sources}
+              />
+            </SectionPanel>
+          </TabsContent>
+
+          <TabsContent value="documents" className="mt-0">
+            <SectionPanel title="Knowledge Documents" eyebrow="Approved answer source">
+              <DataTable
+                columns={[
+                  {
+                    key: "title",
+                    label: "Document",
+                    render: (row) => (
+                      <div className="min-w-[260px]">
+                        <div className="font-medium text-foreground">
+                          {textOf(row, ["title", "name"])}
+                        </div>
+                        <div className="line-clamp-2 text-sm text-muted-foreground">
+                          {textOf(row, ["summary", "description", "sourcePath"], "")}
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "category",
+                    label: "Category",
+                    render: (row) => (
+                      <Badge variant="secondary">
+                        {textOf(row, ["category", "type"], "KB")}
+                      </Badge>
+                    ),
+                  },
+                  {
+                    key: "version",
+                    label: "Version",
+                    render: (row) => `v${numberOf(row, ["version"], 1)}`,
+                  },
+                  {
+                    key: "chunks",
+                    label: "Chunks",
+                    render: (row) => numberOf(row, ["chunks", "chunkCount"]),
+                  },
+                  {
+                    key: "updated",
+                    label: "Updated",
+                    render: (row) => textOf(row, ["updatedAt", "lastUpdated"], "Pending"),
+                  },
+                  {
+                    key: "status",
+                    label: "Status",
+                    render: (row) => (
+                      <StatusChip tone={statusTone(row)}>
+                        {textOf(row, ["status", "approvalStatus"], "Needs Review")}
+                      </StatusChip>
+                    ),
+                  },
+                ]}
+                emptyLabel="No knowledge documents are available yet."
+                rows={documents}
+              />
+            </SectionPanel>
+          </TabsContent>
+
+          <TabsContent value="review" className="mt-0">
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-              <SectionPanel title="Reference Library" eyebrow="Knowledge base">
+              <SectionPanel title="Needs Review" eyebrow="Governance">
                 <DataTable
                   columns={[
                     {
                       key: "title",
-                      label: "Title",
-                      render: (row: LooseRecord) => (
-                        <div className="min-w-[220px]">
-                          <div className="font-medium text-foreground">
-                            {textOf(row, ["title", "name", "question"])}
-                          </div>
-                          <div className="line-clamp-2 text-muted-foreground">
-                            {textOf(row, ["summary", "description", "answer"], "")}
-                          </div>
-                        </div>
-                      ),
+                      label: "Document",
+                      render: (row) => textOf(row, ["title", "name"]),
                     },
                     {
-                      key: "type",
-                      label: "Type",
-                      render: (row: LooseRecord) => (
-                        <Badge variant="secondary">
-                          {textOf(row, ["type", "category"], "Reference")}
-                        </Badge>
-                      ),
+                      key: "category",
+                      label: "Category",
+                      render: (row) => textOf(row, ["category", "type"], "KB"),
                     },
                     {
-                      key: "owner",
-                      label: "Owner",
-                      render: (row: LooseRecord) =>
-                        textOf(row, ["owner", "team"], "Ops"),
-                    },
-                    {
-                      key: "updated",
-                      label: "Updated",
-                      render: (row: LooseRecord) =>
-                        textOf(row, ["updatedAt", "lastUpdated"], "Pending"),
+                      key: "source",
+                      label: "Source",
+                      render: (row) => textOf(row, ["sourcePath", "source"], "Manual"),
                     },
                     {
                       key: "status",
                       label: "Status",
-                      render: (row: LooseRecord) => {
-                        const status = textOf(row, ["status", "health"], "Draft");
-                        return (
-                          <StatusChip tone={toneFromStatus(status)}>
-                            {status}
-                          </StatusChip>
-                        );
-                      },
+                      render: (row) => (
+                        <StatusChip tone="warning">
+                          {textOf(row, ["status", "approvalStatus"], "Needs Review")}
+                        </StatusChip>
+                      ),
                     },
                   ]}
-                  emptyLabel="No knowledge references are connected yet."
-                  rows={rows}
+                  emptyLabel="No documents are waiting for review."
+                  rows={documents.filter((row) =>
+                    textOf(row, ["status", "approvalStatus"], "")
+                      .toLowerCase()
+                      .includes("review"),
+                  )}
                 />
               </SectionPanel>
 
-              <SectionPanel title="Selected Payload" eyebrow="Adapter preview">
-                <div className="space-y-4 p-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="knowledge-payload">Grounding payload</Label>
-                    <Textarea
-                      className="min-h-48 resize-none bg-muted/40 font-mono text-xs"
-                      id="knowledge-payload"
-                      readOnly
-                      value={JSON.stringify(displayRows[0] ?? {}, null, 2)}
-                    />
+              <SectionPanel title="Review Rule" eyebrow="Safety">
+                <div className="space-y-3 p-4 text-sm text-muted-foreground">
+                  <div className="flex gap-3 rounded-lg border bg-background p-3">
+                    <CheckCircle2 className="mt-0.5 size-4 text-emerald-600" />
+                    <p>Only approved documents become available to Sales and Support agents.</p>
                   </div>
-                  <div className="grid gap-2 text-xs text-muted-foreground">
-                    <div className="flex items-center justify-between rounded-lg border bg-background px-3 py-2">
-                      <span>Embedding sync</span>
-                      <StatusChip tone="warning">Pending</StatusChip>
-                    </div>
-                    <div className="flex items-center justify-between rounded-lg border bg-background px-3 py-2">
-                      <span>Source adapter</span>
-                      <StatusChip tone={rows.length > 0 ? "good" : "neutral"}>
-                        {rows.length > 0 ? "Connected" : "Mocked"}
-                      </StatusChip>
-                    </div>
+                  <div className="flex gap-3 rounded-lg border bg-background p-3">
+                    <Database className="mt-0.5 size-4 text-blue-600" />
+                    <p>pgvector is the retrieval index. Reviewable source records remain the source of truth.</p>
+                  </div>
+                  <div className="flex gap-3 rounded-lg border bg-background p-3">
+                    <AlertTriangle className="mt-0.5 size-4 text-amber-600" />
+                    <p>SOP, compliance, refund, billing, and verification content should stay approval-gated.</p>
                   </div>
                 </div>
               </SectionPanel>
             </div>
           </TabsContent>
 
-          <TabsContent value="coverage" className="mt-0">
-            <div className="grid gap-4 md:grid-cols-3">
-              {["FAQ", "SOP", "Playbook"].map((type) => {
-                const count = displayRows.filter(
-                  (row) =>
-                    textOf(row, ["type", "category"], "Reference").toLowerCase() ===
-                    type.toLowerCase(),
-                ).length;
-
-                return (
-                  <Card className="shadow-xs" key={type}>
-                    <CardHeader>
-                      <CardTitle>{type}</CardTitle>
-                      <CardDescription>
-                        Coverage for agent retrieval and supervisor review.
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="flex items-center justify-between">
-                      <span className="text-3xl font-semibold tabular-nums">
-                        {count}
-                      </span>
-                      <StatusChip tone={count > 0 ? "good" : "warning"}>
-                        {count > 0 ? "Mapped" : "Gap"}
+          <TabsContent value="jobs" className="mt-0">
+            <SectionPanel
+              title="Ingestion Jobs"
+              eyebrow={failedJobs > 0 ? `${failedJobs} failed` : "Processing history"}
+            >
+              <DataTable
+                columns={[
+                  {
+                    key: "source",
+                    label: "Source",
+                    render: (row) => (
+                      <div>
+                        <div className="font-medium text-foreground">
+                          {textOf(row, ["source"])}
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          {textOf(row, ["summary"])}
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "type",
+                    label: "Type",
+                    render: (row) => textOf(row, ["sourceType"], "Manual"),
+                  },
+                  {
+                    key: "processed",
+                    label: "Processed",
+                    render: (row) =>
+                      `${numberOf(row, ["processed"])}/${numberOf(row, ["total"])}`,
+                  },
+                  {
+                    key: "failed",
+                    label: "Failed",
+                    render: (row) => numberOf(row, ["failed"]),
+                  },
+                  {
+                    key: "status",
+                    label: "Status",
+                    render: (row) => (
+                      <StatusChip tone={statusTone(row)}>
+                        {textOf(row, ["status"], "Queued")}
                       </StatusChip>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
+                    ),
+                  },
+                ]}
+                emptyLabel="No ingestion jobs have run yet."
+                rows={jobs}
+              />
+            </SectionPanel>
           </TabsContent>
 
-          <TabsContent value="audit" className="mt-0">
-            <SectionPanel title="Readiness Checks" eyebrow="Supervisor controls">
-              <div className="grid gap-3 p-4 md:grid-cols-3">
-                {[
-                  "Source freshness",
-                  "Answer citation coverage",
-                  "Escalation fallback copy",
-                ].map((check) => (
-                  <div
-                    className="rounded-lg border bg-background p-4"
-                    key={check}
-                  >
-                    <RefreshCcw
-                      aria-hidden="true"
-                      className="mb-3 size-4 text-muted-foreground"
-                    />
-                    <div className="font-medium text-foreground">{check}</div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Adapter-backed validation is staged for this control.
-                    </p>
-                  </div>
-                ))}
-              </div>
+          <TabsContent value="missing" className="mt-0">
+            <SectionPanel title="Missing Knowledge" eyebrow="Recommended action">
+              <DataTable
+                columns={[
+                  {
+                    key: "topic",
+                    label: "Topic",
+                    render: (row) => (
+                      <div className="font-medium text-foreground">
+                        {textOf(row, ["topic"])}
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "count",
+                    label: "Mentions",
+                    render: (row) => numberOf(row, ["count"]),
+                  },
+                  {
+                    key: "severity",
+                    label: "Severity",
+                    render: (row) => (
+                      <StatusChip tone={statusTone(row)}>
+                        {textOf(row, ["severity"], "Review")}
+                      </StatusChip>
+                    ),
+                  },
+                  {
+                    key: "action",
+                    label: "Recommended action",
+                    render: (row) => textOf(row, ["recommendedAction"]),
+                  },
+                ]}
+                emptyLabel="No missing knowledge topics detected."
+                rows={missingKnowledge}
+              />
             </SectionPanel>
           </TabsContent>
         </Tabs>
+
+        <div className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
+          <div className="flex items-start gap-3">
+            <UploadCloud className="mt-0.5 size-4 text-muted-foreground" />
+            <p>
+              Local ingestion is the first shipped path. Google Drive, websites, and external KBs
+              should connect later through Agent Studio source adapters, never from browser code.
+            </p>
+          </div>
+        </div>
       </div>
     </>
   );

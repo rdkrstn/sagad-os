@@ -24,7 +24,7 @@ flowchart LR
 |---|---|
 | Sagad Core | Orchestration engine and operating state |
 | Sagad Agents | Sales and Support AI agents |
-| Sagad Knowledge | SOP, policy, FAQ, and retrieval layer |
+| Sagad Knowledge | Ingestion, review, SOP, policy, FAQ, embeddings, and retrieval layer |
 | Sagad Approvals | Supervisor review and action queue |
 | Sagad Adapters | Chatwoot, Twenty, webhooks, and future tools |
 | Sagad Audit | Decision trail for every AI action |
@@ -34,3 +34,4 @@ flowchart LR
 
 The browser never calls Chatwoot, Twenty, MCP, or provider APIs directly. Agent Studio owns credentials, health checks, retries, write gates, and audit metadata.
 
+Knowledge ingestion follows the same boundary. The console can show sources, documents, jobs, and review state, but Agent Studio owns file parsing, OpenAI embeddings, pgvector writes, document approval, retrieval filters, and audit events.

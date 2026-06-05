@@ -1,8 +1,8 @@
-import { getSopReferences } from "@/lib/api/sagad-api";
+import { getKnowledgeIngestionOverview } from "@/lib/api/sagad-api";
 import { KnowledgeInventory } from "@/components/knowledge/knowledge-inventory";
 
 export default async function KnowledgePage() {
-  const references = await getSopReferences();
+  const overview = await getKnowledgeIngestionOverview();
 
-  return <KnowledgeInventory references={references} />;
+  return <KnowledgeInventory overview={overview} />;
 }

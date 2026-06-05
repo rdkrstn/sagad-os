@@ -1,6 +1,3 @@
-import hashlib
-import math
-import re
 from typing import Protocol
 
 from langchain_core.documents import Document
@@ -14,13 +11,15 @@ from agent_studio.db import (
     resolve_trusted_context,
     set_app_context,
 )
+from agent_studio.embeddings import (
+    EmbeddingService,
+    TOKEN_PATTERN,
+    content_hash,
+    tokenize,
+    vector_literal,
+)
 from agent_studio.knowledge import KnowledgeRecord, load_knowledge_records, to_documents
 from agent_studio.schemas import KnowledgeHit
-
-
-TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
-EMBEDDING_DIMENSIONS = 1536
-DEV_EMBEDDING_MODEL = "sagad-dev-hash-embedding-v1"
 
 
 class KnowledgeRetrieverProtocol(Protocol):
@@ -37,40 +36,15 @@ class KnowledgeRetrieverProtocol(Protocol):
         ...
 
 
-def tokenize(value: str) -> set[str]:
-    return set(TOKEN_PATTERN.findall(value.lower()))
-
-
-def content_hash(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def deterministic_embedding(value: str) -> list[float]:
-    vector = [0.0] * EMBEDDING_DIMENSIONS
-    tokens = TOKEN_PATTERN.findall(value.lower())
-    if not tokens:
-        return vector
-
-    for token in tokens:
-        digest = hashlib.sha256(token.encode("utf-8")).digest()
-        index = int.from_bytes(digest[:4], "big") % EMBEDDING_DIMENSIONS
-        sign = 1.0 if digest[4] % 2 == 0 else -1.0
-        vector[index] += sign
-
-    magnitude = math.sqrt(sum(item * item for item in vector))
-    if magnitude == 0:
-        return vector
-    return [item / magnitude for item in vector]
-
-
-def vector_literal(values: list[float]) -> str:
-    return "[" + ",".join(f"{value:.8f}" for value in values) + "]"
-
-
 class InMemoryKnowledgeRetriever:
     def __init__(self, records: list[KnowledgeRecord] | None = None) -> None:
         self.records = records if records is not None else load_knowledge_records()
         self.documents: list[Document] = to_documents(self.records)
+
+    def add_record(self, record: KnowledgeRecord) -> None:
+        self.records = [existing for existing in self.records if existing.id != record.id]
+        self.records.append(record)
+        self.documents = to_documents(self.records)
 
     def search(
         self,
@@ -113,6 +87,7 @@ class InMemoryKnowledgeRetriever:
 class PostgresKnowledgeRetriever:
     def __init__(self, settings: Settings, records: list[KnowledgeRecord] | None = None) -> None:
         self.settings = settings
+        self.embedding_service = EmbeddingService(settings)
         self.records = records if records is not None else load_knowledge_records()
         self.fallback = InMemoryKnowledgeRetriever(self.records)
         initialize_database(settings)
@@ -126,7 +101,10 @@ class PostgresKnowledgeRetriever:
         risk_level: str,
         limit: int = 4,
     ) -> list[KnowledgeHit]:
-        embedding = vector_literal(deterministic_embedding(f"{query} {intent} {risk_level}"))
+        embedding = vector_literal(
+            self.embedding_service.embed_text(f"{query} {intent} {risk_level}"),
+        )
+        embedding_model = self.embedding_service.embedding_model
         with connect(self.settings) as connection:
             context = resolve_trusted_context(connection, None)
             set_app_context(connection, context)
@@ -149,7 +127,7 @@ class PostgresKnowledgeRetriever:
                     intent,
                     risk_level,
                     Jsonb({"category": "approved_governed_knowledge"}),
-                    DEV_EMBEDDING_MODEL,
+                    embedding_model,
                 ),
             ).fetchone()["id"]
             rows = connection.execute(
@@ -186,7 +164,7 @@ class PostgresKnowledgeRetriever:
                 (
                     embedding,
                     context.organization_id,
-                    DEV_EMBEDDING_MODEL,
+                    embedding_model,
                     intent,
                     intent,
                     risk_level,
@@ -330,8 +308,8 @@ class PostgresKnowledgeRetriever:
                     (
                         chunk_id,
                         context.organization_id,
-                        DEV_EMBEDDING_MODEL,
-                        vector_literal(deterministic_embedding(record.content)),
+                        self.embedding_service.embedding_model,
+                        vector_literal(self.embedding_service.embed_text(record.content)),
                         document_hash,
                     ),
                 )

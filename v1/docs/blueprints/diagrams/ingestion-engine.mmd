@@ -1,0 +1,15 @@
+flowchart LR
+  Sources["Source Content<br/>MD / TXT / PDF / DOCX / XLSX / transcripts"] --> Extract["Extract Text<br/>format-specific parsers"]
+  Drive["Future Google Drive<br/>scheduled source adapter"] --> Extract
+  Extract --> Normalize["Normalize<br/>title, category, owner, source hash"]
+  Normalize --> Review["Needs Review<br/>operator approval gate"]
+  Review --> Approved["Approved Knowledge<br/>retrieval eligible"]
+  Approved --> Chunk["Chunk + Version<br/>metadata, source path, risk tags"]
+  Chunk --> Embed["OpenAI Embeddings<br/>text-embedding-3-small"]
+  Embed --> Vector["Sagad Postgres + pgvector<br/>knowledge_chunk_embeddings"]
+  Vector --> Retrieve["Approved Answer Source<br/>intent, risk, role filters"]
+  Retrieve --> Agents["Sales / Support Agents"]
+  Agents --> QA["QA / Compliance Gate"]
+  Review --> Audit["Sagad Audit<br/>ingestion and approval events"]
+  Embed --> Audit
+  Retrieve --> Audit
