@@ -30,9 +30,10 @@ IntegrationStatus = Literal[
     "error",
     "blocked",
 ]
+
 ToolExecutionStatus = Literal["planned", "dry_run", "blocked", "succeeded", "failed"]
 ToolRiskLevel = Literal["low", "medium", "high"]
-IntegrationProvider = Literal["chatwoot", "twenty"]
+IntegrationProvider = Literal["chatwoot", "twenty"] # TODO: Fetch from Agent Studio when API is available, and remove from the integration provider list. or should we create a new model for integration provider info that includes display name and other metadata?
 
 
 class KnowledgeHit(BaseModel):
@@ -66,23 +67,27 @@ class CrmProviderStatus(ExternalIntegrationStatus):
     provider: str = "Twenty CRM"
     kind: IntegrationKind = "crm"
 
-
 class CrmContactContext(BaseModel):
     provider: str = "Twenty CRM"
     status: IntegrationStatus = "unconfigured"
     contact_id: str | None = None
     display_name: str | None = None
     company_name: str | None = None
+    owner_id: str | None = None
+    owner_name: str | None = None
     phone_masked: str | None = None
     email_masked: str | None = None
     lead_stage: str | None = None
+    last_contacted_at: datetime | None = None
+    social_profiles: dict[str, str] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
     tasks: list[str] = Field(default_factory=list)
     service_history: list[str] = Field(default_factory=list)
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     raw: dict[str, object] = Field(default_factory=dict)
 
-
+# todo: Consider adding a ToolPlanResult model that combines the plan and result for easier correlation, and includes additional metadata such as execution timestamps and error details if applicable. This could simplify the tracking of tool executions and their outcomes in the conversation record.
 class ToolPlan(BaseModel):
     id: str = Field(default_factory=lambda: f"toolplan_{uuid4().hex[:12]}")
     provider: str = "Twenty CRM"
@@ -104,6 +109,19 @@ class ToolResult(BaseModel):
     detail: str
     external_id: str | None = None
     data: dict[str, object] = Field(default_factory=dict)
+
+
+class DiagnosticEvent(BaseModel):
+    id: str = Field(default_factory=lambda: f"event_{uuid4().hex[:12]}")
+    organization_id: str | None = None
+    conversation_id: str | None = None
+    event_type: str
+    actor_type: str = "system"
+    actor_id: str | None = None
+    status: Literal["info", "success", "warning", "error"] = "info"
+    summary: str
+    payload: dict[str, object] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class ChatwootWebhookPayload(BaseModel):
@@ -161,6 +179,10 @@ class ConversationRecord(BaseModel):
 
 class ConversationListResponse(BaseModel):
     conversations: list[ConversationRecord]
+
+
+class DiagnosticEventListResponse(BaseModel):
+    events: list[DiagnosticEvent]
 
 
 class IntegrationListResponse(BaseModel):

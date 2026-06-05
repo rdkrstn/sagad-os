@@ -98,6 +98,7 @@ Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations/twenty/health
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integrations/litellm/health
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/integration-configs
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/diagnostics/events
 ```
 
 After VPS deployment with the local `compose.vps.yaml`, check from inside the Docker network:
@@ -115,6 +116,19 @@ docker inspect --format='{{json .State.Health}}' sagad-agent-studio | python -m 
 docker logs --tail=200 sagad-agent-studio
 docker exec sagad-agent-studio python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8010/health/ready').read().decode())"
 ```
+
+For provider failures where Agent Studio returns HTTP 200 but the external action fails, use the console first:
+
+- `Conversation Review -> Tool & Delivery Results` shows the Chatwoot/Twenty action status, HTTP status, error type, and clipped provider response body for the selected conversation.
+- `Integrations -> Backend Diagnostics` shows recent Agent Studio webhook/send events, including rejected webhook tokens, ignored outgoing/private events, duplicate retries, send attempts, and failed provider responses.
+
+The server-side diagnostics endpoint is:
+
+```bash
+docker exec sagad-console node -e "fetch('http://sagad-agent-studio:8010/diagnostics/events', {headers:{'X-Sagad-Internal-Secret':process.env.AGENT_STUDIO_INTERNAL_SECRET || ''}}).then(r=>r.text()).then(console.log)"
+```
+
+Use `docker logs` only when the diagnostics endpoint, health endpoint, or console route cannot be reached.
 
 ## Optional LiteLLM Gateway
 

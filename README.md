@@ -280,6 +280,8 @@ real Chatwoot message
 
 Repeated messages from the same Chatwoot session append to the same Sagad conversation row. The console can use Agent Studio WebSocket events to refresh queue and review screens without manual reload.
 
+Provider failures are visible in the product, not only in container logs. Conversation Review shows Tool & Delivery Results for the selected thread, and Integrations shows recent Backend Diagnostics from Agent Studio audit events, including webhook token failures, ignored outgoing/private events, duplicate retries, send attempts, and failed provider HTTP responses.
+
 Twenty CRM starts read-only. External writes remain disabled or dry-run until human approval gates and write-policy tests are verified.
 
 ## Deployment Model
@@ -380,4 +382,8 @@ The current preview is not production-hardened. Do not use it for regulated or h
 
 ## License
 
-A license file should be added before the first stable public release.
+Sagad OS core is licensed under the GNU Affero General Public License v3.0 only.
+
+SPDX-License-Identifier: `AGPL-3.0-only`
+
+See `LICENSE`.

@@ -1,6 +1,12 @@
 "use client";
 
-import { useMemo, useState, type ChangeEvent, type FormEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -69,6 +75,16 @@ type FutureProviderRow = {
   nextStep: string;
 };
 
+type DiagnosticEventView = {
+  id: string;
+  event_type: string;
+  status: "info" | "success" | "warning" | "error";
+  summary: string;
+  conversation_id: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
 type PrimaryProviderMeta = {
   provider: IntegrationProvider;
   title: string;
@@ -78,7 +94,7 @@ type PrimaryProviderMeta = {
   icon: LucideIcon;
   accentClassName: string;
 };
-
+// TODO: Add a "last updated" timestamp to the connection status and surface it in the UI, so operators know how fresh the health data is and can correlate with changes or incidents in the provider systems.
 const providerMeta: PrimaryProviderMeta[] = [
   {
     provider: "chatwoot",
@@ -102,6 +118,7 @@ const providerMeta: PrimaryProviderMeta[] = [
   },
 ];
 
+// TODO: Add a "last updated" timestamp to the connection status and surface it in the UI, so operators know how fresh the health data is and can correlate with changes or incidents in the provider systems.
 const futureProviderRows: FutureProviderRow[] = [
   {
     provider: "LangSmith",
@@ -209,6 +226,20 @@ function isIntegrationConnection(value: unknown): value is IntegrationConnection
   );
 }
 
+function isDiagnosticEvent(value: unknown): value is DiagnosticEventView {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.event_type === "string" &&
+    typeof value.summary === "string" &&
+    typeof value.created_at === "string" &&
+    (value.status === "info" ||
+      value.status === "success" ||
+      value.status === "warning" ||
+      value.status === "error")
+  );
+}
+
 function detailFromPayload(payload: unknown): string {
   if (isRecord(payload) && typeof payload.detail === "string") {
     return payload.detail;
@@ -288,6 +319,49 @@ export function ToolCatalog({
     status: "idle",
     message: "",
   });
+  const [diagnosticEvents, setDiagnosticEvents] = useState<DiagnosticEventView[]>([]);
+  const [diagnosticMessage, setDiagnosticMessage] = useState(
+    "Loading backend diagnostics...",
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDiagnostics(): Promise<void> {
+      try {
+        const response = await fetch("/api/diagnostics/events?limit=20", {
+          cache: "no-store",
+        });
+        const payload = await parseJson(response);
+        if (cancelled) {
+          return;
+        }
+        if (!response.ok) {
+          setDiagnosticMessage(detailFromPayload(payload));
+          return;
+        }
+        const events =
+          isRecord(payload) && Array.isArray(payload.events)
+            ? payload.events.filter(isDiagnosticEvent)
+            : [];
+        setDiagnosticEvents(events);
+        setDiagnosticMessage(
+          events.length > 0
+            ? "Latest Agent Studio events."
+            : "No backend diagnostic events recorded yet.",
+        );
+      } catch {
+        if (!cancelled) {
+          setDiagnosticMessage("Could not load backend diagnostics.");
+        }
+      }
+    }
+
+    void loadDiagnostics();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const configuredCount = useMemo(
     () =>
@@ -920,6 +994,90 @@ export function ToolCatalog({
               },
             ]}
             rows={futureProviderRows}
+          />
+        </SectionPanel>
+
+        <SectionPanel title="Backend Diagnostics" eyebrow="Recent Agent Studio events">
+          <DataTable
+            columns={[
+              {
+                key: "event",
+                label: "Event",
+                render: (row: DiagnosticEventView) => (
+                  <div className="space-y-1">
+                    <div className="font-medium text-foreground">
+                      {row.event_type}
+                    </div>
+                    <div className="text-muted-foreground">{row.summary}</div>
+                  </div>
+                ),
+              },
+              {
+                key: "status",
+                label: "Status",
+                render: (row: DiagnosticEventView) => (
+                  <StatusChip tone={toneFromStatus(row.status)}>
+                    {row.status}
+                  </StatusChip>
+                ),
+              },
+              {
+                key: "conversation",
+                label: "Conversation",
+                render: (row: DiagnosticEventView) =>
+                  row.conversation_id ? (
+                    <Link
+                      className="font-medium text-[#174EA6] underline-offset-2 hover:underline"
+                      href={`/conversations?conversationId=${encodeURIComponent(
+                        row.conversation_id,
+                      )}`}
+                    >
+                      {row.conversation_id}
+                    </Link>
+                  ) : (
+                    "Platform"
+                  ),
+              },
+              {
+                key: "provider",
+                label: "Provider detail",
+                render: (row: DiagnosticEventView) => {
+                  const providerResult = isRecord(row.payload.provider_result)
+                    ? row.payload.provider_result
+                    : row.payload;
+                  const httpStatus =
+                    typeof providerResult.http_status === "number"
+                      ? `HTTP ${providerResult.http_status}`
+                      : "";
+                  const errorType =
+                    typeof providerResult.error_type === "string"
+                      ? providerResult.error_type
+                      : "";
+                  const responseExcerpt =
+                    typeof providerResult.response_excerpt === "string"
+                      ? providerResult.response_excerpt
+                      : "";
+                  return (
+                    <div className="space-y-1">
+                      <div>{[httpStatus, errorType].filter(Boolean).join(" / ") || "n/a"}</div>
+                      {responseExcerpt ? (
+                        <div className="line-clamp-2 text-[11px] leading-4 text-muted-foreground">
+                          {responseExcerpt}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                },
+              },
+              {
+                key: "time",
+                label: "Time",
+                render: (row: DiagnosticEventView) =>
+                  new Date(row.created_at).toLocaleString(),
+              },
+            ]}
+            emptyLabel={diagnosticMessage}
+            rows={diagnosticEvents}
           />
         </SectionPanel>
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -21,6 +23,7 @@ from agent_studio.schemas import (
     ConversationMessageRecord,
     ConversationRecord,
     CrmContactContext,
+    DiagnosticEvent,
     ToolPlan,
     ToolResult,
 )
@@ -78,6 +81,22 @@ class ConversationStoreProtocol(Protocol):
     ) -> None:
         ...
 
+    def record_event(
+        self,
+        event: DiagnosticEvent,
+        context: StoreContext | None = None,
+    ) -> DiagnosticEvent:
+        ...
+
+    def list_events(
+        self,
+        *,
+        conversation_id: str | None = None,
+        limit: int = 100,
+        context: StoreContext | None = None,
+    ) -> list[DiagnosticEvent]:
+        ...
+
     def clear(self) -> None:
         ...
 
@@ -113,6 +132,26 @@ def _json_list(value: object) -> list[object]:
 
 def _json_dict(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
+
+
+def _diagnostic_event_from_row(row: Mapping[str, object]) -> DiagnosticEvent:
+    payload = _json_dict(row.get("payload"))
+    status_value = payload.get("status")
+    status = status_value if status_value in {"info", "success", "warning", "error"} else "info"
+    summary_value = payload.get("summary")
+    summary = str(summary_value) if summary_value else str(row["event_type"])
+    return DiagnosticEvent(
+        id=str(row["id"]),
+        organization_id=str(row["organization_id"]) if row["organization_id"] else None,
+        conversation_id=str(row["conversation_id"]) if row["conversation_id"] else None,
+        event_type=str(row["event_type"]),
+        actor_type=str(row["actor_type"]),
+        actor_id=str(row["actor_id"]) if row["actor_id"] else None,
+        status=status,  # type: ignore[arg-type]
+        summary=summary,
+        payload=payload,
+        created_at=_coerce_datetime(row["created_at"]),
+    )
 
 
 def _inbound_message_from_record(record: ConversationRecord) -> ConversationMessageRecord:
@@ -180,6 +219,7 @@ class InMemoryConversationStore:
 
     def __init__(self) -> None:
         self._records: dict[str, ConversationRecord] = {}
+        self._events: list[DiagnosticEvent] = []
 
     def list(self, context: StoreContext | None = None) -> list[ConversationRecord]:
         return sorted(
@@ -244,8 +284,32 @@ class InMemoryConversationStore:
             record.crm_context = crm_context
         self.save(record, context=context)
 
+    def record_event(
+        self,
+        event: DiagnosticEvent,
+        context: StoreContext | None = None,
+    ) -> DiagnosticEvent:
+        scoped = context or DEFAULT_CONTEXT
+        if scoped.organization_id and not event.organization_id:
+            event.organization_id = scoped.organization_id
+        self._events.append(event)
+        return event
+
+    def list_events(
+        self,
+        *,
+        conversation_id: str | None = None,
+        limit: int = 100,
+        context: StoreContext | None = None,
+    ) -> list[DiagnosticEvent]:
+        events = self._events
+        if conversation_id:
+            events = [event for event in events if event.conversation_id == conversation_id]
+        return sorted(events, key=lambda event: event.created_at, reverse=True)[:limit]
+
     def clear(self) -> None:
         self._records.clear()
+        self._events.clear()
 
 
 class PostgresConversationStore:
@@ -542,6 +606,84 @@ class PostgresConversationStore:
                 },
             )
             connection.commit()
+
+    def record_event(
+        self,
+        event: DiagnosticEvent,
+        context: StoreContext | None = None,
+    ) -> DiagnosticEvent:
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            organization_id = event.organization_id or scoped.organization_id
+            self._record_audit_event(
+                connection,
+                organization_id=organization_id,
+                conversation_id=event.conversation_id,
+                actor_type=event.actor_type,
+                actor_id=event.actor_id or scoped.user_id,
+                event_type=event.event_type,
+                payload={
+                    "status": event.status,
+                    "summary": event.summary,
+                    **event.payload,
+                },
+            )
+            connection.commit()
+            event.organization_id = organization_id
+        return event
+
+    def list_events(
+        self,
+        *,
+        conversation_id: str | None = None,
+        limit: int = 100,
+        context: StoreContext | None = None,
+    ) -> list[DiagnosticEvent]:
+        bounded_limit = max(1, min(limit, 200))
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            if conversation_id:
+                rows = connection.execute(
+                    """
+                    SELECT
+                      id::text,
+                      organization_id::text,
+                      conversation_id,
+                      event_type,
+                      actor_type,
+                      actor_id,
+                      payload,
+                      created_at
+                    FROM audit_events
+                    WHERE organization_id = %s
+                      AND conversation_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (scoped.organization_id, conversation_id, bounded_limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT
+                      id::text,
+                      organization_id::text,
+                      conversation_id,
+                      event_type,
+                      actor_type,
+                      actor_id,
+                      payload,
+                      created_at
+                    FROM audit_events
+                    WHERE organization_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (scoped.organization_id, bounded_limit),
+                ).fetchall()
+        return [_diagnostic_event_from_row(row) for row in rows]
 
     def clear(self) -> None:
         with connect(self.settings) as connection:
@@ -996,6 +1138,26 @@ class StoreProxy:
             result,
             conversation_id=conversation_id,
             crm_context=crm_context,
+            context=context,
+        )
+
+    def record_event(
+        self,
+        event: DiagnosticEvent,
+        context: StoreContext | None = None,
+    ) -> DiagnosticEvent:
+        return self._current().record_event(event, context=context)
+
+    def list_events(
+        self,
+        *,
+        conversation_id: str | None = None,
+        limit: int = 100,
+        context: StoreContext | None = None,
+    ) -> list[DiagnosticEvent]:
+        return self._current().list_events(
+            conversation_id=conversation_id,
+            limit=limit,
             context=context,
         )
 
