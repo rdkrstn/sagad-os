@@ -38,5 +38,5 @@ Sagad Postgres with pgvector is the retrieval index. It is not the source of tru
 
 - Duplicate detection uses source path plus content hash.
 - Changed documents create a new version; old chunks are retired after the new version is approved.
-- Scanned PDFs without embedded text are rejected with an OCR-needed error.
-- Google Drive, Notion, Confluence, and websites are later source adapters. They should sync through Agent Studio, not browser code.
+- PDFs are parsed directly when embedded text exists. Scanned PDFs run local Tesseract OCR when `SAGAD_OCR_ENABLED=true`; otherwise they return `ocr_required`, `ocr_unavailable`, or `ocr_failed`.
+- Local uploads and extracted documents can be re-indexed on command from stored extracted content. Google Drive, Notion, Confluence, Guru, websites, and true external source sync are later source adapters. They should sync through Agent Studio, not browser code.

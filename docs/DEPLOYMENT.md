@@ -86,6 +86,19 @@ SAGAD_REALTIME_SECRET=replace-with-realtime-secret
 
 In Nginx Proxy Manager, enable WebSocket support on the proxy host that forwards to `sagad-agent-studio:8010`. Without WebSocket upgrade support, the console will show live sync as disabled or reconnecting.
 
+## Knowledge OCR
+
+Sagad Knowledge uses local Tesseract OCR only when a PDF has no extractable text and `SAGAD_OCR_ENABLED=true`.
+
+```env
+SAGAD_OCR_ENABLED=true
+SAGAD_OCR_LANG=eng
+SAGAD_OCR_MAX_PAGES=10
+SAGAD_OCR_TIMEOUT_SECONDS=30
+```
+
+The Agent Studio Docker image installs `tesseract-ocr`, `tesseract-ocr-eng`, and `poppler-utils`. Bare-metal deployments must install equivalent packages before enabling OCR. Google Drive, Notion, Confluence, Guru, websites, and scheduled remote source sync are future adapters behind Agent Studio.
+
 ## Health Checks
 
 After local preview deployment:

@@ -1,14 +1,17 @@
 import base64
 import io
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
+import agent_studio.main as main_module
 from agent_studio.config import get_settings
+from agent_studio.db import TrustedContext
 from agent_studio.ingestion import ExtractionError, extract_file
 from agent_studio.integration_config import integration_config_store
 from agent_studio.main import app, knowledge_ingestion_service, knowledge_ingestion_store
-from agent_studio.schemas import KnowledgeIngestionFile
+from agent_studio.schemas import KnowledgeHit, KnowledgeIngestionFile
 from agent_studio.store import store
 
 
@@ -24,6 +27,15 @@ def setup_function() -> None:
 
 def _base64_bytes(raw: bytes) -> str:
     return base64.b64encode(raw).decode("ascii")
+
+
+def _search_excerpts(query: str) -> list[str]:
+    response = client.post(
+        "/knowledge/search-test",
+        json={"query": query, "intent": "general_support", "risk_level": "medium"},
+    )
+    assert response.status_code == 200
+    return [hit["excerpt"].lower() for hit in response.json()["hits"]]
 
 
 def test_extractors_parse_supported_fixtures() -> None:
@@ -105,6 +117,66 @@ def test_scanned_pdf_without_text_reports_ocr_needed() -> None:
 
     assert exc_info.value.code == "ocr_required"
     assert "OCR" in exc_info.value.message
+
+
+def test_scanned_pdf_uses_ocr_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SAGAD_OCR_ENABLED", "true")
+    monkeypatch.setenv("SAGAD_OCR_LANG", "eng")
+    get_settings.cache_clear()
+
+    monkeypatch.setattr(
+        "agent_studio.ingestion._convert_pdf_to_images",
+        lambda raw, max_pages: [SimpleNamespace(page_number=1)],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "agent_studio.ingestion._image_to_text",
+        lambda image, lang, timeout_seconds: "Scanned refund SOP text",
+        raising=False,
+    )
+
+    document = extract_file(
+        KnowledgeIngestionFile(
+            filename="scan.pdf",
+            content=_base64_bytes(b"%PDF-1.4\n%%EOF"),
+            encoding="base64",
+        ),
+    )
+
+    assert "Scanned refund SOP text" in document.content
+    assert document.metadata["ocr_used"] is True
+    assert document.metadata["ocr_pages"] == 1
+    assert document.metadata["ocr_lang"] == "eng"
+
+
+def test_scanned_pdf_reports_ocr_unavailable_when_enabled_but_runtime_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SAGAD_OCR_ENABLED", "true")
+    get_settings.cache_clear()
+
+    def fail_conversion(raw: bytes, max_pages: int) -> list[object]:
+        raise RuntimeError("poppler is not installed")
+
+    monkeypatch.setattr(
+        "agent_studio.ingestion._convert_pdf_to_images",
+        fail_conversion,
+        raising=False,
+    )
+
+    with pytest.raises(ExtractionError) as exc_info:
+        extract_file(
+            KnowledgeIngestionFile(
+                filename="scan.pdf",
+                content=_base64_bytes(b"%PDF-1.4\n%%EOF"),
+                encoding="base64",
+            ),
+        )
+
+    assert exc_info.value.code == "ocr_unavailable"
+    assert "poppler" in exc_info.value.message
 
 
 def test_ingestion_job_creates_needs_review_document() -> None:
@@ -190,6 +262,225 @@ def test_duplicate_upload_does_not_create_duplicate_active_document() -> None:
         if document["source_path"] == "policies/refund-policy.md"
     ]
     assert len(matching) == 1
+
+
+def test_same_path_from_different_sources_keeps_distinct_documents() -> None:
+    for source_name in ("Client A Upload", "Client B Upload"):
+        response = client.post(
+            "/knowledge/ingestion-jobs",
+            json={
+                "source_name": source_name,
+                "files": [
+                    {
+                        "filename": "shared.md",
+                        "source_path": "policies/shared.md",
+                        "content": f"# Shared SOP\nUnique content for {source_name}.",
+                    },
+                ],
+            },
+        )
+        assert response.status_code == 200
+
+    documents = client.get("/knowledge/documents").json()["documents"]
+    matching = [
+        document
+        for document in documents
+        if document["source_path"] == "policies/shared.md"
+    ]
+
+    assert len(matching) == 2
+    assert {document["source_id"] for document in matching}
+
+
+def test_sources_endpoint_lists_manual_ingestion_source() -> None:
+    created = client.post(
+        "/knowledge/ingestion-jobs",
+        json={
+            "source_name": "Source Upload",
+            "files": [
+                {
+                    "filename": "source-faq.md",
+                    "content": "# Source FAQ\nUse source-specific answer.",
+                },
+            ],
+        },
+    ).json()
+
+    response = client.get("/knowledge/sources")
+
+    assert response.status_code == 200
+    sources = response.json()["sources"]
+    assert any(source["id"] == created["job"]["source_id"] for source in sources)
+    assert any(source["name"] == "Source Upload" for source in sources)
+
+
+def test_document_resync_refreshes_approved_chunks() -> None:
+    created = client.post(
+        "/knowledge/ingestion-jobs",
+        json={
+            "source_name": "Resync Upload",
+            "files": [
+                {
+                    "filename": "resync-sop.md",
+                    "content": "# Resync SOP\nRefresh this approved answer source.",
+                },
+            ],
+        },
+    ).json()
+    document_id = created["documents"][0]["id"]
+    approved = client.post(f"/knowledge/documents/{document_id}/approve").json()
+    assert approved["approval_status"] == "approved"
+    assert approved["chunk_count"] >= 1
+
+    response = client.post(f"/knowledge/documents/{document_id}/resync")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["approval_status"] == "approved"
+    assert payload["chunk_count"] >= 1
+    assert "last_resynced_at" in payload["metadata"]
+
+
+def test_source_sync_refreshes_documents_for_source() -> None:
+    created = client.post(
+        "/knowledge/ingestion-jobs",
+        json={
+            "source_name": "Sync Upload",
+            "files": [
+                {
+                    "filename": "sync-faq.md",
+                    "content": "# Sync FAQ\nRefresh the local source.",
+                },
+            ],
+        },
+    ).json()
+    source_id = created["job"]["source_id"]
+
+    response = client.post(f"/knowledge/sources/{source_id}/sync")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job"]["source_id"] == source_id
+    assert payload["job"]["processed_files"] == 1
+    assert payload["documents"][0]["metadata"]["last_resynced_at"]
+
+
+def test_search_test_forwards_trusted_context_to_retriever(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_context: TrustedContext | None = None
+
+    class SpyRetriever:
+        records: list[object] = []
+
+        def add_record(self, record: object) -> None:
+            pass
+
+        def remove_record(self, record_id: str) -> None:
+            pass
+
+        def search(
+            self,
+            query: str,
+            *,
+            intent: str,
+            risk_level: str,
+            limit: int = 4,
+            context: TrustedContext | None = None,
+        ) -> list[KnowledgeHit]:
+            nonlocal captured_context
+            captured_context = context
+            return []
+
+    monkeypatch.setattr(main_module, "retriever", SpyRetriever())
+
+    response = client.post(
+        "/knowledge/search-test",
+        headers={
+            "x-sagad-org-id": "org-custom",
+            "x-sagad-user-id": "42",
+            "x-sagad-role": "qa_analyst",
+        },
+        json={
+            "query": "refund sale items",
+            "intent": "general_support",
+            "risk_level": "medium",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured_context == TrustedContext(
+        organization_id="org-custom",
+        user_id="42",
+        role="qa_analyst",
+    )
+
+
+def test_archive_removes_approved_document_from_runtime_retrieval() -> None:
+    created = client.post(
+        "/knowledge/ingestion-jobs",
+        json={
+            "source_name": "Archive Upload",
+            "files": [
+                {
+                    "filename": "archive-sop.md",
+                    "content": "# Archive SOP\nUse archivecontext-token for this retired policy.",
+                },
+            ],
+        },
+    ).json()
+    document_id = created["documents"][0]["id"]
+
+    approved = client.post(f"/knowledge/documents/{document_id}/approve")
+    assert approved.status_code == 200
+    assert any("archivecontext-token" in excerpt for excerpt in _search_excerpts("archivecontext-token"))
+
+    archived = client.post(f"/knowledge/documents/{document_id}/archive")
+    assert archived.status_code == 200
+    assert archived.json()["approval_status"] == "archived"
+
+    assert all("archivecontext-token" not in excerpt for excerpt in _search_excerpts("archivecontext-token"))
+
+
+def test_changed_reupload_removes_stale_approved_runtime_record() -> None:
+    first = client.post(
+        "/knowledge/ingestion-jobs",
+        json={
+            "source_name": "Changed Upload",
+            "files": [
+                {
+                    "filename": "changed-sop.md",
+                    "source_path": "policies/changed-sop.md",
+                    "content": "# Changed SOP\nUse oldcontext-token for the old policy.",
+                },
+            ],
+        },
+    ).json()
+    document_id = first["documents"][0]["id"]
+
+    approved = client.post(f"/knowledge/documents/{document_id}/approve")
+    assert approved.status_code == 200
+    assert any("oldcontext-token" in excerpt for excerpt in _search_excerpts("oldcontext-token"))
+
+    second = client.post(
+        "/knowledge/ingestion-jobs",
+        json={
+            "source_name": "Changed Upload",
+            "files": [
+                {
+                    "filename": "changed-sop.md",
+                    "source_path": "policies/changed-sop.md",
+                    "content": "# Changed SOP\nUse newcontext-token only after review.",
+                },
+            ],
+        },
+    )
+    assert second.status_code == 200
+    assert second.json()["documents"][0]["id"] == document_id
+    assert second.json()["documents"][0]["approval_status"] == "needs_review"
+
+    assert all("oldcontext-token" not in excerpt for excerpt in _search_excerpts("oldcontext-token"))
+    assert all("newcontext-token" not in excerpt for excerpt in _search_excerpts("newcontext-token"))
 
 
 def test_embedding_failure_returns_readable_error(

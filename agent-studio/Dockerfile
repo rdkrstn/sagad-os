@@ -8,6 +8,10 @@ ENV UV_LINK_MODE=copy
 
 RUN apt-get update \
   && apt-get upgrade -y --no-install-recommends \
+  && apt-get install -y --no-install-recommends \
+    poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-eng \
   && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml uv.lock ./

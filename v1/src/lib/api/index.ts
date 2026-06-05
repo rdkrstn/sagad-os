@@ -135,6 +135,22 @@ interface AgentStudioKnowledgeDocumentList {
   documents: AgentStudioKnowledgeDocument[];
 }
 
+interface AgentStudioKnowledgeSource {
+  id: string;
+  source_type: string;
+  name: string;
+  status: string;
+  sync_policy: string;
+  last_synced_at: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AgentStudioKnowledgeSourceList {
+  sources: AgentStudioKnowledgeSource[];
+}
+
 interface AgentStudioKnowledgeIngestionError {
   id: string;
   job_id: string;
@@ -312,6 +328,29 @@ async function fetchAgentStudioKnowledgeJobs(): Promise<AgentStudioKnowledgeInge
 
     const payload = (await response.json()) as AgentStudioKnowledgeIngestionJobList;
     return Array.isArray(payload.jobs) ? payload.jobs : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchAgentStudioKnowledgeSources(): Promise<AgentStudioKnowledgeSource[] | null> {
+  const baseUrl = agentStudioBaseUrl();
+  if (!baseUrl) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/knowledge/sources`, {
+      headers: await agentStudioHeaders(),
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as AgentStudioKnowledgeSourceList;
+    return Array.isArray(payload.sources) ? payload.sources : null;
   } catch {
     return null;
   }
@@ -1601,13 +1640,15 @@ export async function getSopReferences(): Promise<SopView[]> {
 }
 
 export async function getKnowledgeIngestionOverview(): Promise<ViewRecord> {
-  const [liveDocuments, liveJobs] = await Promise.all([
+  const [liveDocuments, liveJobs, liveSources] = await Promise.all([
     fetchAgentStudioKnowledgeDocuments(),
     fetchAgentStudioKnowledgeJobs(),
+    fetchAgentStudioKnowledgeSources(),
   ]);
   const documents =
     liveDocuments?.map((document) => ({
       id: document.id,
+      sourceId: document.source_id,
       title: document.title,
       category: titleCase(document.category),
       type: titleCase(document.category),
@@ -1619,7 +1660,11 @@ export async function getKnowledgeIngestionOverview(): Promise<ViewRecord> {
       version: document.version,
       chunks: document.chunk_count,
       summary: document.content.slice(0, 180),
+      content: document.content,
+      contentHash: document.content_hash,
+      jobId: document.job_id,
       updatedAt: document.updated_at,
+      createdAt: document.created_at,
       metadata: document.metadata,
     })) ?? mockSopReferences.map(toSopView);
 
@@ -1634,7 +1679,10 @@ export async function getKnowledgeIngestionOverview(): Promise<ViewRecord> {
       total: job.total_files,
       summary: job.summary,
       updatedAt: job.updated_at,
+      createdAt: job.created_at,
+      sourceId: job.source_id,
       errors: job.errors,
+      metadata: job.metadata,
     })) ?? [
       {
         id: "demo-job-local-files",
@@ -1650,36 +1698,81 @@ export async function getKnowledgeIngestionOverview(): Promise<ViewRecord> {
       },
     ];
 
-  const sources = [
+  const plannedSources = [
     {
-      name: "Manual Uploads",
-      type: "Files",
-      status: "Ready",
-      sync: "Manual",
-      detail: "MD, TXT, PDF, DOCX, XLSX, CSV, and transcripts through Agent Studio.",
-    },
-    {
-      name: "Markdown Knowledge Packs",
-      type: "Local source",
-      status: "Ready",
-      sync: "Manual re-index",
-      detail: "Seed KB, SOP, QA, compliance, escalation, and template records.",
-    },
-    {
+      id: "planned-google-drive",
       name: "Google Drive",
       type: "Cloud source",
       status: "Planned",
       sync: "24h planned",
       detail: "Future source adapter behind Agent Studio; not browser-direct.",
+      lastSyncedAt: null,
+      metadata: {},
+      planned: true,
     },
     {
+      id: "planned-websites",
       name: "Websites",
       type: "Public URLs",
       status: "Planned",
       sync: "Weekly planned",
       detail: "Future public source adapter with manual refresh.",
+      lastSyncedAt: null,
+      metadata: {},
+      planned: true,
+    },
+    {
+      id: "planned-notion",
+      name: "Notion / Confluence / Guru",
+      type: "Internal KB",
+      status: "Planned",
+      sync: "24h planned",
+      detail: "Future internal source adapters after local ingestion is stable.",
+      lastSyncedAt: null,
+      metadata: {},
+      planned: true,
     },
   ];
+
+  const liveSourceRows =
+    liveSources?.map((source) => ({
+      id: source.id,
+      name: source.name,
+      type: titleCase(source.source_type),
+      status: titleCase(source.status),
+      sync: titleCase(source.sync_policy),
+      detail: "Stored by Agent Studio; local re-sync is available for uploaded and extracted content.",
+      lastSyncedAt: source.last_synced_at,
+      updatedAt: source.updated_at,
+      createdAt: source.created_at,
+      metadata: source.metadata,
+      planned: false,
+    })) ?? [
+      {
+        id: "demo-manual-uploads",
+        name: "Manual Uploads",
+        type: "Files",
+        status: "Ready",
+        sync: "Manual",
+        detail: "MD, TXT, PDF, DOCX, XLSX, CSV, and transcripts through Agent Studio.",
+        lastSyncedAt: null,
+        metadata: {},
+        planned: false,
+      },
+      {
+        id: "demo-markdown-packs",
+        name: "Markdown Knowledge Packs",
+        type: "Local source",
+        status: "Ready",
+        sync: "Manual re-index",
+        detail: "Seed KB, SOP, QA, compliance, escalation, and template records.",
+        lastSyncedAt: null,
+        metadata: {},
+        planned: false,
+      },
+    ];
+
+  const sources = [...liveSourceRows, ...plannedSources];
 
   return clone({
     documents,
@@ -1699,7 +1792,7 @@ export async function getKnowledgeIngestionOverview(): Promise<ViewRecord> {
         recommendedAction: "Upload warranty verification script and approve for Support Agent.",
       },
     ],
-    source: liveDocuments || liveJobs ? "agent-studio" : "mock",
+    source: liveDocuments || liveJobs || liveSources ? "agent-studio" : "mock",
   });
 }
 
