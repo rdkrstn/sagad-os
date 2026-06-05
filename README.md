@@ -70,7 +70,7 @@ flowchart LR
 |---|---|
 | Sagad Core | The orchestration engine |
 | Sagad Agents | Sales and Support AI agents |
-| Sagad Knowledge | Approved SOP, policy, FAQ, and retrieval layer |
+| Sagad Knowledge | Ingestion, approved SOP/policy/FAQ records, embeddings, and retrieval layer |
 | Sagad Approvals | Human supervisor review queue |
 | Sagad Adapters | Chatwoot, Twenty, webhooks, and future tools |
 | Sagad Audit | Trace logs for every AI decision |
@@ -107,6 +107,8 @@ The profile menu also includes a SuperAdmin Console for instance-level visibilit
 ### Agent Studio
 
 The backend orchestration layer. It owns typed LangGraph state, LangChain tools, adapter policy, approval gates, knowledge retrieval, draft generation, trace metadata, and approved external actions.
+
+Agent Studio also owns governed knowledge ingestion. Local files and transcripts are parsed server-side, normalized into reviewable documents, approved by operators, embedded with OpenAI `text-embedding-3-small`, stored in Sagad Postgres/pgvector, and exposed to Sales/Support agents only as approved answer sources.
 
 Agent Studio also owns provider connection configuration. Chatwoot and Twenty CRM credentials are saved through Agent Studio and stored as encrypted Sagad Postgres secret versions when `DATABASE_URL` is configured. Browser code only receives redacted status fields such as configured flags, health, missing fields, and dry-run/write-gate state.
 
@@ -224,6 +226,13 @@ Useful local endpoints:
 - `GET /conversations`
 - `GET /conversations/{id}`
 - `POST /conversations/{id}/approve-send`
+- `POST /knowledge/ingestion-jobs`
+- `GET /knowledge/ingestion-jobs`
+- `GET /knowledge/documents`
+- `GET /knowledge/documents/{id}`
+- `POST /knowledge/documents/{id}/approve`
+- `POST /knowledge/documents/{id}/archive`
+- `POST /knowledge/search-test`
 - `WS /ws/conversations`
 
 ### Docker Preview
@@ -333,6 +342,7 @@ Current:
 - Northstar Apparel Support seeded demo workspace.
 - Golden demo loop with sample conversations, drafts, approvals, audit trail events, and basic AI Ops metrics.
 - Chatwoot and Twenty operator/admin setup and monitoring boundaries.
+- Governed local knowledge ingestion with review-first approval, OpenAI embeddings, and pgvector retrieval.
 - Docker and CI scaffolding.
 - Auth.js console session foundation.
 - Sagad Postgres/pgvector schema foundation.
@@ -347,7 +357,7 @@ Next:
 - Twenty CRM read-only context.
 - Human-in-the-loop approved send back to Chatwoot.
 - Uptime Kuma read-only health visibility.
-- pgvector-backed governed knowledge retrieval.
+- Google Drive and remote knowledge source ingestion.
 
 Later:
 

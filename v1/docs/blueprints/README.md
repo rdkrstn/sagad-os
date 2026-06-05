@@ -12,6 +12,7 @@ This package is the visual and operational blueprint set for Sagad OS. It explai
 - `04-implementation-phases.md`: phased delivery path from diagrams to dev preview and production hardening.
 - `05-adapter-architecture.md`: tool-agnostic adapter layer for channels, CRM, automation, knowledge, and audit systems.
 - `06-stack-lock-in.md`: locked platform stack for Next.js, Auth.js, Sagad Postgres/pgvector, Agent Studio, and Chatwoot/Twenty adapters.
+- `07-ingestion-engine.md`: governed local file ingestion, review-first approval, OpenAI embeddings, and pgvector retrieval.
 
 ## Diagram Assets
 
@@ -20,6 +21,8 @@ This package is the visual and operational blueprint set for Sagad OS. It explai
 - The generated poster image is for presentation and orientation only; Mermaid files remain the source of truth for exact architecture.
 - `diagrams/stack-lock-in.mmd` is the source of truth for the stack lock-in diagram.
 - Stack lock-in artifacts are available as `images/stack-lock-in.svg`, `images/stack-lock-in.png`, and `images/stack-lock-in-poster.png`.
+- `diagrams/ingestion-engine.mmd` is the source of truth for the ingestion engine diagram.
+- Ingestion engine artifacts are available as `images/ingestion-engine.svg`, `images/ingestion-engine.png`, and `images/ingestion-engine-poster.png`.
 
 ## Current Boundary
 

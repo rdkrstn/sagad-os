@@ -34,6 +34,25 @@ IntegrationStatus = Literal[
 ToolExecutionStatus = Literal["planned", "dry_run", "blocked", "succeeded", "failed"]
 ToolRiskLevel = Literal["low", "medium", "high"]
 IntegrationProvider = Literal["chatwoot", "twenty"] # TODO: Fetch from Agent Studio when API is available, and remove from the integration provider list. or should we create a new model for integration provider info that includes display name and other metadata?
+KnowledgeSourceType = Literal[
+    "manual_upload",
+    "local_markdown_pack",
+    "transcript_upload",
+    "google_drive",
+    "website",
+    "external_kb",
+]
+KnowledgeIngestionStatus = Literal[
+    "queued",
+    "extracting",
+    "needs_review",
+    "embedding",
+    "ready",
+    "failed",
+    "stale",
+]
+KnowledgeApprovalStatus = Literal["needs_review", "approved", "archived"]
+KnowledgeFileEncoding = Literal["text", "base64"]
 
 
 class KnowledgeHit(BaseModel):
@@ -43,6 +62,103 @@ class KnowledgeHit(BaseModel):
     source_path: str
     score: float
     excerpt: str
+
+
+class KnowledgeIngestionFile(BaseModel):
+    filename: str
+    content: str
+    encoding: KnowledgeFileEncoding = "text"
+    category: str | None = None
+    source_path: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class KnowledgeIngestionJobCreateRequest(BaseModel):
+    source_name: str = "Manual Upload"
+    source_type: KnowledgeSourceType = "manual_upload"
+    files: list[KnowledgeIngestionFile]
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class KnowledgeSourceRecord(BaseModel):
+    id: str
+    source_type: KnowledgeSourceType
+    name: str
+    status: IntegrationStatus = "ready"
+    sync_policy: str = "manual"
+    last_synced_at: datetime | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class KnowledgeDocumentRecord(BaseModel):
+    id: str
+    source_id: str | None = None
+    job_id: str | None = None
+    pack_slug: str
+    category: str
+    source_path: str
+    title: str
+    content: str
+    content_hash: str
+    version: int = 1
+    approval_status: KnowledgeApprovalStatus = "needs_review"
+    chunk_count: int = 0
+    metadata: dict[str, object] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class KnowledgeIngestionErrorRecord(BaseModel):
+    id: str = Field(default_factory=lambda: f"kerr_{uuid4().hex[:12]}")
+    job_id: str
+    source_path: str
+    error_code: str
+    message: str
+    metadata: dict[str, object] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class KnowledgeIngestionJobRecord(BaseModel):
+    id: str = Field(default_factory=lambda: f"kjob_{uuid4().hex[:12]}")
+    source_id: str
+    source_name: str
+    source_type: KnowledgeSourceType
+    status: KnowledgeIngestionStatus = "queued"
+    total_files: int = 0
+    processed_files: int = 0
+    failed_files: int = 0
+    summary: str = ""
+    metadata: dict[str, object] = Field(default_factory=dict)
+    errors: list[KnowledgeIngestionErrorRecord] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class KnowledgeIngestionJobResponse(BaseModel):
+    job: KnowledgeIngestionJobRecord
+    documents: list[KnowledgeDocumentRecord] = Field(default_factory=list)
+    errors: list[KnowledgeIngestionErrorRecord] = Field(default_factory=list)
+
+
+class KnowledgeIngestionJobListResponse(BaseModel):
+    jobs: list[KnowledgeIngestionJobRecord]
+
+
+class KnowledgeDocumentListResponse(BaseModel):
+    documents: list[KnowledgeDocumentRecord]
+
+
+class KnowledgeSearchTestRequest(BaseModel):
+    query: str
+    intent: str = "general_support"
+    risk_level: Literal["low", "medium", "high"] = "medium"
+    limit: int = 4
+
+
+class KnowledgeSearchTestResponse(BaseModel):
+    hits: list[KnowledgeHit]
 
 
 class QaFinding(BaseModel):

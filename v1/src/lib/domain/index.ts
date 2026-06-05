@@ -21,7 +21,7 @@ export type ConversationPriority = "low" | "normal" | "high" | "urgent";
 export type MessageSenderType = "customer" | "ai_agent" | "human_agent" | "system";
 
 export type MessageDeliveryStatus = "queued" | "sent" | "delivered" | "failed";
-
+// TODO: Add more specific delivery status values as needed, such as "read" or "received".
 export type ClassifierIntent =
   | "pricing_lead"
   | "account_support"
@@ -49,7 +49,7 @@ export type ReviewDecisionStatus =
   | "edited"
   | "rejected"
   | "escalated";
-
+// TODO: Fetch from Agent Studio when API is available, and remove from the review decision status list.
 export type McpToolName =
   | "chatwoot.webhook.receive"
   | "chatwoot.messages.send_approved"
@@ -77,7 +77,7 @@ export type ResumeAction =
   | "assign_human"
   | "retry_tool"
   | "none";
-
+// TODO: Add more specific resume actions as needed, such as "escalate_to_supervisor" or "request_more_info".
 export type AuditTrailEventType =
   | "message_received"
   | "intent_classified"

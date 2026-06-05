@@ -47,6 +47,18 @@ def test_foundation_migration_defines_auth_pgvector_and_sagad_tables() -> None:
     assert "ENABLE ROW LEVEL SECURITY" in migration
 
 
+def test_ingestion_migration_defines_sources_jobs_errors_and_rls() -> None:
+    migration_path = Path(__file__).resolve().parents[1] / "migrations" / "0002_knowledge_ingestion.sql"
+    migration = migration_path.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS knowledge_sources" in migration
+    assert "CREATE TABLE IF NOT EXISTS knowledge_ingestion_jobs" in migration
+    assert "CREATE TABLE IF NOT EXISTS knowledge_ingestion_errors" in migration
+    assert "ADD COLUMN IF NOT EXISTS source_id" in migration
+    assert "ADD COLUMN IF NOT EXISTS last_ingestion_job_id" in migration
+    assert "ENABLE ROW LEVEL SECURITY" in migration
+
+
 @pytest.mark.skipif(
     not os.getenv("AGENT_STUDIO_TEST_DATABASE_URL"),
     reason="Postgres persistence test requires AGENT_STUDIO_TEST_DATABASE_URL.",

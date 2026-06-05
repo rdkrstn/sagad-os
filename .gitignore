@@ -37,6 +37,8 @@ agent-studio/MEMORY.md
 CLAUDE.md
 **/CLAUDE.md
 SAGADOS_DESIGN_SYSTEM.md
+SAGAD_OS_PUBLIC_SHIP_REFERENCE.md
+agent-studio/.langgraph_api/
 
 # Local screenshots and app state
 .playwright-mcp/

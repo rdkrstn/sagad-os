@@ -19,6 +19,7 @@ from agent_studio.integration_config import (
     integration_connections_for_display,
     integration_config_store,
 )
+from agent_studio.ingestion import KnowledgeIngestionService, build_knowledge_ingestion_store
 from agent_studio.realtime import realtime_manager, verify_realtime_token
 from agent_studio.retrieval import retriever
 from agent_studio.schemas import (
@@ -44,6 +45,13 @@ from agent_studio.schemas import (
     IntegrationConnectionUpsertRequest,
     IntegrationListResponse,
     IntegrationProvider,
+    KnowledgeDocumentListResponse,
+    KnowledgeDocumentRecord,
+    KnowledgeIngestionJobCreateRequest,
+    KnowledgeIngestionJobListResponse,
+    KnowledgeIngestionJobResponse,
+    KnowledgeSearchTestRequest,
+    KnowledgeSearchTestResponse,
     ToolPlan,
     ToolResult,
 )
@@ -59,6 +67,12 @@ async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Sagad Agent Studio", version="0.1.0", lifespan=lifespan)
 logger = logging.getLogger("agent_studio")
+knowledge_ingestion_store = build_knowledge_ingestion_store(get_settings())
+knowledge_ingestion_service = KnowledgeIngestionService(
+    knowledge_ingestion_store,
+    get_settings(),
+    runtime_retriever=retriever,
+)
 
 
 def _record_diagnostic_event(
@@ -593,6 +607,158 @@ def test_integration_config(
         status=status_value,
         detail=detail,
         connection=connection,
+    )
+
+
+@app.post("/knowledge/ingestion-jobs", response_model=KnowledgeIngestionJobResponse)
+def create_knowledge_ingestion_job(
+    request: KnowledgeIngestionJobCreateRequest,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> KnowledgeIngestionJobResponse:
+    _verify_internal_secret(x_sagad_internal_secret)
+    if not request.files:
+        raise HTTPException(status_code=400, detail="At least one file is required for ingestion.")
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    response = knowledge_ingestion_service.ingest(request, context=context)
+    _record_diagnostic_event(
+        event_type="knowledge.ingestion.completed",
+        summary=response.job.summary,
+        status_value="warning" if response.errors else "success",
+        context=context,
+        payload={
+            "job_id": response.job.id,
+            "source_name": response.job.source_name,
+            "processed_files": response.job.processed_files,
+            "failed_files": response.job.failed_files,
+        },
+    )
+    return response
+
+
+@app.get("/knowledge/ingestion-jobs", response_model=KnowledgeIngestionJobListResponse)
+def list_knowledge_ingestion_jobs(
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> KnowledgeIngestionJobListResponse:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    return KnowledgeIngestionJobListResponse(
+        jobs=knowledge_ingestion_store.list_jobs(context=context),
+    )
+
+
+@app.get("/knowledge/documents", response_model=KnowledgeDocumentListResponse)
+def list_knowledge_documents(
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> KnowledgeDocumentListResponse:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    return KnowledgeDocumentListResponse(
+        documents=knowledge_ingestion_store.list_documents(context=context),
+    )
+
+
+@app.get("/knowledge/documents/{document_id}", response_model=KnowledgeDocumentRecord)
+def get_knowledge_document(
+    document_id: str,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> KnowledgeDocumentRecord:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    document = knowledge_ingestion_store.get_document(document_id, context=context)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Knowledge document not found.")
+    return document
+
+
+@app.post("/knowledge/documents/{document_id}/approve", response_model=KnowledgeDocumentRecord)
+def approve_knowledge_document(
+    document_id: str,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> KnowledgeDocumentRecord:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    try:
+        document = knowledge_ingestion_service.approve_document(document_id, context=context)
+    except RuntimeError as exc:
+        _record_diagnostic_event(
+            event_type="knowledge.embedding.failed",
+            summary=str(exc),
+            status_value="error",
+            context=context,
+            payload={"document_id": document_id},
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if document is None:
+        raise HTTPException(status_code=404, detail="Knowledge document not found.")
+    _record_diagnostic_event(
+        event_type="knowledge.document.approved",
+        summary="Knowledge document approved for agent retrieval.",
+        status_value="success",
+        context=context,
+        payload={
+            "document_id": document.id,
+            "source_path": document.source_path,
+            "chunk_count": document.chunk_count,
+        },
+    )
+    return document
+
+
+@app.post("/knowledge/documents/{document_id}/archive", response_model=KnowledgeDocumentRecord)
+def archive_knowledge_document(
+    document_id: str,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> KnowledgeDocumentRecord:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    document = knowledge_ingestion_service.archive_document(document_id, context=context)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Knowledge document not found.")
+    _record_diagnostic_event(
+        event_type="knowledge.document.archived",
+        summary="Knowledge document archived and removed from retrieval.",
+        status_value="info",
+        context=context,
+        payload={"document_id": document.id, "source_path": document.source_path},
+    )
+    return document
+
+
+@app.post("/knowledge/search-test", response_model=KnowledgeSearchTestResponse)
+def search_knowledge_test(
+    request: KnowledgeSearchTestRequest,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> KnowledgeSearchTestResponse:
+    _verify_internal_secret(x_sagad_internal_secret)
+    _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    return KnowledgeSearchTestResponse(
+        hits=retriever.search(
+            request.query,
+            intent=request.intent,
+            risk_level=request.risk_level,
+            limit=request.limit,
+        ),
     )
 
 

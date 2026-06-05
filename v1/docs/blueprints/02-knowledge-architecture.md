@@ -2,7 +2,7 @@
 
 ## Summary
 
-The knowledge layer is the operating system for both human agents and AI agents. Vector search is only the retrieval index; Markdown knowledge records remain the governed source of truth in the first preview.
+The knowledge layer is the operating system for both human agents and AI agents. Source files and reviewed knowledge records are the source of truth; pgvector is only the retrieval index used by Agent Studio.
 
 ![Knowledge Layer Poster](images/knowledge-layer-poster.png)
 
@@ -24,6 +24,22 @@ flowchart LR
 ```
 
 ![Knowledge Architecture Diagram](images/knowledge-layer.png)
+
+## Ingestion Engine
+
+The ingestion engine is documented in `07-ingestion-engine.md`. It starts with local files and transcripts, extracts text, normalizes metadata, creates `needs_review` documents, and only embeds content after approval. Google Drive and other remote source syncs are phase two.
+
+```mermaid
+flowchart LR
+  Files["Files / transcripts"] --> Extract["Extract text"]
+  Extract --> Review["Needs review"]
+  Review --> Approved["Approved knowledge"]
+  Approved --> Chunks["Chunks + versions"]
+  Chunks --> Embeddings["OpenAI embeddings"]
+  Embeddings --> Pgvector["Sagad Postgres + pgvector"]
+  Pgvector --> Context["Approved answer source"]
+  Context --> Agents["Sales / Support agents"]
+```
 
 ## First Knowledge Pack Categories
 

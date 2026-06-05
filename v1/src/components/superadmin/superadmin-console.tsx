@@ -152,6 +152,7 @@ export function SuperAdminConsole() {
           </div>
         </SectionPanel>
 
+        {/* TODO: Replace static content with real data and add interactivity to the nav and status chips. */}
         <div className="space-y-4">
           <MetricStrip
             items={[
