@@ -318,12 +318,13 @@ The current preview includes the first database and auth foundation: Auth.js for
 
 GitHub Actions currently verify:
 
+- secret scanning and high/critical vulnerability scans;
 - frontend lint, typecheck, and build;
-- Agent Studio tests;
-- container build smoke tests;
-- preview compose boot plus Agent Studio health/readiness checks.
+- Agent Studio tests plus a pgvector migration smoke check;
+- container build and image vulnerability scans;
+- preview compose boot plus Agent Studio health/readiness and console-to-backend connectivity checks.
 
-The Docker publish workflow can push versioned Sagad Console and Agent Studio images to GitHub Container Registry on tags or manual dispatch. It does not deploy to a VPS yet.
+The Docker publish workflow scans and pushes versioned Sagad Console and Agent Studio images to GitHub Container Registry on tags or manual dispatch. It does not deploy to a VPS yet; CD remains a manual, documented VPS pull/build/health-check flow.
 
 See:
 

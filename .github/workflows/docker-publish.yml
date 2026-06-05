@@ -19,9 +19,11 @@ jobs:
       matrix:
         include:
           - name: Sagad Console
+            slug: sagad-console
             context: ./v1
             image: ghcr.io/${{ github.repository_owner }}/sagad-os-console
           - name: Agent Studio
+            slug: agent-studio
             context: ./agent-studio
             image: ghcr.io/${{ github.repository_owner }}/sagad-os-agent-studio
 
@@ -39,6 +41,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build local image for scan
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          load: true
+          tags: ${{ matrix.slug }}:release-scan
+
+      - name: Scan release image before publish
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ matrix.slug }}:release-scan
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -46,6 +64,8 @@ jobs:
           images: ${{ matrix.image }}
           tags: |
             type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-
 
       - name: Build and publish image
@@ -53,5 +73,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           push: true
+          provenance: true
+          sbom: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

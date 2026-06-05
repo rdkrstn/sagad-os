@@ -20,6 +20,11 @@ jobs:
         id: version
         shell: bash
         run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag must use vX.Y.Z format. Got: $GITHUB_REF_NAME"
+            exit 1
+          fi
+
           version="$(cat VERSION | tr -d '[:space:]')"
           tag="${GITHUB_REF_NAME#v}"
           if [ "$version" != "$tag" ]; then
@@ -27,6 +32,29 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Confirm package versions
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          node_version="$(node -p "require('./v1/package.json').version")"
+          python_version="$(python - <<'PY'
+          import tomllib
+
+          with open("agent-studio/pyproject.toml", "rb") as file:
+              print(tomllib.load(file)["project"]["version"])
+          PY
+          )"
+
+          if [ "$node_version" != "$version" ]; then
+            echo "v1/package.json ($node_version) does not match VERSION ($version)."
+            exit 1
+          fi
+
+          if [ "$python_version" != "$version" ]; then
+            echo "agent-studio/pyproject.toml ($python_version) does not match VERSION ($version)."
+            exit 1
+          fi
 
       - name: Confirm changelog entry
         shell: bash
