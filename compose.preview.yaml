@@ -56,6 +56,10 @@ services:
       SAGAD_INTEGRATION_ENCRYPTION_KEY: sagad-preview-integration-encryption-key-change-me
       SAGAD_REALTIME_SECRET: sagad-preview-realtime-secret-change-me
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      SAGAD_OCR_ENABLED: ${SAGAD_OCR_ENABLED:-true}
+      SAGAD_OCR_LANG: ${SAGAD_OCR_LANG:-eng}
+      SAGAD_OCR_MAX_PAGES: ${SAGAD_OCR_MAX_PAGES:-10}
+      SAGAD_OCR_TIMEOUT_SECONDS: ${SAGAD_OCR_TIMEOUT_SECONDS:-30}
       LITELLM_ENABLED: ${LITELLM_ENABLED:-false}
       LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000/v1}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}

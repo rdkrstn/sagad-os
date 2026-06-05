@@ -74,7 +74,7 @@ npx tsc --noEmit --pretty false
 npm run build
 ```
 
-The console uses typed Northstar demo data by default. It can read Agent Studio through `SAGAD_API_BASE_URL`. Auth.js is wired for email magic-link sessions when `DATABASE_URL`, `AUTH_SECRET`, `AUTH_URL`, `EMAIL_SERVER`, and `EMAIL_FROM` are configured. Google OAuth appears on the sign-in page when `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` are set.
+The console can run with typed preview data when Agent Studio is unavailable. It reads live Agent Studio data through `SAGAD_API_BASE_URL`. Auth.js is wired for email magic-link sessions when `DATABASE_URL`, `AUTH_SECRET`, `AUTH_URL`, `EMAIL_SERVER`, and `EMAIL_FROM` are configured. Google OAuth appears on the sign-in page when `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` are set.
 
 ## Run Agent Studio
 
@@ -187,6 +187,10 @@ Agent Studio:
 - `OPENAI_BASE_URL`
 - `OPENAI_MODEL`
 - `OPENAI_EMBEDDING_MODEL`
+- `SAGAD_OCR_ENABLED`
+- `SAGAD_OCR_LANG`
+- `SAGAD_OCR_MAX_PAGES`
+- `SAGAD_OCR_TIMEOUT_SECONDS`
 - `LITELLM_ENABLED`
 - `LITELLM_BASE_URL`
 - `LITELLM_MASTER_KEY`

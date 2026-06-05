@@ -5,6 +5,7 @@ from psycopg.types.json import Jsonb
 
 from agent_studio.config import Settings, get_settings
 from agent_studio.db import (
+    TrustedContext,
     connect,
     database_configured,
     initialize_database,
@@ -25,6 +26,12 @@ from agent_studio.schemas import KnowledgeHit
 class KnowledgeRetrieverProtocol(Protocol):
     records: list[KnowledgeRecord]
 
+    def add_record(self, record: KnowledgeRecord) -> None:
+        ...
+
+    def remove_record(self, record_id: str) -> None:
+        ...
+
     def search(
         self,
         query: str,
@@ -32,6 +39,7 @@ class KnowledgeRetrieverProtocol(Protocol):
         intent: str,
         risk_level: str,
         limit: int = 4,
+        context: TrustedContext | None = None,
     ) -> list[KnowledgeHit]:
         ...
 
@@ -46,6 +54,10 @@ class InMemoryKnowledgeRetriever:
         self.records.append(record)
         self.documents = to_documents(self.records)
 
+    def remove_record(self, record_id: str) -> None:
+        self.records = [existing for existing in self.records if existing.id != record_id]
+        self.documents = to_documents(self.records)
+
     def search(
         self,
         query: str,
@@ -53,11 +65,14 @@ class InMemoryKnowledgeRetriever:
         intent: str,
         risk_level: str,
         limit: int = 4,
+        context: TrustedContext | None = None,
     ) -> list[KnowledgeHit]:
         query_tokens = tokenize(f"{query} {intent} {risk_level}")
         scored: list[tuple[float, Document]] = []
 
         for document in self.documents:
+            if str(document.metadata.get("approval_status", "approved")) != "approved":
+                continue
             doc_tokens = tokenize(document.page_content)
             overlap = len(query_tokens.intersection(doc_tokens))
             category = str(document.metadata.get("category", "general"))
@@ -93,6 +108,12 @@ class PostgresKnowledgeRetriever:
         initialize_database(settings)
         self._sync_records()
 
+    def add_record(self, record: KnowledgeRecord) -> None:
+        self.fallback.add_record(record)
+
+    def remove_record(self, record_id: str) -> None:
+        self.fallback.remove_record(record_id)
+
     def search(
         self,
         query: str,
@@ -100,14 +121,15 @@ class PostgresKnowledgeRetriever:
         intent: str,
         risk_level: str,
         limit: int = 4,
+        context: TrustedContext | None = None,
     ) -> list[KnowledgeHit]:
         embedding = vector_literal(
             self.embedding_service.embed_text(f"{query} {intent} {risk_level}"),
         )
         embedding_model = self.embedding_service.embedding_model
         with connect(self.settings) as connection:
-            context = resolve_trusted_context(connection, None)
-            set_app_context(connection, context)
+            resolved_context = resolve_trusted_context(connection, context)
+            set_app_context(connection, resolved_context)
             retrieval_run_id = connection.execute(
                 """
                 INSERT INTO retrieval_runs (
@@ -122,7 +144,7 @@ class PostgresKnowledgeRetriever:
                 RETURNING id
                 """,
                 (
-                    context.organization_id,
+                    resolved_context.organization_id,
                     query,
                     intent,
                     risk_level,
@@ -163,7 +185,7 @@ class PostgresKnowledgeRetriever:
                 """,
                 (
                     embedding,
-                    context.organization_id,
+                    resolved_context.organization_id,
                     embedding_model,
                     intent,
                     intent,
@@ -189,7 +211,7 @@ class PostgresKnowledgeRetriever:
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
-                        context.organization_id,
+                        resolved_context.organization_id,
                         retrieval_run_id,
                         hit.id,
                         rank,
@@ -211,6 +233,7 @@ class PostgresKnowledgeRetriever:
             intent=intent,
             risk_level=risk_level,
             limit=limit,
+            context=context,
         )
 
     def _sync_records(self) -> None:

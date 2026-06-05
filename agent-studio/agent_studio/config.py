@@ -14,6 +14,26 @@ def _bool_env(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 class Settings(BaseModel):
     database_url: str | None = None
     agent_studio_internal_secret: str | None = None
@@ -42,6 +62,10 @@ class Settings(BaseModel):
     litellm_base_url: str | None = None
     litellm_master_key: str | None = None
     deepseek_api_key: str | None = None
+    sagad_ocr_enabled: bool = False
+    sagad_ocr_lang: str = "eng"
+    sagad_ocr_max_pages: int = 10
+    sagad_ocr_timeout_seconds: float = 30
 
     @property
     def chatwoot_send_enabled(self) -> bool:
@@ -121,4 +145,8 @@ def get_settings() -> Settings:
         litellm_base_url=os.getenv("LITELLM_BASE_URL"),
         litellm_master_key=os.getenv("LITELLM_MASTER_KEY"),
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
+        sagad_ocr_enabled=_bool_env("SAGAD_OCR_ENABLED", False),
+        sagad_ocr_lang=os.getenv("SAGAD_OCR_LANG", "eng"),
+        sagad_ocr_max_pages=_int_env("SAGAD_OCR_MAX_PAGES", 10),
+        sagad_ocr_timeout_seconds=_float_env("SAGAD_OCR_TIMEOUT_SECONDS", 30),
     )

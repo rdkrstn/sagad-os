@@ -1,15 +1,25 @@
 flowchart LR
-  Sources["Source Content<br/>MD / TXT / PDF / DOCX / XLSX / transcripts"] --> Extract["Extract Text<br/>format-specific parsers"]
-  Drive["Future Google Drive<br/>scheduled source adapter"] --> Extract
-  Extract --> Normalize["Normalize<br/>title, category, owner, source hash"]
-  Normalize --> Review["Needs Review<br/>operator approval gate"]
-  Review --> Approved["Approved Knowledge<br/>retrieval eligible"]
-  Approved --> Chunk["Chunk + Version<br/>metadata, source path, risk tags"]
+  Files["Local Files<br/>MD / TXT / JSON / transcripts / PDF / DOCX / XLSX / CSV"] --> Upload["Console Upload<br/>server route validates size and type"]
+  Packs["Markdown Packs<br/>seed SOPs, QA, compliance"] --> Sync["Local Re-sync<br/>source or document refresh"]
+  Drive["Future Sources<br/>Drive / Notion / Confluence / websites"] -. planned .-> Sync
+  Upload --> Extract["Extract Text<br/>format-specific parsers"]
+  Sync --> Extract
+  Extract --> PdfCheck{"PDF text found?"}
+  PdfCheck -- yes --> Normalize["Normalize Record<br/>title, category, metadata, content hash"]
+  PdfCheck -- no --> OCR["Tesseract OCR<br/>SAGAD_OCR_* limits"]
+  OCR --> Normalize
+  OCR --> Errors["Job Errors<br/>ocr_required / ocr_unavailable / ocr_failed"]
+  Normalize --> Review["Needs Review<br/>operator gate"]
+  Review --> Approve["Approve"]
+  Review --> Archive["Archive"]
+  Review --> Resync["Re-sync"]
+  Resync --> Extract
+  Approve --> Chunk["Chunk + Version<br/>metadata, source path, risk tags"]
   Chunk --> Embed["OpenAI Embeddings<br/>text-embedding-3-small"]
   Embed --> Vector["Sagad Postgres + pgvector<br/>knowledge_chunk_embeddings"]
   Vector --> Retrieve["Approved Answer Source<br/>intent, risk, role filters"]
+  Archive --> Audit["Sagad Audit<br/>ingestion, OCR, approval, archive, sync"]
+  Errors --> Audit
+  Embed --> Audit
   Retrieve --> Agents["Sales / Support Agents"]
   Agents --> QA["QA / Compliance Gate"]
-  Review --> Audit["Sagad Audit<br/>ingestion and approval events"]
-  Embed --> Audit
-  Retrieve --> Audit

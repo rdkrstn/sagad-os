@@ -10,7 +10,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Response, WebSocket, 
 from agent_studio.chatwoot import send_approved_reply
 from agent_studio.config import Settings
 from agent_studio.config import get_settings
-from agent_studio.db import initialize_database
+from agent_studio.db import TrustedContext, initialize_database
 from agent_studio.graph import graph
 from agent_studio.integration_config import (
     ADMIN_ROLES,
@@ -52,6 +52,7 @@ from agent_studio.schemas import (
     KnowledgeIngestionJobResponse,
     KnowledgeSearchTestRequest,
     KnowledgeSearchTestResponse,
+    KnowledgeSourceListResponse,
     ToolPlan,
     ToolResult,
 )
@@ -652,6 +653,58 @@ def list_knowledge_ingestion_jobs(
     )
 
 
+@app.get("/knowledge/sources", response_model=KnowledgeSourceListResponse)
+def list_knowledge_sources(
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> KnowledgeSourceListResponse:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    return KnowledgeSourceListResponse(
+        sources=knowledge_ingestion_service.list_sources(context=context),
+    )
+
+
+@app.post("/knowledge/sources/{source_id}/sync", response_model=KnowledgeIngestionJobResponse)
+def sync_knowledge_source(
+    source_id: str,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> KnowledgeIngestionJobResponse:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    try:
+        response = knowledge_ingestion_service.sync_source(source_id, context=context)
+    except RuntimeError as exc:
+        _record_diagnostic_event(
+            event_type="knowledge.source.sync_failed",
+            summary=str(exc),
+            status_value="error",
+            context=context,
+            payload={"source_id": source_id},
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if response is None:
+        raise HTTPException(status_code=404, detail="Knowledge source not found.")
+    _record_diagnostic_event(
+        event_type="knowledge.source.synced",
+        summary=response.job.summary,
+        status_value="warning" if response.errors else "success",
+        context=context,
+        payload={
+            "source_id": source_id,
+            "job_id": response.job.id,
+            "processed_files": response.job.processed_files,
+            "failed_files": response.job.failed_files,
+        },
+    )
+    return response
+
+
 @app.get("/knowledge/documents", response_model=KnowledgeDocumentListResponse)
 def list_knowledge_documents(
     x_sagad_org_id: Annotated[str | None, Header()] = None,
@@ -719,6 +772,43 @@ def approve_knowledge_document(
     return document
 
 
+@app.post("/knowledge/documents/{document_id}/resync", response_model=KnowledgeDocumentRecord)
+def resync_knowledge_document(
+    document_id: str,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> KnowledgeDocumentRecord:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    try:
+        document = knowledge_ingestion_service.resync_document(document_id, context=context)
+    except RuntimeError as exc:
+        _record_diagnostic_event(
+            event_type="knowledge.document.resync_failed",
+            summary=str(exc),
+            status_value="error",
+            context=context,
+            payload={"document_id": document_id},
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if document is None:
+        raise HTTPException(status_code=404, detail="Knowledge document not found.")
+    _record_diagnostic_event(
+        event_type="knowledge.document.resynced",
+        summary="Knowledge document refreshed through local sync.",
+        status_value="success",
+        context=context,
+        payload={
+            "document_id": document.id,
+            "source_path": document.source_path,
+            "chunk_count": document.chunk_count,
+        },
+    )
+    return document
+
+
 @app.post("/knowledge/documents/{document_id}/archive", response_model=KnowledgeDocumentRecord)
 def archive_knowledge_document(
     document_id: str,
@@ -751,13 +841,18 @@ def search_knowledge_test(
     x_sagad_internal_secret: Annotated[str | None, Header()] = None,
 ) -> KnowledgeSearchTestResponse:
     _verify_internal_secret(x_sagad_internal_secret)
-    _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
     return KnowledgeSearchTestResponse(
         hits=retriever.search(
             request.query,
             intent=request.intent,
             risk_level=request.risk_level,
             limit=request.limit,
+            context=TrustedContext(
+                organization_id=context.organization_id,
+                user_id=context.user_id,
+                role=context.role,
+            ),
         ),
     )
 

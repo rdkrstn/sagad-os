@@ -13,6 +13,7 @@ Agent Studio is also the adapter boundary. External tools such as Twenty CRM, Ch
 - Output: Twenty CRM status from `GET /integrations/twenty/health`.
 - Output: LiteLLM gateway status from `GET /integrations/litellm/health`.
 - Output: realtime conversation events from `WS /ws/conversations`.
+- Output: governed knowledge ingestion from `POST /knowledge/ingestion-jobs`, `GET /knowledge/sources`, document review endpoints, local re-index endpoints, and `POST /knowledge/search-test`.
 
 Chatwoot threading rule: one Chatwoot `conversation.id` maps to one Sagad conversation. New inbound customer messages append to the thread, regenerate the latest draft, and reset approval to `needs_approval`. Duplicate webhook retries with the same Chatwoot message id are idempotent. Outgoing or private Chatwoot messages are ignored.
 
@@ -39,6 +40,10 @@ Chatwoot threading rule: one Chatwoot `conversation.id` maps to one Sagad conver
 - `OPENAI_BASE_URL`
 - `OPENAI_MODEL`
 - `OPENAI_EMBEDDING_MODEL`
+- `SAGAD_OCR_ENABLED`
+- `SAGAD_OCR_LANG`
+- `SAGAD_OCR_MAX_PAGES`
+- `SAGAD_OCR_TIMEOUT_SECONDS`
 - `LITELLM_ENABLED`
 - `LITELLM_BASE_URL`
 - `LITELLM_MASTER_KEY`
@@ -51,6 +56,8 @@ LiteLLM is optional. When enabled, `OPENAI_BASE_URL` can point model calls to `h
 `DATABASE_URL` is optional. When unset, Agent Studio uses the in-memory development store. When set to a Postgres-compatible URL, Agent Studio runs SQL migrations from `migrations/`, enables the Sagad schema foundation, and stores conversations, inbound messages, approvals, CRM tool plans, CRM tool results, and audit events through `psycopg`. `AGENT_STUDIO_INTERNAL_SECRET` protects privileged console-to-Agent-Studio routes when configured. `SAGAD_REALTIME_SECRET` verifies short-lived WebSocket tokens minted by the console.
 
 When `DATABASE_URL` is set, Agent Studio also syncs Markdown knowledge records into Postgres and uses pgvector-backed retrieval with deterministic local dev embeddings. Production retrieval should replace those dev embeddings with real embedding generation and evaluation.
+
+Local scanned-PDF OCR uses Tesseract and Poppler. The Agent Studio Docker image installs `tesseract-ocr`, `tesseract-ocr-eng`, and `poppler-utils`. When running outside Docker, install equivalent system packages before enabling `SAGAD_OCR_ENABLED=true`.
 
 ## Commands
 

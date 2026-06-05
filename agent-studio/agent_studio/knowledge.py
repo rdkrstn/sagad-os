@@ -12,6 +12,7 @@ class KnowledgeRecord:
     category: str
     source_path: str
     content: str
+    approval_status: str = "approved"
 
 
 def _repo_root() -> Path:
@@ -50,6 +51,7 @@ def load_knowledge_records(root: Path | None = None) -> list[KnowledgeRecord]:
                 category=category,
                 source_path=str(relative_path).replace("\\", "/"),
                 content=content,
+                approval_status="approved",
             ),
         )
 
@@ -65,6 +67,7 @@ def to_documents(records: list[KnowledgeRecord]) -> list[Document]:
                 "title": record.title,
                 "category": record.category,
                 "source_path": record.source_path,
+                "approval_status": record.approval_status,
             },
         )
         for record in records

@@ -41,10 +41,10 @@ flowchart LR
 - pgvector is the retrieval index, not the source of truth.
 - Reviewable knowledge records remain the source material.
 - SOP, QA, compliance, refund, cancellation, billing, and verification content must remain approval-gated.
-- Scanned PDFs without extractable text should fail with an OCR-needed error.
+- PDFs are parsed directly when text is embedded. Scanned PDFs run local Tesseract OCR when `SAGAD_OCR_ENABLED=true`; otherwise they return `ocr_required`, `ocr_unavailable`, or `ocr_failed` with readable operator guidance.
 - Duplicate content is detected by source path and content hash.
 - Retrieval filters by organization, category, approval status, intent, risk, and agent role where available.
 
 ## Sync And Staleness
 
-Manual uploads require manual re-upload when the source changes. Markdown packs can be re-indexed on command. Google Drive should default to scheduled sync in a later phase. Stale content should be flagged when it has not been reviewed for six months.
+Manual uploads and extracted documents can be re-indexed locally from stored extracted content on command. Google Drive, websites, Notion, Confluence, Guru, raw file storage, and scheduled remote sync stay deferred until source adapters exist. Stale content should be flagged when it has not been reviewed for six months.

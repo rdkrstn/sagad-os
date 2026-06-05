@@ -146,6 +146,10 @@ class KnowledgeIngestionJobListResponse(BaseModel):
     jobs: list[KnowledgeIngestionJobRecord]
 
 
+class KnowledgeSourceListResponse(BaseModel):
+    sources: list[KnowledgeSourceRecord]
+
+
 class KnowledgeDocumentListResponse(BaseModel):
     documents: list[KnowledgeDocumentRecord]
 

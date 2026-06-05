@@ -228,10 +228,13 @@ Useful local endpoints:
 - `POST /conversations/{id}/approve-send`
 - `POST /knowledge/ingestion-jobs`
 - `GET /knowledge/ingestion-jobs`
+- `GET /knowledge/sources`
+- `POST /knowledge/sources/{source_id}/sync`
 - `GET /knowledge/documents`
 - `GET /knowledge/documents/{id}`
 - `POST /knowledge/documents/{id}/approve`
 - `POST /knowledge/documents/{id}/archive`
+- `POST /knowledge/documents/{id}/resync`
 - `POST /knowledge/search-test`
 - `WS /ws/conversations`
 
@@ -358,7 +361,7 @@ Next:
 - Twenty CRM read-only context.
 - Human-in-the-loop approved send back to Chatwoot.
 - Uptime Kuma read-only health visibility.
-- Google Drive and remote knowledge source ingestion.
+- Remote knowledge adapters for Google Drive, Notion, Confluence, Guru, and website crawling.
 
 Later:
 

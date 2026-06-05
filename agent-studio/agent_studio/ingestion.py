@@ -101,11 +101,22 @@ class KnowledgeIngestionStoreProtocol(Protocol):
     ) -> KnowledgeDocumentRecord:
         ...
 
+    def list_sources(self, context: StoreContext | None = None) -> list[KnowledgeSourceRecord]:
+        ...
+
+    def touch_source(
+        self,
+        source_id: str,
+        context: StoreContext | None = None,
+    ) -> KnowledgeSourceRecord | None:
+        ...
+
     def list_jobs(self, context: StoreContext | None = None) -> list[KnowledgeIngestionJobRecord]:
         ...
 
     def list_documents(
         self,
+        source_id: str | None = None,
         context: StoreContext | None = None,
     ) -> list[KnowledgeDocumentRecord]:
         ...
@@ -118,6 +129,14 @@ class KnowledgeIngestionStoreProtocol(Protocol):
         ...
 
     def approve_document(
+        self,
+        document_id: str,
+        embedding_service: EmbeddingService,
+        context: StoreContext | None = None,
+    ) -> KnowledgeDocumentRecord | None:
+        ...
+
+    def resync_document(
         self,
         document_id: str,
         embedding_service: EmbeddingService,
@@ -213,6 +232,10 @@ def _category_from_filename(filename: str, explicit: str | None) -> str:
 def _normalize_source_path(filename: str, source_path: str | None) -> str:
     candidate = source_path or filename
     return str(PurePosixPath(candidate.replace("\\", "/")))
+
+
+def _pack_slug_for_source(source_id: str) -> str:
+    return f"{DEFAULT_PACK_SLUG}:{source_id}"
 
 
 def _extract_transcript_json(raw: bytes) -> ExtractedDocument:
@@ -352,8 +375,91 @@ def _fallback_pdf_text(raw: bytes) -> str:
     return _clean_text("\n".join(match.replace("\\(", "(").replace("\\)", ")") for match in matches))
 
 
-def _extract_pdf(raw: bytes) -> ExtractedDocument:
+def _convert_pdf_to_images(raw: bytes, max_pages: int) -> list[object]:
+    try:
+        from pdf2image import convert_from_bytes
+    except ImportError as exc:
+        raise RuntimeError("pdf2image is not installed") from exc
+    try:
+        return list(convert_from_bytes(raw, first_page=1, last_page=max(1, max_pages)))
+    except Exception as exc:
+        raise RuntimeError(str(exc) or "PDF pages could not be rendered for OCR") from exc
+
+
+def _image_to_text(image: object, lang: str, timeout_seconds: float) -> str:
+    try:
+        import pytesseract
+    except ImportError as exc:
+        raise RuntimeError("pytesseract is not installed") from exc
+    try:
+        return str(
+            pytesseract.image_to_string(
+                image,
+                lang=lang,
+                timeout=int(max(1, timeout_seconds)),
+            ),
+        )
+    except Exception as exc:
+        raise RuntimeError(str(exc) or "Tesseract OCR failed") from exc
+
+
+def _extract_pdf_with_ocr(
+    raw: bytes,
+    settings: Settings,
+    parser_error: str | None = None,
+) -> ExtractedDocument:
+    if not settings.sagad_ocr_enabled:
+        detail = "PDF did not contain extractable text. Enable SAGAD_OCR_ENABLED to run local OCR."
+        if parser_error:
+            detail = f"{detail} PDF parser detail: {parser_error}"
+        raise ExtractionError(
+            "ocr_required",
+            detail,
+        )
+    try:
+        images = _convert_pdf_to_images(raw, settings.sagad_ocr_max_pages)
+    except RuntimeError as exc:
+        raise ExtractionError(
+            "ocr_unavailable",
+            f"OCR runtime is unavailable: {exc}",
+        ) from exc
     text_parts: list[str] = []
+    for image in images:
+        try:
+            page_text = _image_to_text(
+                image,
+                settings.sagad_ocr_lang,
+                settings.sagad_ocr_timeout_seconds,
+            )
+        except RuntimeError as exc:
+            raise ExtractionError(
+                "ocr_failed",
+                f"OCR failed while reading PDF page: {exc}",
+            ) from exc
+        if page_text.strip():
+            text_parts.append(page_text)
+    content = _clean_text("\n\n".join(text_parts))
+    if not content:
+        raise ExtractionError(
+            "ocr_failed",
+            "OCR completed but did not find readable text in the PDF.",
+        )
+    return ExtractedDocument(
+        title=_title_from_content(content, "Imported OCR PDF"),
+        content=content,
+        metadata={
+            "extractor": "pdf_ocr",
+            "ocr_used": True,
+            "ocr_pages": len(images),
+            "ocr_lang": settings.sagad_ocr_lang,
+            **({"pdf_parser_error": parser_error} if parser_error else {}),
+        },
+    )
+
+
+def _extract_pdf(raw: bytes, settings: Settings | None = None) -> ExtractedDocument:
+    text_parts: list[str] = []
+    parser_error: str | None = None
     try:
         from pypdf import PdfReader
 
@@ -362,23 +468,24 @@ def _extract_pdf(raw: bytes) -> ExtractedDocument:
             page_text = page.extract_text() or ""
             if page_text.strip():
                 text_parts.append(page_text)
-    except Exception:
+    except Exception as exc:
+        parser_error = str(exc) or exc.__class__.__name__
         text_parts = []
 
     content = _clean_text("\n".join(text_parts)) or _fallback_pdf_text(raw)
     if not content:
-        raise ExtractionError(
-            "ocr_required",
-            "PDF did not contain extractable text. Scanned PDFs need OCR before ingestion.",
-        )
+        return _extract_pdf_with_ocr(raw, settings or get_settings(), parser_error=parser_error)
     return ExtractedDocument(
         title=_title_from_content(content, "Imported PDF"),
         content=content,
-        metadata={"extractor": "pdf"},
+        metadata={"extractor": "pdf", "ocr_used": False},
     )
 
 
-def extract_file(file: KnowledgeIngestionFile) -> ExtractedDocument:
+def extract_file(
+    file: KnowledgeIngestionFile,
+    settings: Settings | None = None,
+) -> ExtractedDocument:
     raw = _file_bytes(file)
     extension = PurePosixPath(file.filename.lower()).suffix
     if extension in SUPPORTED_TEXT_EXTENSIONS:
@@ -401,7 +508,7 @@ def extract_file(file: KnowledgeIngestionFile) -> ExtractedDocument:
     if extension == ".docx":
         return _extract_docx(raw)
     if extension == ".pdf":
-        return _extract_pdf(raw)
+        return _extract_pdf(raw, settings=settings)
     raise ExtractionError(
         "unsupported_file_type",
         f"Unsupported knowledge file type '{extension or 'unknown'}'.",
@@ -509,14 +616,34 @@ class InMemoryKnowledgeIngestionStore:
         self._documents[document.id] = document
         return document
 
+    def list_sources(self, context: StoreContext | None = None) -> list[KnowledgeSourceRecord]:
+        return sorted(self._sources.values(), key=lambda source: source.updated_at, reverse=True)
+
+    def touch_source(
+        self,
+        source_id: str,
+        context: StoreContext | None = None,
+    ) -> KnowledgeSourceRecord | None:
+        source = self._sources.get(source_id)
+        if source is None:
+            return None
+        source.last_synced_at = _now()
+        source.updated_at = source.last_synced_at
+        self._sources[source_id] = source
+        return source
+
     def list_jobs(self, context: StoreContext | None = None) -> list[KnowledgeIngestionJobRecord]:
         return sorted(self._jobs.values(), key=lambda job: job.created_at, reverse=True)
 
     def list_documents(
         self,
+        source_id: str | None = None,
         context: StoreContext | None = None,
     ) -> list[KnowledgeDocumentRecord]:
-        return sorted(self._documents.values(), key=lambda document: document.updated_at, reverse=True)
+        documents = list(self._documents.values())
+        if source_id is not None:
+            documents = [document for document in documents if document.source_id == source_id]
+        return sorted(documents, key=lambda document: document.updated_at, reverse=True)
 
     def get_document(
         self,
@@ -540,6 +667,25 @@ class InMemoryKnowledgeIngestionStore:
         document.approval_status = "approved"
         document.chunk_count = len(chunks)
         document.updated_at = _now()
+        self._documents[document_id] = document
+        return document
+
+    def resync_document(
+        self,
+        document_id: str,
+        embedding_service: EmbeddingService,
+        context: StoreContext | None = None,
+    ) -> KnowledgeDocumentRecord | None:
+        document = self._documents.get(document_id)
+        if document is None:
+            return None
+        document.metadata = {**document.metadata, "last_resynced_at": _now().isoformat()}
+        document.updated_at = _now()
+        if document.approval_status == "approved":
+            chunks = build_chunks(document)
+            for _, chunk_content, _ in chunks:
+                embedding_service.embed_text(chunk_content)
+            document.chunk_count = len(chunks)
         self._documents[document_id] = document
         return document
 
@@ -805,6 +951,43 @@ class PostgresKnowledgeIngestionStore:
             connection.commit()
         return _document_from_row(row, chunk_count=0)
 
+    def list_sources(self, context: StoreContext | None = None) -> list[KnowledgeSourceRecord]:
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM knowledge_sources
+                WHERE organization_id = %s
+                ORDER BY updated_at DESC
+                """,
+                (scoped.organization_id,),
+            ).fetchall()
+        return [_source_from_row(row) for row in rows]
+
+    def touch_source(
+        self,
+        source_id: str,
+        context: StoreContext | None = None,
+    ) -> KnowledgeSourceRecord | None:
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            row = connection.execute(
+                """
+                UPDATE knowledge_sources
+                SET last_synced_at = now(),
+                    updated_at = now()
+                WHERE organization_id = %s
+                  AND id = %s
+                RETURNING *
+                """,
+                (scoped.organization_id, source_id),
+            ).fetchone()
+            connection.commit()
+        return _source_from_row(row) if row else None
+
     def list_jobs(self, context: StoreContext | None = None) -> list[KnowledgeIngestionJobRecord]:
         with connect(self.settings) as connection:
             scoped = resolve_trusted_context(connection, _trusted_context(context))
@@ -826,13 +1009,20 @@ class PostgresKnowledgeIngestionStore:
 
     def list_documents(
         self,
+        source_id: str | None = None,
         context: StoreContext | None = None,
     ) -> list[KnowledgeDocumentRecord]:
         with connect(self.settings) as connection:
             scoped = resolve_trusted_context(connection, _trusted_context(context))
             set_app_context(connection, scoped)
+            source_filter = "AND source_id = %s" if source_id is not None else ""
+            params: tuple[object, ...] = (
+                (scoped.organization_id, source_id)
+                if source_id is not None
+                else (scoped.organization_id,)
+            )
             rows = connection.execute(
-                """
+                f"""
                 SELECT
                   knowledge_documents.*,
                   (
@@ -842,9 +1032,10 @@ class PostgresKnowledgeIngestionStore:
                   ) AS chunk_count
                 FROM knowledge_documents
                 WHERE organization_id = %s
+                  {source_filter}
                 ORDER BY updated_at DESC
                 """,
-                (scoped.organization_id,),
+                params,
             ).fetchall()
         return [_document_from_row(row, chunk_count=int(row["chunk_count"])) for row in rows]
 
@@ -965,6 +1156,106 @@ class PostgresKnowledgeIngestionStore:
             ).fetchone()
             connection.commit()
         return _document_from_row(updated, chunk_count=len(chunks)) if updated else None
+
+    def resync_document(
+        self,
+        document_id: str,
+        embedding_service: EmbeddingService,
+        context: StoreContext | None = None,
+    ) -> KnowledgeDocumentRecord | None:
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            row = connection.execute(
+                """
+                SELECT *
+                FROM knowledge_documents
+                WHERE organization_id = %s
+                  AND id = %s
+                """,
+                (scoped.organization_id, document_id),
+            ).fetchone()
+            if row is None:
+                return None
+            document = _document_from_row(row, chunk_count=0)
+            resync_metadata = {
+                **document.metadata,
+                "last_resynced_at": _now().isoformat(),
+            }
+            chunk_count = 0
+            if document.approval_status == "approved":
+                connection.execute(
+                    "DELETE FROM knowledge_chunks WHERE organization_id = %s AND document_id = %s",
+                    (scoped.organization_id, document.id),
+                )
+                chunks = build_chunks(document)
+                chunk_count = len(chunks)
+                for index, (heading, chunk_content, token_count) in enumerate(chunks):
+                    chunk_id = f"{document.id}:chunk:{index}"
+                    chunk_hash = content_hash(chunk_content)
+                    connection.execute(
+                        """
+                        INSERT INTO knowledge_chunks (
+                          id,
+                          organization_id,
+                          document_id,
+                          chunk_index,
+                          heading,
+                          content,
+                          content_hash,
+                          token_count,
+                          metadata
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            chunk_id,
+                            scoped.organization_id,
+                            document.id,
+                            index,
+                            heading,
+                            chunk_content,
+                            chunk_hash,
+                            token_count,
+                            Jsonb({"source_path": document.source_path, "version": document.version}),
+                        ),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO knowledge_chunk_embeddings (
+                          chunk_id,
+                          organization_id,
+                          embedding_model,
+                          embedding,
+                          content_hash
+                        )
+                        VALUES (%s, %s, %s, %s::vector, %s)
+                        ON CONFLICT (chunk_id, embedding_model) DO UPDATE SET
+                          embedding = EXCLUDED.embedding,
+                          content_hash = EXCLUDED.content_hash,
+                          updated_at = now()
+                        """,
+                        (
+                            chunk_id,
+                            scoped.organization_id,
+                            embedding_service.embedding_model,
+                            vector_literal(embedding_service.embed_text(chunk_content)),
+                            chunk_hash,
+                        ),
+                    )
+            updated = connection.execute(
+                """
+                UPDATE knowledge_documents
+                SET metadata = %s,
+                    updated_at = now()
+                WHERE organization_id = %s
+                  AND id = %s
+                RETURNING *
+                """,
+                (Jsonb(resync_metadata), scoped.organization_id, document.id),
+            ).fetchone()
+            connection.commit()
+        return _document_from_row(updated, chunk_count=chunk_count) if updated else None
 
     def archive_document(
         self,
@@ -1096,6 +1387,7 @@ def _record_from_document(document: KnowledgeDocumentRecord) -> KnowledgeRecord:
         category=document.category,
         source_path=document.source_path,
         content=document.content,
+        approval_status=document.approval_status,
     )
 
 
@@ -1126,7 +1418,7 @@ class KnowledgeIngestionService:
         for file in request.files:
             source_path = _normalize_source_path(file.filename, file.source_path)
             try:
-                extracted = extract_file(file)
+                extracted = extract_file(file, settings=self.settings)
                 category = _category_from_filename(file.filename, file.category)
                 content = _clean_text(extracted.content)
                 document_hash = content_hash(content)
@@ -1134,7 +1426,7 @@ class KnowledgeIngestionService:
                     id=_stable_id("kdoc", f"{source.id}:{source_path}"),
                     source_id=source.id,
                     job_id=job.id,
-                    pack_slug=DEFAULT_PACK_SLUG,
+                    pack_slug=_pack_slug_for_source(source.id),
                     category=category,
                     source_path=source_path,
                     title=extracted.title,
@@ -1148,6 +1440,7 @@ class KnowledgeIngestionService:
                         "requires_review": True,
                     },
                 )
+                self._remove_runtime_record(document.id)
                 documents.append(self.store.save_document(document, context=context))
                 job.processed_files += 1
             except ExtractionError as exc:
@@ -1170,6 +1463,12 @@ class KnowledgeIngestionService:
         job = self.store.save_job(job, context=context)
         return KnowledgeIngestionJobResponse(job=job, documents=documents, errors=errors)
 
+    def list_sources(
+        self,
+        context: StoreContext | None = None,
+    ) -> list[KnowledgeSourceRecord]:
+        return self.store.list_sources(context=context)
+
     def approve_document(
         self,
         document_id: str,
@@ -1184,12 +1483,78 @@ class KnowledgeIngestionService:
             self._register_runtime_record(document)
         return document
 
+    def resync_document(
+        self,
+        document_id: str,
+        context: StoreContext | None = None,
+    ) -> KnowledgeDocumentRecord | None:
+        document = self.store.resync_document(
+            document_id,
+            self.embedding_service,
+            context=context,
+        )
+        if document is not None and document.approval_status == "approved":
+            self._register_runtime_record(document)
+        return document
+
+    def sync_source(
+        self,
+        source_id: str,
+        context: StoreContext | None = None,
+    ) -> KnowledgeIngestionJobResponse | None:
+        source = self.store.touch_source(source_id, context=context)
+        if source is None:
+            return None
+        documents = self.store.list_documents(source_id=source.id, context=context)
+        request = KnowledgeIngestionJobCreateRequest(
+            source_name=source.name,
+            source_type=source.source_type,
+            files=[],
+            metadata={"sync_kind": "local_reindex", "source_id": source.id},
+        )
+        job = self.store.create_job(source, request, context=context)
+        job.status = "embedding"
+        job.total_files = len(documents)
+        synced_documents: list[KnowledgeDocumentRecord] = []
+        errors: list[KnowledgeIngestionErrorRecord] = []
+        for document in documents:
+            try:
+                synced = self.resync_document(document.id, context=context)
+                if synced is not None:
+                    synced_documents.append(synced)
+                    job.processed_files += 1
+            except RuntimeError as exc:
+                error = KnowledgeIngestionErrorRecord(
+                    job_id=job.id,
+                    source_path=document.source_path,
+                    error_code="resync_failed",
+                    message=str(exc),
+                    metadata={"document_id": document.id},
+                )
+                errors.append(self.store.record_error(error, context=context))
+                job.failed_files += 1
+        job.status = "failed" if errors and not synced_documents else "ready"
+        if any(document.approval_status == "needs_review" for document in synced_documents):
+            job.status = "needs_review"
+        job.summary = (
+            f"Local re-index refreshed {len(synced_documents)} document(s); {len(errors)} failed."
+        )
+        job = self.store.save_job(job, context=context)
+        return KnowledgeIngestionJobResponse(
+            job=job,
+            documents=synced_documents,
+            errors=errors,
+        )
+
     def archive_document(
         self,
         document_id: str,
         context: StoreContext | None = None,
     ) -> KnowledgeDocumentRecord | None:
-        return self.store.archive_document(document_id, context=context)
+        document = self.store.archive_document(document_id, context=context)
+        if document is not None:
+            self._remove_runtime_record(document.id)
+        return document
 
     def _register_runtime_record(self, document: KnowledgeDocumentRecord) -> None:
         if self.runtime_retriever is None:
@@ -1201,6 +1566,17 @@ class KnowledgeIngestionService:
         fallback_add_record = getattr(fallback, "add_record", None)
         if callable(fallback_add_record):
             fallback_add_record(_record_from_document(document))
+
+    def _remove_runtime_record(self, document_id: str) -> None:
+        if self.runtime_retriever is None:
+            return
+        remove_record = getattr(self.runtime_retriever, "remove_record", None)
+        if callable(remove_record):
+            remove_record(document_id)
+        fallback = getattr(self.runtime_retriever, "fallback", None)
+        fallback_remove_record = getattr(fallback, "remove_record", None)
+        if callable(fallback_remove_record):
+            fallback_remove_record(document_id)
 
 
 def build_knowledge_ingestion_store(settings: Settings | None = None) -> KnowledgeIngestionStoreProtocol:
