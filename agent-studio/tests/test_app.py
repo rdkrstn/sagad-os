@@ -19,6 +19,46 @@ def setup_function() -> None:
     get_settings.cache_clear()
 
 
+def assert_sprint2_retrieval_fields(
+    payload: dict[str, object],
+    *,
+    expected_missing_knowledge: bool,
+) -> None:
+    assert isinstance(payload["selected_agent"], str)
+    assert payload["selected_agent"]
+    assert isinstance(payload["retrieval_confidence"], int | float)
+    assert 0 <= payload["retrieval_confidence"] <= 1
+    assert payload["missing_knowledge"] is expected_missing_knowledge
+
+    diagnostic = payload["retrieval_diagnostic"]
+    assert isinstance(diagnostic, dict)
+    assert diagnostic
+
+    metadata_filters = diagnostic.get("metadata_filters")
+    if metadata_filters is None:
+        query_plan = diagnostic.get("query_plan", {})
+        assert isinstance(query_plan, dict)
+        metadata_filters = query_plan.get("metadata_filters")
+    assert isinstance(metadata_filters, dict)
+    assert metadata_filters["approval_status"] == "approved"
+    assert metadata_filters["intent"] == payload["intent"]
+    assert metadata_filters["risk_level"] == payload["risk_level"]
+    assert metadata_filters["selected_agent"] == payload["selected_agent"]
+
+    selected_sources = diagnostic.get("selected_sources")
+    assert isinstance(selected_sources, list)
+    assert selected_sources
+    first_source = selected_sources[0]
+    assert isinstance(first_source, dict)
+    assert first_source["title"]
+    assert first_source["source_path"]
+    assert isinstance(first_source["score"], int | float)
+
+    reasons = diagnostic.get("reasons")
+    assert isinstance(reasons, list)
+    assert reasons
+
+
 def test_health() -> None:
     response = client.get("/health")
     assert response.status_code == 200
@@ -46,7 +86,32 @@ def test_chatwoot_webhook_creates_approval_conversation() -> None:
     assert payload["intent"] == "pricing_lead"
     assert payload["approval_status"] == "needs_approval"
     assert payload["retrieved_knowledge"]
+    assert_sprint2_retrieval_fields(payload, expected_missing_knowledge=False)
     assert "Basis:" in payload["draft_reply"]
+
+
+def test_chatwoot_refund_cancellation_webhook_stays_gated_with_retrieval_diagnostics() -> None:
+    response = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "event": "message_created",
+            "id": 992,
+            "content": "I need to cancel my service and get a refund today.",
+            "message_type": "incoming",
+            "conversation": {"id": 43},
+            "sender": {"name": "Morgan Case"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["customer_name"] == "Morgan Case"
+    assert payload["intent"] == "refund_or_cancellation"
+    assert payload["risk_level"] == "high"
+    assert payload["approval_status"] == "needs_approval"
+    assert payload["send_status"] == "not_sent"
+    assert payload["retrieved_knowledge"]
+    assert_sprint2_retrieval_fields(payload, expected_missing_knowledge=False)
 
 
 def test_chatwoot_webhook_threads_same_conversation_messages() -> None:

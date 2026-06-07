@@ -80,6 +80,15 @@ knowledge_ingestion_service = KnowledgeIngestionService(
     runtime_retriever=retriever,
 )
 
+# Populated by the Sprint 2 graph/retrieval workflow when those state fields exist.
+_SPRINT2_CONVERSATION_STATE_FIELDS = (
+    "selected_agent",
+    "customer_driver",
+    "retrieval_confidence",
+    "missing_knowledge",
+    "retrieval_diagnostic",
+)
+
 
 def _record_diagnostic_event(
     *,
@@ -997,24 +1006,24 @@ async def receive_chatwoot_webhook(
         "trace_url": None,
     }
     final_state = graph.invoke(initial_state)
-    record = ConversationRecord(
-        chatwoot_conversation_id=final_state.get("chatwoot_conversation_id"),
-        chatwoot_message_id=final_state.get("chatwoot_message_id"),
-        customer_name=str(final_state.get("customer_name", "Chatwoot visitor")),
-        channel=str(final_state.get("channel", "chatwoot")),
-        incoming_message=incoming_message,
-        normalized_message=str(final_state.get("normalized_message", incoming_message)),
-        intent=str(final_state.get("intent", "unknown")),
-        risk_level=final_state.get("risk_level", "medium"),
-        retrieved_knowledge=final_state.get("retrieved_knowledge", []),
-        chatwoot_context=chatwoot_context,
-        draft_reply=str(final_state.get("draft_reply", "")),
-        qa_findings=final_state.get("qa_findings", []),
-        compliance_status=final_state.get("compliance_status", "needs_review"),
-        approval_status="needs_approval",
-        send_status="not_sent",
-        trace_url=final_state.get("trace_url"),
-        messages=[
+    record_payload: dict[str, object] = {
+        "chatwoot_conversation_id": final_state.get("chatwoot_conversation_id"),
+        "chatwoot_message_id": final_state.get("chatwoot_message_id"),
+        "customer_name": str(final_state.get("customer_name", "Chatwoot visitor")),
+        "channel": str(final_state.get("channel", "chatwoot")),
+        "incoming_message": incoming_message,
+        "normalized_message": str(final_state.get("normalized_message", incoming_message)),
+        "intent": str(final_state.get("intent", "unknown")),
+        "risk_level": final_state.get("risk_level", "medium"),
+        "retrieved_knowledge": final_state.get("retrieved_knowledge", []),
+        "chatwoot_context": chatwoot_context,
+        "draft_reply": str(final_state.get("draft_reply", "")),
+        "qa_findings": final_state.get("qa_findings", []),
+        "compliance_status": final_state.get("compliance_status", "needs_review"),
+        "approval_status": "needs_approval",
+        "send_status": "not_sent",
+        "trace_url": final_state.get("trace_url"),
+        "messages": [
             ConversationMessageRecord(
                 sender_type="customer",
                 body=incoming_message,
@@ -1023,7 +1032,11 @@ async def receive_chatwoot_webhook(
                 payload=payload.model_dump(mode="json", exclude_none=True),
             ),
         ],
-    )
+    }
+    for field_name in _SPRINT2_CONVERSATION_STATE_FIELDS:
+        if field_name in ConversationRecord.model_fields and field_name in final_state:
+            record_payload[field_name] = final_state.get(field_name)
+    record = ConversationRecord(**record_payload)
     if conversation_id:
         record.id = conversation_id
     saved = store.save(record, context=context)

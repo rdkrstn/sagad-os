@@ -13,7 +13,12 @@ class AgentStudioState(TypedDict, total=False):
     normalized_message: str
     intent: str
     risk_level: Literal["low", "medium", "high"]
+    selected_agent: str | None
+    customer_driver: str | None
     retrieved_knowledge: list[KnowledgeHit]
+    retrieval_confidence: float | None
+    missing_knowledge: bool
+    retrieval_diagnostic: dict[str, object]
     crm_context: CrmContactContext | None
     tool_plans: list[ToolPlan]
     tool_results: list[ToolResult]
