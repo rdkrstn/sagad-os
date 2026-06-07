@@ -15,6 +15,7 @@ import {
   FileText,
   Gauge,
   GitBranch,
+  History,
   Layers3,
   ListChecks,
   LogOut,
@@ -28,6 +29,7 @@ import {
   ShieldCheck,
   Sun,
   UserCog,
+  Workflow,
   Wrench,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -69,6 +71,7 @@ type NavItem = {
   label: string;
   code: string;
   icon: LucideIcon;
+  status: string;
 };
 
 type NavSection = {
@@ -78,39 +81,47 @@ type NavSection = {
 
 const navSections: NavSection[] = [
   {
-    label: "Operations",
+    label: "Operate",
     items: [
-      { href: "/", label: "Command Center", code: "CC", icon: Gauge },
-      { href: "/review-queue", label: "Review Queue", code: "RQ", icon: ListChecks },
-      { href: "/conversations", label: "Conversations", code: "CV", icon: ClipboardCheck },
-      { href: "/drivers", label: "Contact Drivers", code: "DR", icon: Route },
-      { href: "/reports", label: "Reports", code: "RP", icon: BarChart3 },
+      { href: "/", label: "Command Center", code: "CC", icon: Gauge, status: "Live" },
+      { href: "/review-queue", label: "Review Queue", code: "RQ", icon: ListChecks, status: "HITL" },
+      { href: "/conversations", label: "Conversations", code: "CV", icon: ClipboardCheck, status: "Inbox" },
+      { href: "/drivers", label: "Contact Drivers", code: "DR", icon: Route, status: "Drivers" },
+      { href: "/reports", label: "Reports", code: "RP", icon: BarChart3, status: "Ops" },
     ],
   },
   {
-    label: "Agent Studio",
+    label: "Build",
     items: [
-      { href: "/agents", label: "Agents", code: "AG", icon: Bot },
-      { href: "/skills", label: "Skills", code: "SK", icon: BrainCircuit },
-      { href: "/graphs", label: "Graphs", code: "GR", icon: GitBranch },
-      { href: "/tools", label: "Tools", code: "TL", icon: Wrench },
-      { href: "/mcp-servers", label: "MCP Servers", code: "MC", icon: ServerCog },
-      { href: "/traces", label: "Traces", code: "TR", icon: Network },
+      { href: "/workflows", label: "Workflows", code: "WF", icon: Workflow, status: "Flows" },
+      { href: "/agents", label: "Agents", code: "AG", icon: Bot, status: "Gated" },
+      { href: "/skills", label: "Skills", code: "SK", icon: BrainCircuit, status: "Playbooks" },
+      { href: "/graphs", label: "Graphs", code: "GR", icon: GitBranch, status: "LangGraph" },
+      { href: "/tools", label: "Tools", code: "TL", icon: Wrench, status: "Actions" },
+      { href: "/mcp-servers", label: "MCP Servers", code: "MC", icon: ServerCog, status: "External" },
     ],
   },
   {
-    label: "Knowledge & QA",
+    label: "Knowledge",
     items: [
-      { href: "/knowledge", label: "Knowledge Base", code: "KB", icon: BookOpen },
-      { href: "/qa", label: "Policy & QA", code: "QA", icon: ShieldCheck },
-      { href: "/evaluations", label: "Evaluations", code: "EV", icon: FileText },
+      { href: "/knowledge", label: "Knowledge Base", code: "KB", icon: BookOpen, status: "Sources" },
+      { href: "/qa", label: "Policy & QA", code: "QA", icon: ShieldCheck, status: "Rules" },
+      { href: "/evaluations", label: "Evaluations", code: "EV", icon: FileText, status: "Scores" },
+    ],
+  },
+  {
+    label: "Observe",
+    items: [
+      { href: "/logs", label: "Audit Log", code: "AU", icon: History, status: "Audit" },
+      { href: "/traces", label: "Traces", code: "TR", icon: Network, status: "LangSmith" },
+      { href: "/model-gateway", label: "Model Gateway", code: "MG", icon: Bot, status: "Optional" },
     ],
   },
   {
     label: "Platform",
     items: [
-      { href: "/integrations", label: "Adapters", code: "AD", icon: PlugZap },
-      { href: "/settings", label: "Settings", code: "ST", icon: Settings },
+      { href: "/integrations", label: "Adapters", code: "AD", icon: PlugZap, status: "Adapters" },
+      { href: "/settings", label: "Settings", code: "ST", icon: Settings, status: "Config" },
     ],
   },
 ];
@@ -158,8 +169,8 @@ const routeMeta: Array<{ match: string; title: string; description: string }> = 
   },
   {
     match: "/workflows",
-    title: "Graphs",
-    description: "Stateful orchestration flows that route AI work through context, tools, approvals, and audit.",
+    title: "Workflows",
+    description: "Runnable operating flows for intake, routing, review, approval, send, audit, and trace.",
   },
   {
     match: "/graphs",
@@ -203,8 +214,13 @@ const routeMeta: Array<{ match: string; title: string; description: string }> = 
   },
   {
     match: "/logs",
-    title: "Traces",
-    description: "Developer observability for audit events, AI drafts, retrieval, tool calls, approvals, and sends.",
+    title: "Audit Log",
+    description: "Operator audit record for AI drafts, retrieval, tool calls, approvals, and sends.",
+  },
+  {
+    match: "/model-gateway",
+    title: "Model Gateway",
+    description: "LiteLLM readiness and model routing status, reported through Agent Studio server-side.",
   },
   {
     match: "/settings",
@@ -218,15 +234,7 @@ function isActive(pathname: string, href: string): boolean {
 }
 
 function useConsoleTheme() {
-  const [theme, setTheme] = useState<Theme>(() => {
-    if (typeof window === "undefined") return "dark";
-    const stored = window.localStorage.getItem("sagados-theme");
-    if (stored === "light" || stored === "dark") {
-      return stored;
-    }
-
-    return "dark";
-  });
+  const [theme, setTheme] = useState<Theme>("dark");
 
   useEffect(() => {
     const root = document.documentElement;
@@ -256,7 +264,7 @@ function SidebarNav({
     <nav
       aria-label="Product navigation"
       className={cn(
-        "grid content-start gap-4 overflow-y-auto",
+        "grid content-start gap-5 overflow-y-auto",
         compact ? "px-2 py-3" : "px-3 py-4",
       )}
     >
@@ -274,21 +282,29 @@ function SidebarNav({
               <Link
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "group flex h-8 items-center gap-2.5 rounded-sm px-3 text-[13px] font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-                  active && "bg-[rgba(0,212,170,0.12)] text-foreground",
+                  "group relative flex h-9 items-center gap-2.5 rounded-sm px-3 text-[13px] font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                  active && "bg-[rgba(0,212,170,0.13)] text-foreground",
                   compact && "justify-center px-0",
                 )}
                 href={item.href}
               >
                 <span
                   className={cn(
-                    "grid size-5 shrink-0 place-items-center border border-current font-mono text-[9px] opacity-70 transition-opacity group-hover:opacity-100",
+                    "absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-transparent",
+                    active && "bg-[var(--accent)]",
+                  )}
+                />
+                <span
+                  className={cn(
+                    "grid size-6 shrink-0 place-items-center rounded-sm text-muted-foreground transition-colors group-hover:text-foreground",
                     active && "text-[var(--accent-text)] opacity-100",
                   )}
                 >
-                  {compact ? <Icon aria-hidden="true" size={13} /> : item.code}
+                  <Icon aria-hidden="true" size={15} />
                 </span>
-                {!compact ? <span className="min-w-0 flex-1 truncate">{item.label}</span> : null}
+                {!compact ? (
+                  <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                ) : null}
               </Link>
             );
 
@@ -369,7 +385,7 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
             <SagadLogo markOnly theme={theme} />
             <div className="min-w-0">
               <div className="text-[15px] font-bold">SagadOS</div>
-              <div className="font-mono text-[10px] uppercase text-muted-foreground">Open-source AI Ops</div>
+              <div className="font-mono text-[10px] uppercase text-muted-foreground">Self-hosted AI Ops</div>
             </div>
             <div className="ml-auto flex items-center gap-1.5 font-mono text-[10px] uppercase text-muted-foreground">
               <span className="size-1.5 rounded-full bg-[var(--accent)] shadow-[0_0_0_3px_rgba(0,212,170,0.14)]" />

@@ -10,7 +10,7 @@ Design source of truth:
 
 ## Navigation
 
-### Operations
+### Operate
 
 - Command Center
 - Review Queue
@@ -18,20 +18,26 @@ Design source of truth:
 - Contact Drivers
 - Reports
 
-### Agent Studio
+### Build
 
+- Workflows
 - Agents
 - Skills
 - Graphs
 - Tools
 - MCP Servers
-- Traces
 
-### Knowledge & QA
+### Knowledge
 
 - Knowledge Base
 - Policy & QA
 - Evaluations
+
+### Observe
+
+- Audit Log
+- Traces
+- Model Gateway
 
 ### Platform
 
@@ -72,6 +78,7 @@ Connected or implemented:
 
 - Next.js v1 shell and Auth.js session boundary.
 - Optional Agent Studio API seam through server routes.
+- LiteLLM Model Gateway status through Agent Studio only.
 - Chatwoot and Twenty configuration contracts.
 - Knowledge ingestion UI when Agent Studio is configured.
 - Approval-send proxy route.
@@ -79,7 +86,6 @@ Connected or implemented:
 
 Optional readiness:
 
-- LiteLLM gateway.
 - LangSmith trace metadata.
 
 Planned:
@@ -100,4 +106,4 @@ Planned:
 
 ## Demo Fixture Rules
 
-Preview fixtures must be deterministic, fake, clearly labeled, and professional. Do not include real customer data, real phone numbers, real addresses, secrets, profanity, or live provider URLs. Northstar Apparel Support is the public-preview demo workspace when live Agent Studio data is not configured.
+Preview fixtures must be deterministic, fake, clearly labeled, and professional. Do not include real customer data, real phone numbers, real addresses, secrets, profanity, or live provider URLs. Sagad Demo Operations is the public-preview demo workspace when live Agent Studio data is not configured.

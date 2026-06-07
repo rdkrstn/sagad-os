@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { NextResponse } from "next/server";
-import { auth } from "../../../../auth";
+import { getCurrentSession } from "@/lib/auth/session";
 
 interface RealtimeTokenPayload {
   expires_at: number;
@@ -20,7 +20,7 @@ function createRealtimeToken(payload: RealtimeTokenPayload, secret: string): str
 }
 
 export async function GET() {
-  const session = await auth();
+  const session = await getCurrentSession();
   if (!session?.user?.id) {
     return NextResponse.json({ enabled: false, reason: "unauthorized" }, { status: 401 });
   }

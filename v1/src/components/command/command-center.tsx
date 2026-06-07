@@ -125,7 +125,7 @@ export function CommandCenter({
     ["Twenty CRM adapter", "Dry-run", "External CRM context, server-side only"],
     ["Knowledge index", "Healthy", "Approved KB/SOP retrieval"],
     ["Queue worker", queueRows.length > 0 ? "Healthy" : "Preview", "Approval and retry processing"],
-    ["Model gateway / LiteLLM", "Ready", "Provider access remains server-side"],
+    ["Model gateway / LiteLLM", "Optional", "Provider access remains server-side"],
   ] as const;
 
   const recentActivity =

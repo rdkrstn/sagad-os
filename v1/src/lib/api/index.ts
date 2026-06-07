@@ -18,7 +18,7 @@ import {
   mockSopReferences,
   mockSupervisorPods,
 } from "@/lib/mocks";
-import { auth } from "../../../auth";
+import { getCurrentSession } from "@/lib/auth/session";
 
 type ViewRecord = Record<string, unknown>;
 type ConversationView = Omit<Conversation, "messages" | "priority" | "status"> &
@@ -160,10 +160,6 @@ interface AgentStudioKnowledgeDocument {
   updated_at: string;
 }
 
-interface AgentStudioKnowledgeDocumentList {
-  documents: AgentStudioKnowledgeDocument[];
-}
-
 interface AgentStudioKnowledgeSource {
   id: string;
   source_type: string;
@@ -174,10 +170,6 @@ interface AgentStudioKnowledgeSource {
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
-}
-
-interface AgentStudioKnowledgeSourceList {
-  sources: AgentStudioKnowledgeSource[];
 }
 
 interface AgentStudioKnowledgeIngestionError {
@@ -204,10 +196,6 @@ interface AgentStudioKnowledgeIngestionJob {
   errors: AgentStudioKnowledgeIngestionError[];
   created_at: string;
   updated_at: string;
-}
-
-interface AgentStudioKnowledgeIngestionJobList {
-  jobs: AgentStudioKnowledgeIngestionJob[];
 }
 
 export interface IntegrationConnectionView {
@@ -238,6 +226,13 @@ interface IntegrationConnectionList {
 
 const demoNow = "2026-06-04T09:00:00+08:00";
 const clone = <T>(value: T): T => structuredClone(value);
+const agentStudioFetchTimeoutMs = 3000;
+
+function viewRecord(value: unknown): ViewRecord {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as ViewRecord)
+    : {};
+}
 
 function viewText(
   row: ViewRecord,
@@ -278,6 +273,77 @@ function agentStudioBaseUrl(): string | null {
   return value ? value.replace(/\/$/, "") : null;
 }
 
+type AgentStudioConnectionStatus =
+  | "connected"
+  | "not_configured"
+  | "unauthorized"
+  | "unreachable";
+
+type AgentStudioFetchResult<T> = {
+  data: T | null;
+  detail?: string;
+  status: AgentStudioConnectionStatus;
+  statusCode?: number;
+};
+
+function connectionStatusFromHttp(statusCode: number): AgentStudioConnectionStatus {
+  return statusCode === 401 || statusCode === 403 ? "unauthorized" : "unreachable";
+}
+
+async function fetchAgentStudioJson<T>(
+  path: string,
+  readData: (payload: unknown) => T | null,
+): Promise<AgentStudioFetchResult<T>> {
+  const baseUrl = agentStudioBaseUrl();
+  if (!baseUrl) {
+    return {
+      data: null,
+      detail: "SAGAD_API_BASE_URL is not configured.",
+      status: "not_configured",
+    };
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}${path}`, {
+      headers: await agentStudioHeaders(),
+      cache: "no-store",
+      signal: AbortSignal.timeout(agentStudioFetchTimeoutMs),
+    });
+
+    if (!response.ok) {
+      return {
+        data: null,
+        detail: `Agent Studio returned HTTP ${response.status}.`,
+        status: connectionStatusFromHttp(response.status),
+        statusCode: response.status,
+      };
+    }
+
+    const payload = (await response.json()) as unknown;
+    const data = readData(payload);
+    if (data === null) {
+      return {
+        data: null,
+        detail: "Agent Studio returned an unexpected response shape.",
+        status: "unreachable",
+        statusCode: response.status,
+      };
+    }
+
+    return {
+      data,
+      status: "connected",
+      statusCode: response.status,
+    };
+  } catch {
+    return {
+      data: null,
+      detail: `Agent Studio is not reachable at ${baseUrl}.`,
+      status: "unreachable",
+    };
+  }
+}
+
 async function agentStudioHeaders(): Promise<HeadersInit> {
   const headers = new Headers();
   const secret = process.env.AGENT_STUDIO_INTERNAL_SECRET?.trim();
@@ -285,7 +351,7 @@ async function agentStudioHeaders(): Promise<HeadersInit> {
     headers.set("X-Sagad-Internal-Secret", secret);
   }
 
-  const session = await auth();
+  const session = await getCurrentSession();
   if (session?.user?.id) {
     headers.set("X-Sagad-User-Id", session.user.id);
   }
@@ -309,6 +375,7 @@ async function fetchAgentStudioConversations(): Promise<AgentStudioConversation[
     const response = await fetch(`${baseUrl}/conversations`, {
       headers: await agentStudioHeaders(),
       cache: "no-store",
+      signal: AbortSignal.timeout(agentStudioFetchTimeoutMs),
     });
 
     if (!response.ok) {
@@ -332,6 +399,7 @@ async function fetchAgentStudioIntegrationConnections(): Promise<IntegrationConn
     const response = await fetch(`${baseUrl}/integration-configs`, {
       headers: await agentStudioHeaders(),
       cache: "no-store",
+      signal: AbortSignal.timeout(agentStudioFetchTimeoutMs),
     });
 
     if (!response.ok) {
@@ -345,73 +413,56 @@ async function fetchAgentStudioIntegrationConnections(): Promise<IntegrationConn
   }
 }
 
-async function fetchAgentStudioKnowledgeDocuments(): Promise<AgentStudioKnowledgeDocument[] | null> {
-  const baseUrl = agentStudioBaseUrl();
-  if (!baseUrl) {
-    return null;
-  }
-
-  try {
-    const response = await fetch(`${baseUrl}/knowledge/documents`, {
-      headers: await agentStudioHeaders(),
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const payload = (await response.json()) as AgentStudioKnowledgeDocumentList;
-    return Array.isArray(payload.documents) ? payload.documents : null;
-  } catch {
-    return null;
-  }
+async function fetchAgentStudioKnowledgeDocuments(): Promise<
+  AgentStudioFetchResult<AgentStudioKnowledgeDocument[]>
+> {
+  return fetchAgentStudioJson("/knowledge/documents", (payload) => {
+    const documents = viewRecord(payload).documents;
+    return Array.isArray(documents) ? documents : null;
+  });
 }
 
-async function fetchAgentStudioKnowledgeJobs(): Promise<AgentStudioKnowledgeIngestionJob[] | null> {
-  const baseUrl = agentStudioBaseUrl();
-  if (!baseUrl) {
-    return null;
-  }
-
-  try {
-    const response = await fetch(`${baseUrl}/knowledge/ingestion-jobs`, {
-      headers: await agentStudioHeaders(),
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const payload = (await response.json()) as AgentStudioKnowledgeIngestionJobList;
-    return Array.isArray(payload.jobs) ? payload.jobs : null;
-  } catch {
-    return null;
-  }
+async function fetchAgentStudioKnowledgeJobs(): Promise<
+  AgentStudioFetchResult<AgentStudioKnowledgeIngestionJob[]>
+> {
+  return fetchAgentStudioJson("/knowledge/ingestion-jobs", (payload) => {
+    const jobs = viewRecord(payload).jobs;
+    return Array.isArray(jobs) ? jobs : null;
+  });
 }
 
-async function fetchAgentStudioKnowledgeSources(): Promise<AgentStudioKnowledgeSource[] | null> {
-  const baseUrl = agentStudioBaseUrl();
-  if (!baseUrl) {
-    return null;
+async function fetchAgentStudioKnowledgeSources(): Promise<
+  AgentStudioFetchResult<AgentStudioKnowledgeSource[]>
+> {
+  return fetchAgentStudioJson("/knowledge/sources", (payload) => {
+    const sources = viewRecord(payload).sources;
+    return Array.isArray(sources) ? sources : null;
+  });
+}
+
+async function fetchAgentStudioLiteLlmHealth(): Promise<AgentStudioFetchResult<ViewRecord>> {
+  return fetchAgentStudioJson("/integrations/litellm/health", (payload) => {
+    const record = viewRecord(payload);
+    return Object.keys(record).length > 0 ? record : null;
+  });
+}
+
+function summarizeAgentStudioStatus(
+  results: Array<AgentStudioFetchResult<unknown>>,
+): AgentStudioConnectionStatus {
+  if (results.some((result) => result.status === "connected")) {
+    return "connected";
   }
 
-  try {
-    const response = await fetch(`${baseUrl}/knowledge/sources`, {
-      headers: await agentStudioHeaders(),
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const payload = (await response.json()) as AgentStudioKnowledgeSourceList;
-    return Array.isArray(payload.sources) ? payload.sources : null;
-  } catch {
-    return null;
+  if (results.some((result) => result.status === "unauthorized")) {
+    return "unauthorized";
   }
+
+  if (results.every((result) => result.status === "not_configured")) {
+    return "not_configured";
+  }
+
+  return "unreachable";
 }
 
 function titleCase(value: string): string {
@@ -1909,11 +1960,22 @@ export async function getAuditEvents(): Promise<ViewRecord[]> {
 }
 
 export async function getKnowledgeIngestionOverview(): Promise<ViewRecord> {
-  const [liveDocuments, liveJobs, liveSources] = await Promise.all([
+  const [documentResult, jobResult, sourceResult] = await Promise.all([
     fetchAgentStudioKnowledgeDocuments(),
     fetchAgentStudioKnowledgeJobs(),
     fetchAgentStudioKnowledgeSources(),
   ]);
+  const connectionStatus = summarizeAgentStudioStatus([
+    documentResult,
+    jobResult,
+    sourceResult,
+  ]);
+  const liveDocuments = documentResult.data;
+  const liveJobs = jobResult.data;
+  const liveSources = sourceResult.data;
+  const sourceDetail =
+    [documentResult, jobResult, sourceResult].find((result) => result.detail)?.detail ??
+    null;
   const documents =
     liveDocuments?.map((document) => ({
       id: document.id,
@@ -2064,7 +2126,10 @@ export async function getKnowledgeIngestionOverview(): Promise<ViewRecord> {
         recommendedAction: "Upload warranty verification script and approve for Support Agent.",
       },
     ],
-    source: liveDocuments || liveJobs || liveSources ? "agent-studio" : "mock",
+    agentStudioBaseUrl: agentStudioBaseUrl(),
+    connectionDetail: sourceDetail,
+    connectionStatus,
+    source: connectionStatus === "connected" ? "agent-studio" : "mock",
   });
 }
 
@@ -2319,6 +2384,7 @@ export async function getEvaluations(): Promise<ViewRecord[]> {
 
 export async function getIntegrationHealth(): Promise<ViewRecord[]> {
   const connections = await getIntegrationConnections();
+  const modelGatewayStatus = await getModelGatewayStatus();
   const connectionRows = connections.map((row) => ({
     ...row,
     entityKind: "adapter",
@@ -2365,13 +2431,13 @@ export async function getIntegrationHealth(): Promise<ViewRecord[]> {
       name: "LiteLLM",
       entityKind: "service",
       kind: "Model gateway",
-      status: agentStudioBaseUrl() ? "Preview" : "Missing env",
-      visibilityStatus: agentStudioBaseUrl() ? "Preview" : "Missing env",
+      status: viewText(modelGatewayStatus, ["status"], "agent_studio_unavailable"),
+      visibilityStatus: viewText(modelGatewayStatus, ["agentStudioStatus"], "unreachable"),
       mode: "Server-side model routing",
       access: "No browser credentials",
       source: "Agent Studio",
       boundary: "Server-side",
-      detail: "Provider routing and credentials remain outside the browser.",
+      detail: viewText(modelGatewayStatus, ["detail"], "Provider routing and credentials remain outside the browser."),
     },
     {
       id: "health-generic-webhooks",
@@ -2400,6 +2466,42 @@ export async function getIntegrationHealth(): Promise<ViewRecord[]> {
       detail: "MCP servers are shown for roadmap visibility and are not called from browser code.",
     },
   ]);
+}
+
+export async function getModelGatewayStatus(): Promise<ViewRecord> {
+  const result = await fetchAgentStudioLiteLlmHealth();
+  const payload = result.data ?? {};
+  const baseUrl = agentStudioBaseUrl();
+  const connected = result.status === "connected";
+
+  return clone({
+    id: "model-gateway-litellm",
+    name: viewText(payload, ["provider"], "LiteLLM Gateway"),
+    agentStudioBaseUrl: baseUrl,
+    agentStudioStatus: result.status,
+    baseUrl: viewText(payload, ["base_url", "baseUrl"], "http://127.0.0.1:4000/v1"),
+    boundary: "Agent Studio server-side only",
+    detail: connected
+      ? viewText(payload, ["detail"], "LiteLLM status is reported by Agent Studio.")
+      : result.status === "not_configured"
+        ? "Set SAGAD_API_BASE_URL so the console can ask Agent Studio for model gateway status."
+        : result.status === "unauthorized"
+          ? "Agent Studio rejected the console request. Check AGENT_STUDIO_INTERNAL_SECRET and session headers."
+          : `Agent Studio is not reachable at ${baseUrl ?? "the configured URL"}. Start Agent Studio on port 8010.`,
+    dryRun: connected ? Boolean(payload.dry_run) : true,
+    external: false,
+    mode: viewText(payload, ["mode"], "OpenAI-compatible /v1 model gateway"),
+    provider: viewText(payload, ["provider"], "LiteLLM Gateway"),
+    setupCommand: "docker compose -f compose.preview.yaml --profile litellm up -d litellm",
+    status: connected
+      ? viewText(payload, ["status"], "unknown")
+      : result.status === "not_configured"
+        ? "agent_studio_not_configured"
+        : result.status === "unauthorized"
+          ? "unauthorized"
+          : "agent_studio_unavailable",
+    writesEnabled: connected ? Boolean(payload.writes_enabled) : false,
+  });
 }
 
 // TODO: Replace with real fetch from Agent Studio once API is available, and remove mockMcpTools from the tool connections list.

@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { redirect } from "next/navigation";
 import { ConsoleShell } from "@/components/layout/console-shell";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { getDevSession } from "@/lib/auth/dev-session";
 import { auth } from "../../auth";
 import "./globals.css";
 
@@ -29,10 +30,9 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const session = await auth();
+  const session = (await auth()) ?? (await getDevSession());
 
   if (!session?.user) {
-    // TODO(product-qa): Add an authenticated visual regression path so product routes can be inspected past NextAuth.
     redirect("/api/auth/signin");
   }
 

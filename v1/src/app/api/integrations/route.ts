@@ -1,4 +1,4 @@
-import { auth } from "../../../../auth";
+import { getCurrentSession } from "@/lib/auth/session";
 import {
   agentStudioBaseUrl,
   agentStudioHeaders,
@@ -7,7 +7,7 @@ import {
 } from "@/lib/agent-studio-proxy";
 
 export async function GET(): Promise<Response> {
-  const session = await auth();
+  const session = await getCurrentSession();
   if (!session?.user?.id) {
     return jsonResponse({ detail: "Authentication required." }, 401);
   }

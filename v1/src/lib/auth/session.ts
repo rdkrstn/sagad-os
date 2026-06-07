@@ -1,5 +1,6 @@
 import type { Session } from "next-auth";
 import { auth } from "../../../auth";
+import { getDevSession } from "./dev-session";
 
 export type CurrentUser = NonNullable<Session["user"]>;
 export type AuthenticatedSession = Session & {
@@ -18,7 +19,7 @@ function hasCurrentUser(session: Session | null): session is AuthenticatedSessio
 }
 
 export async function getCurrentSession(): Promise<Session | null> {
-  return auth();
+  return (await auth()) ?? (await getDevSession());
 }
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
