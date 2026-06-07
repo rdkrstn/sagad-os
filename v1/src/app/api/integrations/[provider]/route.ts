@@ -3,6 +3,7 @@ import { auth } from "../../../../../auth";
 import {
   agentStudioBaseUrl,
   agentStudioHeaders,
+  hasIntegrationAdminRole,
   isIntegrationProvider,
   jsonResponse,
   parseAgentStudioResponse,
@@ -24,6 +25,9 @@ export async function PUT(
   const session = await auth();
   if (!session?.user?.id) {
     return jsonResponse({ detail: "Authentication required." }, 401);
+  }
+  if (!hasIntegrationAdminRole(session.user.role)) {
+    return jsonResponse({ detail: "Owner or admin role required." }, 403);
   }
 
   const provider = await providerFromContext(context);
@@ -56,6 +60,9 @@ export async function DELETE(
   const session = await auth();
   if (!session?.user?.id) {
     return jsonResponse({ detail: "Authentication required." }, 401);
+  }
+  if (!hasIntegrationAdminRole(session.user.role)) {
+    return jsonResponse({ detail: "Owner or admin role required." }, 403);
   }
 
   const provider = await providerFromContext(context);

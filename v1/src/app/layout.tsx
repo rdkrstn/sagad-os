@@ -32,6 +32,7 @@ export default async function RootLayout({
   const session = await auth();
 
   if (!session?.user) {
+    // TODO(product-qa): Add an authenticated visual regression path so product routes can be inspected past NextAuth.
     redirect("/api/auth/signin");
   }
 

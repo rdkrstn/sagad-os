@@ -2,7 +2,7 @@
 
 ## Design Intent
 
-Sagad OS should feel like a clean Light Ops BPO supervisor console for a home services account. The interface is for repeated operational use: scanning queues, spotting risk, reviewing AI work, approving next steps, and handing off exceptions.
+Sagad OS should feel like a compact product console for AI customer operations. The interface is for repeated operational use: scanning queues, spotting risk, reviewing AI work, approving next steps, and handing off exceptions.
 
 The UI should make the platform boundary clear: Sagad OS coordinates external systems through Agent Studio adapters. Chatwoot, Twenty CRM, LangSmith, generic webhooks, and future MCP tools are connected providers, not built-in subsystems.
 
@@ -10,16 +10,16 @@ Do not build a landing page. The first screen should be the working dashboard.
 
 ## Visual Direction
 
-Use a restrained light theme:
+Use the local product UI reference in `../../design-system/sagados-product-ui-reference-v0.4` as the source of truth for visual direction.
 
-- warm or neutral page background;
-- white or near-white surfaces;
-- subtle borders;
-- readable dark text;
-- limited accent colors for status and priority;
-- no heavy gradients, decorative blobs, or oversized hero sections.
+- black and white identity;
+- paper/white surfaces for light-mode review and long reading;
+- black/graphite surfaces for dark-mode infrastructure and control;
+- green only for active, healthy, connected, ready, and primary action states;
+- semantic warning, danger, and info colors only when they communicate status;
+- no purple gradients, AI sparkles, decorative blobs, or oversized hero sections.
 
-The UI should look calm, organized, and practical.
+The UI should look calm, inspectable, organized, and practical.
 
 ## Layout Principles
 
@@ -67,9 +67,22 @@ Use concise labels:
 
 ## Console Areas
 
-### Header
+### App Shell
 
-The header should identify the workspace and current account. Keep it compact. Useful elements include account name, date range, queue mode, and simulated status.
+The app shell uses a 260px sidebar, compact 64px topbar, replaceable logo placeholder, workspace/environment status, search placeholder, theme toggle, alerts, and user placeholder. Do not import or hardcode the final SagadOS SVG logo unless explicitly requested.
+
+Top-level navigation:
+
+- `Overview`
+- `Conversations`
+- `Approvals`
+- `Customers`
+- `Knowledge`
+- `Workflows`
+- `Integrations`
+- `Analytics`
+- `Logs`
+- `Settings`
 
 ### Metrics Row
 

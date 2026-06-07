@@ -3,6 +3,7 @@ import { auth } from "../../../../../../auth";
 import {
   agentStudioBaseUrl,
   agentStudioHeaders,
+  hasApprovalRole,
   jsonResponse,
   parseAgentStudioResponse,
 } from "@/lib/agent-studio-proxy";
@@ -19,6 +20,9 @@ export async function POST(
   const session = await auth();
   if (!session?.user?.id) {
     return jsonResponse({ detail: "Authentication required." }, 401);
+  }
+  if (!hasApprovalRole(session.user.role)) {
+    return jsonResponse({ detail: "Supervisor, admin, or owner role required." }, 403);
   }
 
   const baseUrl = agentStudioBaseUrl();

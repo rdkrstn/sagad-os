@@ -5,11 +5,11 @@ import { cn } from "@/lib/utils";
 type StatusTone = "neutral" | "good" | "warning" | "danger" | "info";
 
 const toneClasses: Record<StatusTone, string> = {
-  neutral: "border-slate-200 bg-slate-50 text-slate-700",
-  good: "border-emerald-200 bg-emerald-50 text-emerald-700",
-  warning: "border-amber-200 bg-amber-50 text-amber-700",
-  danger: "border-rose-200 bg-rose-50 text-rose-700",
-  info: "border-sky-200 bg-sky-50 text-sky-700",
+  neutral: "border-border bg-surface-2 text-muted-foreground",
+  good: "border-[rgba(0,212,170,0.42)] bg-[rgba(0,212,170,0.12)] text-[var(--accent-text)]",
+  warning: "border-[var(--warning-border)] bg-[var(--warning-soft)] text-warning",
+  danger: "border-[var(--danger-border)] bg-[var(--danger-soft)] text-danger",
+  info: "border-[var(--info-border)] bg-[var(--info-soft)] text-info",
 };
 
 export function toneFromStatus(status: string): StatusTone {
@@ -19,7 +19,11 @@ export function toneFromStatus(status: string): StatusTone {
     normalized.includes("fail") ||
     normalized.includes("risk") ||
     normalized.includes("overdue") ||
-    normalized.includes("escalat")
+    normalized.includes("escalat") ||
+    normalized.includes("reject") ||
+    normalized.includes("blocked") ||
+    normalized.includes("high risk") ||
+    normalized.includes("urgent")
   ) {
     return "danger";
   }
@@ -28,7 +32,10 @@ export function toneFromStatus(status: string): StatusTone {
     normalized.includes("low") ||
     normalized.includes("pending") ||
     normalized.includes("review") ||
-    normalized.includes("approval")
+    normalized.includes("approval") ||
+    normalized.includes("missing") ||
+    normalized.includes("watch") ||
+    normalized.includes("degraded")
   ) {
     return "warning";
   }
@@ -37,12 +44,23 @@ export function toneFromStatus(status: string): StatusTone {
     normalized.includes("ok") ||
     normalized.includes("healthy") ||
     normalized.includes("approved") ||
+    normalized.includes("sent") ||
+    normalized.includes("open") ||
+    normalized.includes("resolved") ||
+    normalized.includes("eligible") ||
     normalized.includes("active")
   ) {
     return "good";
   }
 
-  if (normalized.includes("draft") || normalized.includes("queued")) {
+  if (
+    normalized.includes("draft") ||
+    normalized.includes("queued") ||
+    normalized.includes("planned") ||
+    normalized.includes("preview") ||
+    normalized.includes("dry-run") ||
+    normalized.includes("mock")
+  ) {
     return "info";
   }
 
@@ -59,7 +77,7 @@ export function StatusChip({
   return (
     <Badge
       className={cn(
-        "h-6 rounded-md px-2 text-[11px] font-medium uppercase tracking-[0.04em]",
+        "h-6 rounded-full px-2 text-[11px] font-bold uppercase tracking-[0.04em]",
         toneClasses[tone],
       )}
       variant="outline"

@@ -21,33 +21,33 @@ export function MetricStrip({ items }: { items: MetricItem[] }) {
             key={item.label}
           >
             <CardContent className="p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-xs font-medium text-muted-foreground">
-                  {item.label}
-                </p>
-                <div className="mt-1 flex items-baseline gap-2">
-                  <span className="text-2xl font-semibold tabular-nums text-foreground">
-                    {item.value}
-                  </span>
-                  {item.delta ? (
-                    <span className="text-xs font-medium text-muted-foreground">
-                      {item.delta}
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium text-muted-foreground">
+                    {item.label}
+                  </p>
+                  <div className="mt-2 flex items-baseline gap-2">
+                    <span className="text-2xl font-bold tabular-nums tracking-tight text-foreground">
+                      {item.value}
                     </span>
-                  ) : null}
+                    {item.delta ? (
+                      <span className="text-xs font-bold text-[var(--accent-text)]">
+                        {item.delta}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
+                {Icon ? (
+                  <span className="rounded-md border bg-muted/60 p-2 text-muted-foreground">
+                    <Icon aria-hidden="true" size={16} />
+                  </span>
+                ) : null}
               </div>
-              {Icon ? (
-                <span className="rounded-md border bg-muted/60 p-2 text-muted-foreground">
-                  <Icon aria-hidden="true" size={16} />
-                </span>
+              {item.detail ? (
+                <p className="mt-3 truncate text-xs text-muted-foreground">
+                  {item.detail}
+                </p>
               ) : null}
-            </div>
-            {item.detail ? (
-              <p className="mt-3 truncate text-xs text-muted-foreground">
-                {item.detail}
-              </p>
-            ) : null}
             </CardContent>
           </Card>
         );

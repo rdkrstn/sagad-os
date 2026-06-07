@@ -1,48 +1,80 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
-import { Check, Hand, Pencil, X } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { PageHeader } from "@/components/layout/page-header";
+import { useMemo, useState, useTransition } from "react";
+import {
+  AlertCircle,
+  Bot,
+  CheckCircle2,
+  FileText,
+  MessageSquareText,
+  ShieldCheck,
+} from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  ApprovalActionBar,
+  ConfidenceScore,
+  EmptyState,
+  Panel,
+  SourcePill,
+  StatusPill,
+} from "@/components/product/product-ui";
 import {
   asArray,
   asRecord,
   nestedArray,
   textOf,
+  type LooseRecord,
 } from "@/components/ui/data-access";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { SectionPanel } from "@/components/ui/section-panel";
-import { StatusChip, toneFromStatus } from "@/components/ui/status-chip";
-import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 
-function ActionButton({
-  icon: Icon,
-  label,
-  disabled = false,
-  onClick,
-}: {
-  icon: LucideIcon;
-  label: string;
-  disabled?: boolean;
-  onClick?: () => void;
-}) {
-  return (
-    <Button
-      disabled={disabled}
-      onClick={onClick}
-      size="sm"
-      type="button"
-      variant="outline"
-    >
-      <Icon aria-hidden="true" size={14} />
-      {label}
-    </Button>
-  );
+function initials(name: string) {
+  const parts = name.split(" ").filter(Boolean);
+  return (parts[0]?.[0] ?? "S") + (parts[1]?.[0] ?? "O");
+}
+
+function confidenceNumber(row: LooseRecord) {
+  const raw = textOf(row, ["confidence", "aiConfidence"], "0");
+  const parsed = Number.parseFloat(raw.replace("%", ""));
+  if (Number.isFinite(parsed)) return Math.max(0, Math.min(100, parsed));
+  const classifier = asRecord(row.classifier);
+  const classifierConfidence = Number(classifier.confidence);
+  return Number.isFinite(classifierConfidence)
+    ? Math.round(classifierConfidence * 100)
+    : 0;
+}
+
+function selectedAgent(row: LooseRecord) {
+  const assigned = textOf(row, ["assignedTo"], "");
+  if (assigned.includes("Sales Agent") || assigned.includes("Support Agent")) {
+    return assigned;
+  }
+  const intent = textOf(row, ["intent", "driver"], "").toLowerCase();
+  return intent.includes("sales") || intent.includes("pricing")
+    ? "Sales Agent"
+    : "Support Agent";
+}
+
+function workflowState(row: LooseRecord) {
+  const status = textOf(row, ["queueStatus", "hitlStatus", "status"], "Pending approval");
+  const sendStatus = textOf(row, ["sendStatus"], "").toLowerCase();
+  const confidence = confidenceNumber(row);
+
+  if (status.toLowerCase().includes("missing")) return "Missing knowledge";
+  if (status.toLowerCase().includes("reject")) return "Rejected";
+  if (status.toLowerCase().includes("escal")) return "Escalated";
+  if (
+    sendStatus === "sent" ||
+    (sendStatus.includes("sent") && !sendStatus.includes("not"))
+  ) {
+    return "Sent";
+  }
+  if (confidence >= 88 && !status.toLowerCase().includes("approval")) {
+    return "Auto-send eligible";
+  }
+  return "Pending approval";
 }
 
 export function ConversationReview({
@@ -62,49 +94,55 @@ export function ConversationReview({
   const primaryId = textOf(primary, ["id"], "");
   const hasConversation = Boolean(primaryId);
   const primaryDraft = textOf(primary, ["draftReply", "suggestedReply"], "");
-  const [draftByConversation, setDraftByConversation] = useState<Record<string, string>>(
-    {},
-  );
-  const [actionByConversation, setActionByConversation] = useState<
-    Record<string, string>
+  const [draftByConversation, setDraftByConversation] = useState<Record<string, string>>({});
+  const [actionByConversation, setActionByConversation] = useState<Record<string, string>>({});
+  const [stateByConversation, setStateByConversation] = useState<Record<string, string>>({});
+  const [localTrailByConversation, setLocalTrailByConversation] = useState<
+    Record<string, LooseRecord[]>
   >({});
   const draftReply = draftByConversation[primaryId] ?? primaryDraft;
   const actionMessage = actionByConversation[primaryId] ?? "";
-  const messages = nestedArray(primary, ["messages", "thread", "conversation"]);
-  const trail = nestedArray(primary, ["decisionTrail", "aiDecisionTrail", "events"]);
-  const crm = asRecord(primary.crmContext ?? primary.customerContext);
-  const crmNotes = asArray(crm.notes).map((item) =>
-    typeof item === "string" ? item : textOf(asRecord(item), ["title", "body", "note"], ""),
-  );
-  const crmTasks = asArray(crm.tasks).map((item) =>
-    typeof item === "string" ? item : textOf(asRecord(item), ["title", "name"], ""),
-  );
-  const crmHistory = asArray(crm.serviceHistory).map((item) =>
-    typeof item === "string" ? item : textOf(asRecord(item), ["serviceType", "title"], ""),
-  );
-  const knowledge = nestedArray(primary, ["knowledgeContext", "retrievedKnowledge"]);
-  const qaCompliance = nestedArray(primary, ["qaCompliance", "qaFindings"]);
+  const messages = nestedArray(primary, ["messages", "thread", "conversation"]).map(asRecord);
+  const trail = [
+    ...nestedArray(primary, ["decisionTrail", "aiDecisionTrail", "events"]).map(asRecord),
+    ...(localTrailByConversation[primaryId] ?? []),
+  ];
+  const knowledge = nestedArray(primary, ["knowledgeContext", "retrievedKnowledge"]).map(asRecord);
   const toolResults = nestedArray(primary, [
     "toolResults",
     "tool_results",
     "deliveryResults",
-  ]);
+  ]).map(asRecord);
+  const confidence = confidenceNumber(primary);
+  const currentWorkflowState =
+    stateByConversation[primaryId] ?? workflowState(primary);
 
   function setDraftReply(value: string): void {
-    if (!primaryId) {
-      return;
-    }
-
-    setDraftByConversation((current) => ({
-      ...current,
-      [primaryId]: value,
-    }));
+    if (!primaryId) return;
+    setDraftByConversation((current) => ({ ...current, [primaryId]: value }));
   }
 
   function setActionMessage(value: string): void {
-    setActionByConversation((current) => ({
+    if (!primaryId) return;
+    setActionByConversation((current) => ({ ...current, [primaryId]: value }));
+  }
+
+  function recordLocalWorkflowAction(state: string, detail: string): void {
+    if (!primaryId) return;
+    setStateByConversation((current) => ({ ...current, [primaryId]: state }));
+    setActionMessage(detail);
+    setLocalTrailByConversation((current) => ({
       ...current,
-      [primaryId]: value,
+      [primaryId]: [
+        ...(current[primaryId] ?? []),
+        {
+          step: state === "Escalated" ? "Escalation created" : "Missing knowledge marked",
+          status: state,
+          rationale: detail,
+          actor: "Supervisor",
+          createdAt: "Local session",
+        },
+      ],
     }));
   }
 
@@ -130,39 +168,35 @@ export function ConversationReview({
       );
 
       const payload = (await response.json()) as unknown;
+      const row = asRecord(payload);
+
       if (!response.ok) {
-        const row = asRecord(payload);
         setActionMessage(textOf(row, ["detail"], "Agent Studio action failed."));
         return;
       }
 
       if (!approved) {
-        setActionMessage("Rejected.");
+        setStateByConversation((current) => ({ ...current, [primaryId]: "Rejected" }));
+        setActionMessage("Rejected. Reply remains blocked from customer delivery.");
       } else {
-        const row = asRecord(payload);
-        const sendStatus = textOf(row, ["send_status", "sendStatus"], "unknown")
+        const sendStatus = textOf(row, ["send_status", "sendStatus"], "updated")
           .toLowerCase()
           .replaceAll(" ", "_");
-        const returnedToolResults = nestedArray(row, [
-          "tool_results",
-          "toolResults",
-          "deliveryResults",
-        ]).map(asRecord);
-        const latestToolResult = returnedToolResults.at(-1) ?? {};
-        const toolDetail = textOf(latestToolResult, ["detail"], "");
-
         if (sendStatus === "failed") {
-          setActionMessage(
-            `Send failed: ${toolDetail || "Agent Studio recorded a provider failure."}`,
-          );
+          setStateByConversation((current) => ({ ...current, [primaryId]: "Pending approval" }));
+          setActionMessage("Approved, but provider send failed. Review delivery result.");
         } else if (sendStatus === "dry_run") {
+          setStateByConversation((current) => ({ ...current, [primaryId]: "Sent" }));
           setActionMessage("Approved. Chatwoot send stayed in dry-run.");
         } else if (sendStatus === "sent") {
-          setActionMessage("Approved. Reply sent to Chatwoot.");
+          setStateByConversation((current) => ({ ...current, [primaryId]: "Sent" }));
+          setActionMessage("Approved. Reply sent through Chatwoot.");
         } else {
+          setStateByConversation((current) => ({ ...current, [primaryId]: "Sent" }));
           setActionMessage("Approved. Send status updated.");
         }
       }
+
       startTransition(() => router.refresh());
     } catch {
       setActionMessage("Could not reach the approval endpoint.");
@@ -170,375 +204,293 @@ export function ConversationReview({
   }
 
   return (
-    <>
-      <PageHeader
-        description="Inspect the thread, audit trail, CRM context, approved answer source, and supervisor actions before a reply leaves the console."
-        title="Conversation Review"
-      />
-
-      <div className="grid gap-4 xl:grid-cols-[280px_1fr_360px]">
-        <SectionPanel title="Inbox" eyebrow="Conversations">
-          <div className="border-b bg-muted/30 px-3 py-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-muted-foreground">
-                {list.length} active
-              </span>
-              <Badge className="h-6" variant="outline">
-                Approval queue
-              </Badge>
+    <div className="grid gap-4 xl:grid-cols-[400px_minmax(0,1fr)]">
+      <Panel
+        action={<StatusPill tone="warning">{list.length} active</StatusPill>}
+        title="Conversation List"
+        eyebrow="Queue"
+      >
+        <div className="divide-y divide-border">
+          {list.length === 0 ? (
+            <div className="p-4">
+              <EmptyState
+                title="No conversations"
+                description="Connect Chatwoot through Agent Studio to populate this queue."
+              />
             </div>
-          </div>
-          <div className="divide-y">
-            {list.length === 0 ? (
-              <div className="p-4 text-sm leading-6 text-muted-foreground">
-                No conversations yet. Connect Chatwoot to Agent Studio, then inbound
-                messages will appear here for review.
-              </div>
-            ) : null}
-            {list.map((conversation, index) => {
-              const status = textOf(conversation, ["status", "queueStatus"], "Review");
-              const conversationId = textOf(
-                conversation,
-                ["id", "conversationId", "threadId"],
-                "",
-              );
-              const href = conversationId
-                ? `/conversations?conversationId=${encodeURIComponent(conversationId)}`
-                : "/conversations";
-              const isSelected = conversationId === primaryId;
+          ) : null}
+          {list.map((conversation, index) => {
+            const conversationId = textOf(
+              conversation,
+              ["id", "conversationId", "threadId"],
+              "",
+            );
+            const name = textOf(conversation, ["customerName", "contact", "name"], "Customer");
+            const isSelected = conversationId === primaryId;
+            const status = textOf(conversation, ["queueStatus", "status"], "Review");
+            const href = conversationId
+              ? `/conversations?conversationId=${encodeURIComponent(conversationId)}`
+              : "/conversations";
 
-              return (
-                <Link
-                  aria-current={isSelected ? "page" : undefined}
-                  className="block p-3 transition-colors hover:bg-muted/40 aria-[current=page]:bg-muted/60"
-                  href={href}
-                  key={conversationId || index}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="truncate text-sm font-medium text-foreground">
-                      {textOf(conversation, ["customerName", "contact", "name"])}
-                    </div>
-                    <StatusChip tone={toneFromStatus(status)}>{status}</StatusChip>
+            return (
+              <Link
+                aria-current={isSelected ? "page" : undefined}
+                className={cn(
+                  "grid grid-cols-[40px_minmax(0,1fr)_auto] gap-3 px-4 py-3 transition-colors hover:bg-muted",
+                  isSelected && "bg-[rgba(0,212,170,0.12)]",
+                )}
+                href={href}
+                key={conversationId || index}
+              >
+                <div className="grid size-10 place-items-center rounded-full bg-surface-2 text-xs font-bold text-foreground">
+                  {initials(name)}
+                </div>
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-foreground">
+                    {name}
                   </div>
                   <div className="mt-1 truncate text-xs text-muted-foreground">
-                    {textOf(conversation, ["intent", "summary", "lastMessage"])}
+                    {textOf(conversation, ["lastMessage", "summary", "intent"], "")}
                   </div>
-                </Link>
-              );
-            })}
-          </div>
-        </SectionPanel>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <SourcePill>{textOf(conversation, ["source", "sourceChannel"], "Chatwoot")}</SourcePill>
+                    <SourcePill>{selectedAgent(conversation)}</SourcePill>
+                  </div>
+                </div>
+                <div className="grid justify-items-end gap-2">
+                  <StatusPill status={status}>{status}</StatusPill>
+                  <div className="font-mono text-[11px] text-muted-foreground">
+                    {textOf(conversation, ["age", "waitTime"], "")}
+                  </div>
+                  <div className="text-[11px] font-semibold text-muted-foreground">
+                    {confidenceNumber(conversation)}%
+                  </div>
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      </Panel>
 
+      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="space-y-4">
-          <SectionPanel
+          <Panel
             action={
-              <div className="flex flex-wrap items-center gap-2">
-                <ActionButton
-                  disabled={!hasConversation || isPending}
-                  icon={Check}
-                  label="Approve"
-                  onClick={() => void submitDecision(true)}
-                />
-                <ActionButton disabled={!hasConversation} icon={Pencil} label="Edit" />
-                <ActionButton
-                  disabled={!hasConversation || isPending}
-                  icon={X}
-                  label="Reject"
-                  onClick={() => void submitDecision(false)}
-                />
-                <ActionButton
-                  disabled={!hasConversation}
-                  icon={Hand}
-                  label="Take over"
-                  onClick={() => setActionMessage("Human takeover queued for supervisor.")}
-                />
-              </div>
+              <StatusPill status={currentWorkflowState}>
+                {currentWorkflowState}
+              </StatusPill>
             }
             title={
               hasConversation
-                ? textOf(primary, ["customerName", "contact", "name"])
+                ? textOf(primary, ["customerName", "contact", "name"], "Conversation")
                 : "No conversation selected"
             }
-            eyebrow="Thread"
+            eyebrow="Conversation Review"
           >
-            <div className="grid grid-cols-2 gap-3 border-b bg-muted/30 p-4 text-xs md:grid-cols-6">
-              {[
-                ["Channel", textOf(primary, ["sourceChannel", "channel"], "Unknown")],
-                ["Intent", textOf(primary, ["intent", "driver"], "Unknown")],
-                ["Trust Score", textOf(primary, ["confidence", "aiConfidence"], "n/a")],
-                ["Risk", textOf(primary, ["severity", "priority"], "Normal")],
-                ["Send", textOf(primary, ["sendStatus", "hitlStatus"], "Review")],
-                ["Can reply", textOf(primary, ["canReply"], "Unknown")],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <div className="text-muted-foreground">{label}</div>
-                  <div className="mt-1 font-medium text-foreground">{value}</div>
-                </div>
-              ))}
-            </div>
-            <ScrollArea className="h-[360px]">
-              <div className="space-y-3 p-4">
-                {asArray(messages).length === 0 ? (
-                  <div className="rounded-md border border-dashed bg-background p-4 text-sm leading-6 text-muted-foreground">
-                    No thread loaded yet. New Chatwoot conversations will populate
-                    this pane after Agent Studio receives a webhook.
-                  </div>
-                ) : null}
-                {asArray(messages).map((message, index) => {
-                  const row = asRecord(message);
-                  const sender = textOf(row, ["sender", "role", "from"], "Customer");
-                  return (
-                    <div
-                      className="rounded-md border bg-muted/30 p-3"
-                      key={index}
-                    >
-                      <div className="mb-1 flex items-center justify-between gap-2 text-xs">
-                        <span className="font-semibold text-foreground">{sender}</span>
-                        <span className="text-muted-foreground">
-                          {textOf(row, ["time", "timestamp", "createdAt"], "")}
-                        </span>
-                      </div>
-                      <p className="text-sm leading-6 text-foreground">
-                        {textOf(row, ["body", "content", "text", "message"], "")}
-                      </p>
-                    </div>
-                  );
-                })}
+            <div className="grid gap-3 border-b border-border bg-muted/40 p-4 sm:grid-cols-3">
+              <div>
+                <div className="text-xs text-muted-foreground">Selected agent</div>
+                <div className="mt-1 font-semibold text-foreground">{selectedAgent(primary)}</div>
               </div>
-            </ScrollArea>
-          </SectionPanel>
+              <div>
+                <div className="text-xs text-muted-foreground">Approval state</div>
+                <div className="mt-1 font-semibold text-foreground">
+                  {textOf(primary, ["hitlStatus", "approvalStatus"], "Needs review")}
+                </div>
+              </div>
+              <ConfidenceScore value={confidence} />
+            </div>
 
-          <SectionPanel title="Draft Reply" eyebrow="AI suggestion">
-            <div className="p-4">
+            <div className="grid gap-3 p-4">
+              {messages.length === 0 ? (
+                <EmptyState
+                  title="No thread loaded"
+                  description="A Chatwoot thread will appear here after Agent Studio receives a message."
+                />
+              ) : null}
+              {messages.map((message, index) => {
+                const role = textOf(message, ["role", "senderType", "sender"], "Customer");
+                const isAi =
+                  role.toLowerCase().includes("ai") ||
+                  role.toLowerCase().includes("agent");
+
+                return (
+                  <div
+                    className={cn(
+                      "rounded-lg border border-border bg-surface-2 p-4",
+                      isAi && "border-[rgba(0,212,170,0.42)] bg-[rgba(0,212,170,0.12)]",
+                    )}
+                    key={textOf(message, ["id"], String(index))}
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                      <span className="font-semibold text-foreground">
+                        {textOf(message, ["sender", "senderName", "role"], "Customer")}
+                      </span>
+                      <span>{textOf(message, ["time", "createdAt"], "")}</span>
+                    </div>
+                    <p className="text-sm leading-6 text-foreground">
+                      {textOf(message, ["body", "content", "text", "message"], "")}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </Panel>
+
+          <Panel
+            action={<StatusPill tone={confidence >= 88 ? "good" : "warning"}>{confidence}% trust</StatusPill>}
+            title="AI Draft"
+            eyebrow="Approval gate"
+          >
+            <div className="space-y-3 p-4">
               <Textarea
-                className="min-h-32 resize-y bg-background text-sm leading-6"
-                disabled={!hasConversation}
+                aria-label="AI draft reply"
+                className="min-h-36 resize-y bg-card text-sm leading-6"
+                disabled={!hasConversation || isPending}
                 onChange={(event) => setDraftReply(event.target.value)}
                 placeholder="No draft yet. Agent Studio will generate a supervised draft after a conversation arrives."
                 value={draftReply}
               />
+              <ApprovalActionBar
+                disabled={!hasConversation || isPending}
+                onApprove={() => void submitDecision(true)}
+                onEdit={() => setActionMessage("Draft is editable in-place before approval.")}
+                onEscalate={() =>
+                  recordLocalWorkflowAction(
+                    "Escalated",
+                    "Escalation created for supervisor takeover in this review session.",
+                  )
+                }
+                onMissingKnowledge={() =>
+                  recordLocalWorkflowAction(
+                    "Missing knowledge",
+                    "Missing knowledge topic flagged for Knowledge review in this review session.",
+                  )
+                }
+                onReject={() => void submitDecision(false)}
+              />
               {actionMessage ? (
-                <Alert className="mt-3 py-2">
-                  <AlertDescription className="text-xs">
-                    {actionMessage}
-                  </AlertDescription>
+                <Alert>
+                  <AlertDescription className="text-xs">{actionMessage}</AlertDescription>
                 </Alert>
               ) : null}
             </div>
-          </SectionPanel>
+          </Panel>
         </div>
 
         <div className="space-y-4">
-          <SectionPanel title="Audit Trail" eyebrow="Decision log">
-            <div className="divide-y">
-              {asArray(trail).length === 0 ? (
-                <div className="p-3 text-sm leading-6 text-muted-foreground">
+          <Panel
+            action={<StatusPill tone="info">{knowledge.length} sources</StatusPill>}
+            title="Knowledge Sources"
+            eyebrow="RAG / SOP"
+          >
+            <div className="divide-y divide-border">
+              {knowledge.length === 0 ? (
+                <div className="p-4 text-sm leading-6 text-muted-foreground">
+                  No retrieved KB, SOP, QA, or compliance references yet.
+                </div>
+              ) : null}
+              {knowledge.map((source, index) => (
+                <div className="p-4" key={textOf(source, ["id", "title"], String(index))}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="font-semibold text-foreground">
+                      {textOf(source, ["title", "name"], "Source")}
+                    </div>
+                    <SourcePill>{textOf(source, ["category", "type"], "KB")}</SourcePill>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                    {textOf(source, ["excerpt", "summary", "detail"], "")}
+                  </p>
+                  <div className="mt-2 font-mono text-[11px] text-muted-foreground">
+                    {textOf(source, ["source", "source_path", "path"], "")}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+
+          <Panel
+            action={<StatusPill tone="neutral">{trail.length} events</StatusPill>}
+            title="Audit Trail Preview"
+            eyebrow="Inspectable"
+          >
+            <div className="divide-y divide-border">
+              {trail.length === 0 ? (
+                <div className="p-4 text-sm leading-6 text-muted-foreground">
                   No graph events yet.
                 </div>
               ) : null}
-              {asArray(trail).map((event, index) => {
-                const row = asRecord(event);
-                const status = textOf(row, ["status", "result"], "Logged");
+              {trail.map((event, index) => {
+                const status = textOf(event, ["status", "result"], "Logged");
                 return (
-                  <div className="p-3" key={index}>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-medium text-foreground">
-                        {textOf(row, ["step", "label", "name"])}
+                  <div className="p-4" key={index}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="font-semibold text-foreground">
+                        {textOf(event, ["step", "label", "name"], "Event")}
                       </div>
-                      <StatusChip tone={toneFromStatus(status)}>{status}</StatusChip>
+                      <StatusPill status={status}>{status}</StatusPill>
                     </div>
                     <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      {textOf(row, ["rationale", "detail", "description"], "")}
+                      {textOf(event, ["rationale", "detail", "description"], "")}
                     </p>
                   </div>
                 );
               })}
             </div>
-          </SectionPanel>
+          </Panel>
 
-          <SectionPanel title="Approved Answer Source" eyebrow="Knowledge / SOP / QA">
-            <ScrollArea className="h-[320px]">
-              <div className="divide-y">
-                {asArray(knowledge).length === 0 ? (
-                  <div className="p-3 text-sm leading-6 text-muted-foreground">
-                    No retrieved KB, SOP, QA, or compliance references yet.
-                  </div>
-                ) : null}
-                {asArray(knowledge).map((event, index) => {
-                  const row = asRecord(event);
-                  return (
-                    <div className="p-3" key={index}>
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm font-medium text-foreground">
-                          {textOf(row, ["title", "name"])}
-                        </div>
-                        <StatusChip>{textOf(row, ["category", "type"], "KB")}</StatusChip>
-                      </div>
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                        {textOf(row, ["excerpt", "summary", "detail"], "")}
-                      </p>
-                      <div className="mt-1 text-[11px] text-muted-foreground">
-                        {textOf(row, ["source", "source_path", "path"], "")}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </ScrollArea>
-          </SectionPanel>
-
-          <SectionPanel title="QA/Compliance Gate" eyebrow="Approval readiness">
-            <div className="divide-y">
-              {asArray(qaCompliance).length === 0 ? (
-                <div className="p-3 text-sm leading-6 text-muted-foreground">
-                  No QA or compliance checks yet.
+          <Panel
+            action={<StatusPill tone={toolResults.length > 0 ? "info" : "neutral"}>{toolResults.length} results</StatusPill>}
+            title="Tool / Delivery Result"
+            eyebrow="Backend"
+          >
+            <div className="grid gap-3 p-4">
+              {toolResults.length === 0 ? (
+                <div className="rounded-lg border border-border bg-surface-2 p-4 text-sm leading-6 text-muted-foreground">
+                  No provider delivery result has been recorded for this conversation.
                 </div>
               ) : null}
-              {asArray(qaCompliance).map((event, index) => {
-                const row = asRecord(event);
-                const status = textOf(row, ["status", "result"], "Review");
-                return (
-                  <div className="p-3" key={index}>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-medium text-foreground">
-                        {textOf(row, ["label", "name"])}
-                      </div>
-                      <StatusChip tone={toneFromStatus(status)}>{status}</StatusChip>
+              {toolResults.map((result, index) => (
+                <div
+                  className="rounded-lg border border-border bg-surface-2 p-3"
+                  key={textOf(result, ["id"], String(index))}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-semibold text-foreground">
+                      {textOf(result, ["toolName", "tool_name", "name"], "Provider action")}
                     </div>
-                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      {textOf(row, ["detail", "description"], "")}
-                    </p>
+                    <StatusPill status={textOf(result, ["status", "result"], "Logged")}>
+                      {textOf(result, ["status", "result"], "Logged")}
+                    </StatusPill>
                   </div>
-                );
-              })}
-            </div>
-          </SectionPanel>
-
-          <SectionPanel title="Tool & Delivery Results" eyebrow="Backend diagnostics">
-            <div className="divide-y">
-              {asArray(toolResults).length === 0 ? (
-                <div className="p-3 text-sm leading-6 text-muted-foreground">
-                  No provider delivery result has been recorded for this conversation yet.
-                </div>
-              ) : null}
-              {asArray(toolResults).map((event, index) => {
-                const row = asRecord(event);
-                const data = asRecord(row.data);
-                const status = textOf(row, ["status", "result"], "Logged");
-                const httpStatus =
-                  textOf(row, ["httpStatus", "http_status"], "") ||
-                  textOf(data, ["http_status"], "");
-                const responseExcerpt =
-                  textOf(row, ["responseExcerpt", "response_excerpt"], "") ||
-                  textOf(data, ["response_excerpt"], "");
-                const errorType =
-                  textOf(row, ["errorType", "error_type"], "") ||
-                  textOf(data, ["error_type"], "");
-
-                return (
-                  <div className="space-y-2 p-3" key={index}>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-medium text-foreground">
-                        {textOf(row, ["toolName", "tool_name", "name"], "Provider action")}
-                      </div>
-                      <StatusChip tone={toneFromStatus(status)}>{status}</StatusChip>
-                    </div>
-                    <p className="text-xs leading-5 text-muted-foreground">
-                      {textOf(row, ["detail", "description"], "No detail recorded.")}
-                    </p>
-                    {httpStatus || errorType ? (
-                      <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-                        {httpStatus ? (
-                          <Badge variant="outline">HTTP {httpStatus}</Badge>
-                        ) : null}
-                        {errorType ? <Badge variant="outline">{errorType}</Badge> : null}
-                      </div>
-                    ) : null}
-                    {responseExcerpt ? (
-                      <pre className="max-h-24 overflow-auto rounded-md border bg-muted/30 p-2 text-[11px] leading-4 text-muted-foreground">
-                        {responseExcerpt}
-                      </pre>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          </SectionPanel>
-
-          <SectionPanel title="Chatwoot Context" eyebrow="Source / last seen">
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 p-4 text-xs">
-              {[
-                ["Source channel", ["sourceChannel", "channel"]],
-                ["Inbox", ["inboxName"]],
-                ["Unread", ["unreadCount"]],
-                ["Can reply", ["canReply"]],
-                ["Last activity", ["lastActivityAt"]],
-                ["Contact last seen", ["contactLastSeenAt"]],
-                ["Assignee last seen", ["assigneeLastSeenAt"]],
-                ["Source ID", ["sourceId"]],
-              ].map(([label, keys]) => (
-                <div key={label as string}>
-                  <dt className="font-medium text-muted-foreground">{label as string}</dt>
-                  <dd className="mt-1 break-words text-foreground">
-                    {textOf(primary, keys as string[], "n/a")}
-                  </dd>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    {textOf(result, ["detail", "description"], "No detail recorded.")}
+                  </p>
                 </div>
               ))}
-            </dl>
-            {textOf(primary, ["chatwootFetchError"], "") ? (
-              <Alert className="mx-4 mb-4 py-2">
-                <AlertDescription className="text-xs">
-                  {textOf(primary, ["chatwootFetchError"], "")}
-                </AlertDescription>
-              </Alert>
-            ) : null}
-          </SectionPanel>
+            </div>
+          </Panel>
 
-          <SectionPanel title="CRM Context" eyebrow="Twenty external">
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 p-4 text-xs">
-              {[
-                ["Provider", ["provider", "crm"]],
-                ["Status", ["providerStatus", "status"]],
-                ["Source", ["source", "system"]],
-                ["Mode", ["mode", "adapterMode"]],
-                ["Lifecycle", ["lifecycle", "stage"]],
-                ["Last job", ["lastJob", "lastService"]],
-                ["Value", ["customerValue", "ltv"]],
-                ["Risk", ["risk", "accountRisk"]],
-                ["Owner", ["owner", "assignedRep"]],
-                ["Area", ["area", "market"]],
-              ].map(([label, keys]) => (
-                <div key={label as string}>
-                  <dt className="font-medium text-muted-foreground">{label as string}</dt>
-                  <dd className="mt-1 text-foreground">
-                    {textOf(crm, keys as string[], "n/a")}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-            <div className="border-t px-4 py-3 text-xs">
-              <div className="mb-2 font-medium text-muted-foreground">Recent CRM records</div>
-              <div className="grid gap-2">
-                {[
-                  ["Notes", crmNotes],
-                  ["Tasks", crmTasks],
-                  ["History", crmHistory],
-                ].map(([label, items]) => {
-                  const values = (items as string[]).filter(Boolean);
-                  return (
-                    <div className="rounded-md border bg-background p-2" key={label as string}>
-                      <div className="font-medium text-foreground">{label as string}</div>
-                      <div className="mt-1 text-muted-foreground">
-                        {values.length > 0 ? values.slice(0, 2).join(" | ") : "n/a"}
-                      </div>
-                    </div>
-                  );
-                })}
+          <div className="grid gap-3 sm:grid-cols-3 2xl:grid-cols-1">
+            {[
+              { label: "Thread", icon: MessageSquareText },
+              { label: "Draft", icon: Bot },
+              { label: "Sources", icon: FileText },
+              { label: "Policy", icon: ShieldCheck },
+              { label: "Approval", icon: CheckCircle2 },
+              { label: "Risk", icon: AlertCircle },
+            ].map(({ label, icon: Icon }) => (
+              <div
+                className="flex items-center gap-2 rounded-lg border border-border bg-card p-3 text-xs text-muted-foreground"
+                key={label}
+              >
+                <Icon aria-hidden="true" className="size-4 text-[var(--accent-text)]" />
+                {label}
               </div>
-            </div>
-          </SectionPanel>
+            ))}
+          </div>
         </div>
       </div>
-    </>
+    </div>
   );
 }

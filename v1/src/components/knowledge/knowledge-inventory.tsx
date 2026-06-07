@@ -140,6 +140,9 @@ export function KnowledgeInventory({ overview }: { overview: unknown }) {
   const approvedCount = documents.filter((row) =>
     textOf(row, ["approvalStatus", "status"], "").toLowerCase().includes("approved"),
   ).length;
+  const archivedCount = documents.filter((row) =>
+    textOf(row, ["approvalStatus", "status"], "").toLowerCase().includes("archived"),
+  ).length;
   const failedJobs = jobs.filter((row) => numberOf(row, ["failed"]) > 0).length;
 
   const [sourceName, setSourceName] = useState("Manual Upload");
@@ -296,6 +299,12 @@ export function KnowledgeInventory({ overview }: { overview: unknown }) {
               value: approvedCount,
               detail: "Retrieval eligible chunks",
               icon: FileCheck2,
+            },
+            {
+              label: "Archived",
+              value: archivedCount,
+              detail: "Hidden from retrieval",
+              icon: Archive,
             },
           ]}
         />
@@ -550,6 +559,11 @@ export function KnowledgeInventory({ overview }: { overview: unknown }) {
                       key: "updated",
                       label: "Updated",
                       render: (row) => formatDate(textOf(row, ["updatedAt", "lastUpdated"], "")),
+                    },
+                    {
+                      key: "lastEmbeddedAt",
+                      label: "Last embedded",
+                      render: (row) => formatDate(textOf(row, ["lastEmbeddedAt", "updatedAt"], "")),
                     },
                     {
                       key: "status",
