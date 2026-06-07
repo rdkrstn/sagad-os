@@ -1,0 +1,28 @@
+{
+  "name": "sagad-os-sprints-2-4-files",
+  "version": "0.1.0",
+  "purpose": "Sprint 2-4 retrieval, tools/MCP boundary, evals, observability drop-in pack",
+  "files": [
+    "README_FOR_DROPIN.md",
+    "agent-studio/agent_studio/confidence.py",
+    "agent-studio/agent_studio/evals.py",
+    "agent-studio/agent_studio/guardrails.py",
+    "agent-studio/agent_studio/mcp_gateway.py",
+    "agent-studio/agent_studio/observability.py",
+    "agent-studio/agent_studio/retrieval_workflow.py",
+    "agent-studio/agent_studio/skill_registry.py",
+    "agent-studio/agent_studio/tool_policy.py",
+    "agent-studio/migrations/0002_ai_ops_quality_layer.sql",
+    "agent-studio/tests/test_evals.py",
+    "agent-studio/tests/test_retrieval_workflow.py",
+    "agent-studio/tests/test_skill_registry.py",
+    "agent-studio/tests/test_tool_policy.py",
+    "docs/blueprints/retrieval-eval-playbook.md",
+    "docs/blueprints/sprint-2-optimized-retrieval.md",
+    "docs/blueprints/sprint-3-skills-tools-mcp.md",
+    "docs/blueprints/sprint-4-evals-observability-hardening.md",
+    "docs/blueprints/sprints-2-4-implementation-file-map.md",
+    "docs/blueprints/sprints-2-4-master-roadmap.md",
+    "docs/blueprints/sprints-2-4-reference-architecture.md"
+  ]
+}

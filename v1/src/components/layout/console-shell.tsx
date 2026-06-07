@@ -9,6 +9,9 @@ import {
   BookOpen,
   Bot,
   BrainCircuit,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   ClipboardCheck,
   Database,
@@ -76,12 +79,14 @@ type NavItem = {
 
 type NavSection = {
   label: string;
+  icon: LucideIcon;
   items: NavItem[];
 };
 
 const navSections: NavSection[] = [
   {
     label: "Operate",
+    icon: Activity,
     items: [
       { href: "/", label: "Command Center", code: "CC", icon: Gauge, status: "Live" },
       { href: "/review-queue", label: "Review Queue", code: "RQ", icon: ListChecks, status: "HITL" },
@@ -91,7 +96,8 @@ const navSections: NavSection[] = [
     ],
   },
   {
-    label: "Build",
+    label: "Agent Studio",
+    icon: Layers3,
     items: [
       { href: "/workflows", label: "Workflows", code: "WF", icon: Workflow, status: "Flows" },
       { href: "/agents", label: "Agents", code: "AG", icon: Bot, status: "Gated" },
@@ -103,6 +109,7 @@ const navSections: NavSection[] = [
   },
   {
     label: "Knowledge",
+    icon: BookOpen,
     items: [
       { href: "/knowledge", label: "Knowledge Base", code: "KB", icon: BookOpen, status: "Sources" },
       { href: "/qa", label: "Policy & QA", code: "QA", icon: ShieldCheck, status: "Rules" },
@@ -111,6 +118,7 @@ const navSections: NavSection[] = [
   },
   {
     label: "Observe",
+    icon: Network,
     items: [
       { href: "/logs", label: "Audit Log", code: "AU", icon: History, status: "Audit" },
       { href: "/traces", label: "Traces", code: "TR", icon: Network, status: "LangSmith" },
@@ -119,6 +127,7 @@ const navSections: NavSection[] = [
   },
   {
     label: "Platform",
+    icon: Settings,
     items: [
       { href: "/integrations", label: "Adapters", code: "AD", icon: PlugZap, status: "Adapters" },
       { href: "/settings", label: "Settings", code: "ST", icon: Settings, status: "Config" },
@@ -260,6 +269,52 @@ function SidebarNav({
   compact?: boolean;
   closeOnNavigate?: boolean;
 }) {
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>(
+    () =>
+      Object.fromEntries(
+        navSections.map((section) => [
+          section.label,
+          section.items.some((item) => isActive(pathname, item.href)),
+        ]),
+      ) as Record<string, boolean>,
+  );
+
+  function renderNavItem(item: NavItem) {
+    const Icon = item.icon;
+    const active = isActive(pathname, item.href);
+    const content = (
+      <Link
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "group relative flex h-9 items-center gap-2.5 rounded-sm px-3 text-[13px] font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+          active && "bg-[rgba(0,212,170,0.13)] text-foreground",
+          compact && "justify-center px-0",
+        )}
+        href={item.href}
+      >
+        <span
+          className={cn(
+            "absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-transparent",
+            active && "bg-[var(--accent)]",
+          )}
+        />
+        <span
+          className={cn(
+            "grid size-6 shrink-0 place-items-center rounded-sm text-muted-foreground transition-colors group-hover:text-foreground",
+            active && "text-[var(--accent-text)] opacity-100",
+          )}
+        >
+          <Icon aria-hidden="true" size={15} />
+        </span>
+        {!compact ? (
+          <span className="min-w-0 flex-1 truncate">{item.label}</span>
+        ) : null}
+      </Link>
+    );
+
+    return closeOnNavigate ? <SheetClose asChild>{content}</SheetClose> : content;
+  }
+
   return (
     <nav
       aria-label="Product navigation"
@@ -268,68 +323,133 @@ function SidebarNav({
         compact ? "px-2 py-3" : "px-3 py-4",
       )}
     >
-      {navSections.map((section) => (
-        <div className="grid gap-1" key={section.label}>
-          {!compact ? (
-            <div className="px-3 font-mono text-[10px] font-semibold uppercase text-muted-foreground">
-              {section.label}
-            </div>
-          ) : null}
-          {section.items.map((item) => {
-            const Icon = item.icon;
-            const active = isActive(pathname, item.href);
-            const content = (
-              <Link
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "group relative flex h-9 items-center gap-2.5 rounded-sm px-3 text-[13px] font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-                  active && "bg-[rgba(0,212,170,0.13)] text-foreground",
-                  compact && "justify-center px-0",
-                )}
-                href={item.href}
+      {navSections.map((section) => {
+        const sectionActive = section.items.some((item) => isActive(pathname, item.href));
+        const SectionIcon = section.icon;
+        const open = sectionActive || (openSections[section.label] ?? false);
+
+        if (compact) {
+          return (
+            <DropdownMenu key={section.label}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      aria-label={`${section.label} navigation`}
+                      className={cn(
+                        "relative mx-auto size-11 border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+                        sectionActive && "bg-[rgba(0,212,170,0.13)] text-[var(--accent-text)]",
+                      )}
+                      size="icon"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <span
+                        className={cn(
+                          "absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-transparent",
+                          sectionActive && "bg-[var(--accent)]",
+                        )}
+                      />
+                      <SectionIcon aria-hidden="true" size={18} />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="right">{section.label}</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent
+                align="start"
+                className="w-60 border-border bg-card"
+                side="right"
               >
+                <DropdownMenuLabel className="flex items-center gap-2 font-mono text-[10px] uppercase text-muted-foreground">
+                  <SectionIcon aria-hidden="true" size={14} />
+                  <span>{section.label}</span>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {section.items.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <DropdownMenuItem asChild key={item.href}>
+                      <Link
+                        className="flex items-center gap-2.5"
+                        href={item.href}
+                      >
+                        <Icon aria-hidden="true" size={15} />
+                        <span>{item.label}</span>
+                      </Link>
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          );
+        }
+
+        return (
+          <div className="grid gap-1.5" key={section.label}>
+            <button
+              aria-expanded={open}
+              className={cn(
+                "flex h-11 items-center justify-between gap-2 rounded-md px-2.5 text-left font-mono text-[11px] font-semibold uppercase text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                (open || sectionActive) && "bg-surface-2 text-foreground",
+              )}
+              onClick={() =>
+                setOpenSections((current) => ({
+                  ...current,
+                  [section.label]: sectionActive
+                    ? true
+                    : !(current[section.label] ?? true),
+                }))
+              }
+              type="button"
+            >
+              <span className="flex min-w-0 items-center gap-2.5">
                 <span
                   className={cn(
-                    "absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-transparent",
-                    active && "bg-[var(--accent)]",
-                  )}
-                />
-                <span
-                  className={cn(
-                    "grid size-6 shrink-0 place-items-center rounded-sm text-muted-foreground transition-colors group-hover:text-foreground",
-                    active && "text-[var(--accent-text)] opacity-100",
+                    "grid size-8 shrink-0 place-items-center rounded-sm border border-border bg-card text-muted-foreground transition-colors",
+                    sectionActive &&
+                      "border-[rgba(0,212,170,0.42)] bg-[rgba(0,212,170,0.12)] text-[var(--accent-text)]",
                   )}
                 >
-                  <Icon aria-hidden="true" size={15} />
+                  <SectionIcon aria-hidden="true" size={18} />
                 </span>
-                {!compact ? (
-                  <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                ) : null}
-              </Link>
-            );
-
-            const wrappedContent = closeOnNavigate ? (
-              <SheetClose asChild>{content}</SheetClose>
-            ) : (
-              content
-            );
-
-            return compact ? (
-              <Tooltip key={item.href}>
-                <TooltipTrigger asChild>{wrappedContent}</TooltipTrigger>
-                <TooltipContent side="right">{item.label}</TooltipContent>
-              </Tooltip>
-            ) : (
-              <div key={item.href}>{wrappedContent}</div>
-            );
-          })}
-        </div>
-      ))}
+                <span className="truncate">{section.label}</span>
+              </span>
+              <ChevronDown
+                aria-hidden="true"
+                className={cn("size-4 shrink-0 transition-transform", !open && "-rotate-90")}
+              />
+            </button>
+            {open ? (
+              <div className="grid gap-1">
+                {section.items.map((item) => (
+                  <div key={item.href}>{renderNavItem(item)}</div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
     </nav>
   );
 }
 
-function SidebarFooter() {
+function SidebarFooter({ compact = false }: { compact?: boolean }) {
+  if (compact) {
+    return (
+      <div className="mt-auto border-t border-border p-3">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="mx-auto grid size-9 place-items-center rounded-md border border-border bg-surface-2 text-[var(--accent-text)]">
+              <span className="size-2 rounded-full bg-[var(--accent)] shadow-[0_0_0_4px_rgba(0,212,170,0.14)]" />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="right">Preview workspace</TooltipContent>
+        </Tooltip>
+      </div>
+    );
+  }
+
   return (
     <div className="mt-auto border-t border-border p-3">
       <div className="rounded-md border border-border bg-surface-2 p-3">
@@ -362,6 +482,7 @@ function SidebarFooter() {
 export function ConsoleShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { theme, toggleTheme } = useConsoleTheme();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const meta = useMemo(
     () =>
       routeMeta.find((item) => pathname.startsWith(item.match)) ?? {
@@ -371,6 +492,21 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
     [pathname],
   );
 
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setSidebarCollapsed(window.localStorage.getItem("sagados-sidebar") === "collapsed");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  function toggleSidebar(): void {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      window.localStorage.setItem("sagados-sidebar", next ? "collapsed" : "expanded");
+      return next;
+    });
+  }
+
   return (
     <div
       className={cn(
@@ -379,21 +515,51 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
       )}
       data-theme={theme}
     >
-      <div className="grid min-h-screen lg:grid-cols-[248px_minmax(0,1fr)]">
-        <aside className="hidden min-h-screen border-r border-border bg-card lg:flex lg:flex-col">
-          <div className="flex min-h-14 items-center gap-3 border-b border-border px-4">
-            <SagadLogo markOnly theme={theme} />
-            <div className="min-w-0">
-              <div className="text-[15px] font-bold">SagadOS</div>
-              <div className="font-mono text-[10px] uppercase text-muted-foreground">Self-hosted AI Ops</div>
-            </div>
-            <div className="ml-auto flex items-center gap-1.5 font-mono text-[10px] uppercase text-muted-foreground">
-              <span className="size-1.5 rounded-full bg-[var(--accent)] shadow-[0_0_0_3px_rgba(0,212,170,0.14)]" />
-              gated
-            </div>
+      <div
+        className={cn(
+          "grid min-h-screen",
+          sidebarCollapsed
+            ? "lg:grid-cols-[72px_minmax(0,1fr)]"
+            : "lg:grid-cols-[248px_minmax(0,1fr)]",
+        )}
+      >
+        <aside className="relative hidden border-r border-border bg-card lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col">
+          <Button
+            aria-label={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
+            className="absolute -right-3 top-4 z-20 size-6 rounded-full border-border bg-card shadow-sm"
+            onClick={toggleSidebar}
+            size="icon-xs"
+            type="button"
+            variant="outline"
+          >
+            {sidebarCollapsed ? (
+              <ChevronRight aria-hidden="true" size={13} />
+            ) : (
+              <ChevronLeft aria-hidden="true" size={13} />
+            )}
+          </Button>
+          <div
+            className={cn(
+              "flex min-h-14 items-center border-b border-border",
+              sidebarCollapsed ? "justify-center px-2" : "gap-3 px-4",
+            )}
+          >
+            <SagadLogo markOnly size={sidebarCollapsed ? 28 : 30} theme={theme} />
+            {!sidebarCollapsed ? (
+              <>
+                <div className="min-w-0">
+                  <div className="text-[15px] font-bold">SagadOS</div>
+                  <div className="font-mono text-[10px] uppercase text-muted-foreground">Self-hosted AI Ops</div>
+                </div>
+                <div className="ml-auto flex items-center gap-1.5 font-mono text-[10px] uppercase text-muted-foreground">
+                  <span className="size-1.5 rounded-full bg-[var(--accent)] shadow-[0_0_0_3px_rgba(0,212,170,0.14)]" />
+                  gated
+                </div>
+              </>
+            ) : null}
           </div>
-          <SidebarNav pathname={pathname} />
-          <SidebarFooter />
+          <SidebarNav compact={sidebarCollapsed} pathname={pathname} />
+          <SidebarFooter compact={sidebarCollapsed} />
         </aside>
 
         <div className="flex min-h-screen min-w-0 flex-col">
@@ -518,7 +684,7 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
               </div>
             </div>
           </header>
-          <main className="min-w-0 flex-1 overflow-y-auto p-3 lg:p-4">
+          <main className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3 lg:p-4">
             {children}
           </main>
         </div>

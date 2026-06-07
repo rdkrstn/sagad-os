@@ -767,6 +767,37 @@ function laneForAgentStudioConversation(conversation: AgentStudioConversation): 
   return "Monitoring";
 }
 
+function deliveryStatusForAgentStudioMessage(
+  message: AgentStudioConversationMessage,
+  conversation: AgentStudioConversation,
+): string {
+  const payload = message.payload ?? {};
+  const rawStatus = String(
+    payload.delivery_status ??
+      payload.deliveryStatus ??
+      payload.message_status ??
+      payload.messageStatus ??
+      payload.status ??
+      "",
+  ).toLowerCase();
+
+  if (rawStatus.includes("seen") || rawStatus.includes("read")) return "seen";
+  if (rawStatus.includes("delivered")) return "delivered";
+  if (rawStatus.includes("sent")) return "sent";
+  if (rawStatus.includes("fail") || rawStatus.includes("error")) return "failed";
+  if (rawStatus.includes("queue") || rawStatus.includes("pending")) return "queued";
+
+  if (message.sender_type === "customer") return "received";
+  if (message.sender_type !== "ai_agent" && message.sender_type !== "human_agent") {
+    return "logged";
+  }
+
+  if (conversation.send_status === "dry_run") return "dry_run";
+  if (conversation.send_status === "sent") return "sent";
+  if (conversation.send_status === "failed") return "failed";
+  return "not_sent";
+}
+
 function classifierIntentForAgentStudio(intent: string): ClassifierIntent {
   if (intent === "pricing_lead") return "pricing_lead";
   if (intent === "general_support") return "general_support";
@@ -1002,6 +1033,8 @@ function toAgentStudioConversationView(
       body: message.body,
       externalMessageId: message.external_message_id,
       provider: message.provider,
+      payload: message.payload,
+      deliveryStatus: deliveryStatusForAgentStudioMessage(message, conversation),
       createdAt: message.created_at,
       time: new Date(message.created_at).toLocaleTimeString("en-US", {
           hour: "numeric",

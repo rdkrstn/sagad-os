@@ -1,8 +1,5 @@
-import { GraphsConsole } from "@/components/agent-studio/agent-studio-console";
-import { getGraphs } from "@/lib/api/sagad-api";
+import { WorkflowConsole } from "@/components/workflows/workflow-console";
 
 export default async function WorkflowsPage() {
-  const graphs = await getGraphs();
-
-  return <GraphsConsole graphs={graphs} />;
+  return <WorkflowConsole />;
 }

@@ -3,9 +3,13 @@ import {
   BrainCircuit,
   CheckCircle2,
   GitBranch,
+  Network,
+  Route,
   ShieldCheck,
+  Workflow,
   Wrench,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import {
   MetricCard,
   Panel,
@@ -21,6 +25,134 @@ import {
   textOf,
   type LooseRecord,
 } from "@/components/ui/data-access";
+import { cn } from "@/lib/utils";
+
+export type AgentStudioStageId =
+  | "driver"
+  | "workflow"
+  | "agent"
+  | "skill"
+  | "graph"
+  | "tools"
+  | "approval"
+  | "trace";
+
+const agentStudioStages: Array<{
+  id: AgentStudioStageId;
+  label: string;
+  detail: string;
+  icon: LucideIcon;
+}> = [
+  {
+    id: "driver",
+    label: "Contact Driver",
+    detail: "Why work arrived",
+    icon: Route,
+  },
+  {
+    id: "workflow",
+    label: "Workflow",
+    detail: "Operating route",
+    icon: Workflow,
+  },
+  {
+    id: "agent",
+    label: "Agent",
+    detail: "Worker assigned",
+    icon: Bot,
+  },
+  {
+    id: "skill",
+    label: "Skill",
+    detail: "Reusable playbook",
+    icon: BrainCircuit,
+  },
+  {
+    id: "graph",
+    label: "Graph",
+    detail: "Orchestration flow",
+    icon: GitBranch,
+  },
+  {
+    id: "tools",
+    label: "Tools / MCP",
+    detail: "Server-side actions",
+    icon: Wrench,
+  },
+  {
+    id: "approval",
+    label: "Approval",
+    detail: "Policy + HITL gate",
+    icon: ShieldCheck,
+  },
+  {
+    id: "trace",
+    label: "Audit / Trace",
+    detail: "What happened",
+    icon: Network,
+  },
+];
+
+export function AgentStudioRelationshipStrip({
+  active,
+}: {
+  active: AgentStudioStageId;
+}) {
+  return (
+    <section className="border border-border bg-card p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="font-mono text-[10px] font-semibold uppercase text-muted-foreground">
+            Agent Studio Map
+          </div>
+          <h2 className="mt-1 text-sm font-bold text-foreground">
+            Contact Driver -&gt; Workflow -&gt; Agent -&gt; Skill -&gt; Graph -&gt; Tools/MCP -&gt; Approval -&gt; Audit/Trace
+          </h2>
+        </div>
+        <StatusPill tone="info">Relationship mapped</StatusPill>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
+        {agentStudioStages.map((stage, index) => {
+          const Icon = stage.icon;
+          const isActive = stage.id === active;
+          return (
+            <div
+              className={cn(
+                "min-w-0 border border-border bg-surface-2 p-2 transition-colors",
+                isActive &&
+                  "border-[rgba(0,212,170,0.48)] bg-[rgba(0,212,170,0.12)]",
+              )}
+              key={stage.id}
+            >
+              <div className="flex items-center gap-2">
+                <span
+                  className={cn(
+                    "grid size-7 shrink-0 place-items-center rounded-sm border border-border bg-card text-muted-foreground",
+                    isActive &&
+                      "border-[rgba(0,212,170,0.42)] bg-[rgba(0,212,170,0.14)] text-[var(--accent-text)]",
+                  )}
+                >
+                  <Icon aria-hidden="true" size={15} />
+                </span>
+                <div className="min-w-0">
+                  <div className="font-mono text-[9px] uppercase text-muted-foreground">
+                    {String(index + 1).padStart(2, "0")}
+                  </div>
+                  <div className="truncate text-xs font-bold text-foreground">
+                    {stage.label}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2 truncate text-[11px] text-muted-foreground">
+                {stage.detail}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
 
 function listOf(row: LooseRecord, key: string): string[] {
   const value = row[key];
@@ -37,6 +169,18 @@ function InlineList({ values }: { values: string[] }) {
       )}
     </div>
   );
+}
+
+function toolRelationship(row: LooseRecord) {
+  const toolName = textOf(row, ["tool", "name"], "").toLowerCase();
+  if (toolName.includes("webhook") || toolName.includes("receive")) return "Contact Driver -> Workflow";
+  if (toolName.includes("lookup") || toolName.includes("retrieve")) return "Skill -> Graph";
+  if (toolName.includes("send") || toolName.includes("create") || toolName.includes("update")) {
+    return "Tools/MCP -> Approval";
+  }
+  if (toolName.includes("trace") || toolName.includes("observability")) return "Audit / Trace";
+  if (toolName.includes("mcp")) return "Tools/MCP";
+  return "Agent -> Skill";
 }
 
 function CatalogIntro({
@@ -73,6 +217,7 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
         title="Agents"
         description="AI workers configured for service operations. Agents are not drivers; drivers decide which agent and skill should handle work."
       />
+      <AgentStudioRelationshipStrip active="agent" />
       <section className="grid gap-3 md:grid-cols-4">
         <MetricCard detail="Sales, support, QA, escalation" icon={Bot} label="Agents" value={rows.length} />
         <MetricCard detail="Configured playbooks" icon={BrainCircuit} label="Skills allowed" value="5" />
@@ -93,6 +238,16 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
             const tools = isSupervisor
               ? ["chatwoot.send_message", "crm.create_note"]
               : ["crm.lookup_contact", "knowledge.search", "chatwoot.draft_reply"];
+            const driverLanes = isSupervisor
+              ? ["Angry customer escalation", "Failed tool/send", "Manager request"]
+              : isSales
+                ? ["Sales sizing questions", "Pricing question", "Lead qualification"]
+                : ["Refund policy", "Order status", "Account verification"];
+            const workflow = isSupervisor
+              ? "Escalation Workflow"
+              : isSales
+                ? "Lead Qualification Workflow"
+                : "Support Resolution Workflow";
 
             return (
               <div className="border border-border bg-surface-2 p-3" key={textOf(row, ["id"], name)}>
@@ -112,6 +267,14 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
                   </StatusPill>
                 </div>
                 <div className="mt-3 grid gap-3 text-xs md:grid-cols-2">
+                  <div>
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Contact drivers</div>
+                    <InlineList values={driverLanes} />
+                  </div>
+                  <div>
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Workflow</div>
+                    <span className="font-semibold text-foreground">{workflow}</span>
+                  </div>
                   <div>
                     <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed skills</div>
                     <InlineList values={skills} />
@@ -147,6 +310,7 @@ export function SkillsConsole({ skills }: { skills: unknown }) {
         title="Skills"
         description="Reusable playbooks that combine instructions, required context, knowledge domains, tools, output format, risk policy, approval rules, and tests."
       />
+      <AgentStudioRelationshipStrip active="skill" />
       <section className="grid gap-3 md:grid-cols-4">
         <MetricCard detail="Published and draft playbooks" icon={BrainCircuit} label="Skills" value={rows.length} />
         <MetricCard detail="Mapped from contact drivers" icon={GitBranch} label="Driver links" value={rows.reduce((sum, row) => sum + listOf(row, "drivers").length, 0)} />
@@ -154,36 +318,57 @@ export function SkillsConsole({ skills }: { skills: unknown }) {
         <MetricCard detail="Preview test inventory" icon={CheckCircle2} label="Test cases" value={rows.reduce((sum, row) => sum + numberOf(row, ["testCases"]), 0)} />
       </section>
       <div className="grid gap-3 xl:grid-cols-2">
-        {rows.map((row) => (
-          <Panel
-            action={<StatusPill status={textOf(row, ["status"], "Draft")}>{textOf(row, ["status"], "Draft")}</StatusPill>}
-            key={textOf(row, ["id"], textOf(row, ["name"], "skill"))}
-            title={textOf(row, ["name"], "Skill")}
-            eyebrow={textOf(row, ["version"], "v0")}
-          >
-            <div className="space-y-3 p-3">
-              <p className="text-sm leading-6 text-muted-foreground">{textOf(row, ["description"], "")}</p>
-              <div className="grid gap-3 text-xs md:grid-cols-2">
-                <div>
-                  <div className="mb-1 font-mono uppercase text-muted-foreground">Triggered by</div>
-                  <InlineList values={listOf(row, "drivers")} />
-                </div>
-                <div>
-                  <div className="mb-1 font-mono uppercase text-muted-foreground">Used by</div>
-                  <InlineList values={listOf(row, "agents")} />
-                </div>
-                <div>
-                  <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed tools</div>
-                  <InlineList values={listOf(row, "allowedTools")} />
-                </div>
-                <div>
-                  <div className="mb-1 font-mono uppercase text-muted-foreground">Approval rules</div>
-                  <InlineList values={listOf(row, "approvalRules")} />
+        {rows.map((row) => {
+          const name = textOf(row, ["name"], "Skill");
+          const lowerName = name.toLowerCase();
+          const isSales = lowerName.includes("sales") || lowerName.includes("sizing");
+          const isEscalation = lowerName.includes("angry") || lowerName.includes("escalation");
+          const workflow = isEscalation
+            ? "Escalation Workflow"
+            : isSales
+              ? "Lead Qualification Workflow"
+              : "Support Resolution Workflow";
+          const graph = isSales ? "Sales Qualification Graph" : "Default Support Graph v0.1.4";
+
+          return (
+            <Panel
+              action={<StatusPill status={textOf(row, ["status"], "Draft")}>{textOf(row, ["status"], "Draft")}</StatusPill>}
+              key={textOf(row, ["id"], name)}
+              title={name}
+              eyebrow={textOf(row, ["version"], "v0")}
+            >
+              <div className="space-y-3 p-3">
+                <p className="text-sm leading-6 text-muted-foreground">{textOf(row, ["description"], "")}</p>
+                <div className="grid gap-3 text-xs md:grid-cols-2">
+                  <div>
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Triggered by</div>
+                    <InlineList values={listOf(row, "drivers")} />
+                  </div>
+                  <div>
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Workflow</div>
+                    <span className="font-semibold text-foreground">{workflow}</span>
+                  </div>
+                  <div>
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Used by</div>
+                    <InlineList values={listOf(row, "agents")} />
+                  </div>
+                  <div>
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Graph</div>
+                    <span className="font-semibold text-foreground">{graph}</span>
+                  </div>
+                  <div>
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed tools</div>
+                    <InlineList values={listOf(row, "allowedTools")} />
+                  </div>
+                  <div>
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Approval rules</div>
+                    <InlineList values={listOf(row, "approvalRules")} />
+                  </div>
                 </div>
               </div>
-            </div>
-          </Panel>
-        ))}
+            </Panel>
+          );
+        })}
       </div>
     </div>
   );
@@ -198,6 +383,7 @@ export function GraphsConsole({ graphs }: { graphs: unknown }) {
         title="Graphs"
         description="LangGraph orchestration flows that route AI work through classification, context, tools, draft, policy, HITL approval, send, audit, and trace."
       />
+      <AgentStudioRelationshipStrip active="graph" />
       {rows.map((row) => {
         const nodes = listOf(row, "nodes");
         return (
@@ -219,7 +405,7 @@ export function GraphsConsole({ graphs }: { graphs: unknown }) {
                   </div>
                 ))}
               </div>
-              <div className="grid gap-3 text-xs md:grid-cols-3">
+              <div className="grid gap-3 text-xs md:grid-cols-2 xl:grid-cols-4">
                 <div>
                   <div className="mb-1 font-mono uppercase text-muted-foreground">Trigger</div>
                   <span className="font-semibold text-foreground">{textOf(row, ["trigger"], "inbound")}</span>
@@ -231,6 +417,14 @@ export function GraphsConsole({ graphs }: { graphs: unknown }) {
                 <div>
                   <div className="mb-1 font-mono uppercase text-muted-foreground">Fallback</div>
                   <span className="text-foreground">{textOf(row, ["fallbackPath"], "")}</span>
+                </div>
+                <div>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed agents</div>
+                  <InlineList values={listOf(row, "allowedAgents")} />
+                </div>
+                <div>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed tools</div>
+                  <InlineList values={listOf(row, "allowedTools")} />
                 </div>
               </div>
             </div>
@@ -250,6 +444,7 @@ export function ToolsConsole({ tools }: { tools: unknown }) {
         title="Tools"
         description="Approved callable actions agents can use. Write, send, delete, payment, refund, legal, and customer-facing tools are approval-gated by default."
       />
+      <AgentStudioRelationshipStrip active="tools" />
       <Panel title="Tool Registry" eyebrow="Callable actions" action={<StatusPill tone="warning">Approval-gated writes</StatusPill>}>
         <DataTable
           columns={[
@@ -264,6 +459,7 @@ export function ToolsConsole({ tools }: { tools: unknown }) {
               ),
             },
             { key: "provider", label: "Provider", render: (row) => textOf(row, ["system", "provider"], "Agent Studio") },
+            { key: "relationship", label: "Relationship", render: (row) => toolRelationship(row) },
             { key: "type", label: "Type", render: (row) => textOf(row, ["mode"], "Server-side read") },
             { key: "status", label: "Status", render: (row) => <StatusPill status={textOf(row, ["health", "status"], "Preview")}>{textOf(row, ["health", "status"], "Preview")}</StatusPill> },
             { key: "risk", label: "Risk", render: (row) => Boolean(row.requiresApproval) ? "High" : "Low" },
@@ -285,6 +481,7 @@ export function McpServersConsole({ servers }: { servers: unknown }) {
         title="MCP Servers"
         description="External capability servers connected to Sagad. In public preview these are visible as permissioned roadmap records, not browser-direct providers."
       />
+      <AgentStudioRelationshipStrip active="tools" />
       <div className="grid gap-3 xl:grid-cols-3">
         {rows.map((row) => (
           <Panel
@@ -299,6 +496,20 @@ export function McpServersConsole({ servers }: { servers: unknown }) {
                 <div className="border border-border bg-surface-2 p-2"><b>{numberOf(row, ["toolsCount"])}</b><br />Tools</div>
                 <div className="border border-border bg-surface-2 p-2"><b>{numberOf(row, ["resourcesCount"])}</b><br />Resources</div>
                 <div className="border border-border bg-surface-2 p-2"><b>{numberOf(row, ["promptsCount"])}</b><br />Prompts</div>
+              </div>
+              <div className="grid gap-3 text-xs">
+                <div>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed agents</div>
+                  <InlineList values={listOf(row, "allowedAgents")} />
+                </div>
+                <div>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed skills</div>
+                  <InlineList values={listOf(row, "allowedSkills")} />
+                </div>
+                <div>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Trust boundary</div>
+                  <span className="font-semibold text-foreground">{textOf(row, ["trustLevel"], "Sandbox")}</span>
+                </div>
               </div>
               <InlineList values={listOf(row, "tools")} />
             </div>

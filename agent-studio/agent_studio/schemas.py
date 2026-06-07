@@ -308,7 +308,12 @@ class ConversationRecord(BaseModel):
     normalized_message: str = ""
     intent: str = "unknown"
     risk_level: Literal["low", "medium", "high"] = "medium"
+    selected_agent: str | None = None
+    customer_driver: str | None = None
     retrieved_knowledge: list[KnowledgeHit] = Field(default_factory=list)
+    retrieval_confidence: float | None = None
+    missing_knowledge: bool = False
+    retrieval_diagnostic: dict[str, object] = Field(default_factory=dict)
     crm_context: CrmContactContext | None = None
     chatwoot_context: ChatwootConversationContext | None = None
     tool_plans: list[ToolPlan] = Field(default_factory=list)
