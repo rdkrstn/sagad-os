@@ -73,11 +73,11 @@ The app shell uses a compact grouped sidebar, 56px topbar, brand-suite SagadOS m
 
 Top-level navigation:
 
-- Operations: `Command Center`, `Review Queue`, `Conversations`, `Contact Drivers`, `Reports`
-- Agent Studio: `Agents`, `Skills`, `Graphs`, `Tools`, `MCP Servers`, `Traces`
-- Knowledge & QA: `Knowledge Base`, `Policy & QA`, `Evaluations`
+- Operate: `Command Center`, `Review Queue`, `Conversations`, `Contact Drivers`, `Reports`
+- Build: `Workflows`, `Agents`, `Skills`, `Graphs`, `Tools`, `MCP Servers`
+- Knowledge: `Knowledge Base`, `Policy & QA`, `Evaluations`
+- Observe: `Audit Log`, `Traces`, `Model Gateway`
 - Platform: `Adapters`, `Settings`
-- `Settings`
 
 ### Metrics Row
 

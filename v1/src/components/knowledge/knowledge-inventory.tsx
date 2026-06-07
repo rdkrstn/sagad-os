@@ -126,6 +126,26 @@ function selectedSourceId(sources: LooseRecord[]): string | null {
   return source ? rowId(source) : null;
 }
 
+function knowledgeConnectionMessage(
+  status: string,
+  baseUrl: string,
+  detail: string,
+): string {
+  if (status === "unreachable") {
+    return `Agent Studio is not reachable at ${baseUrl || "the configured URL"}. Start Agent Studio on port 8010.`;
+  }
+
+  if (status === "unauthorized") {
+    return "Agent Studio rejected the console request. Check AGENT_STUDIO_INTERNAL_SECRET and the server-side session headers.";
+  }
+
+  if (status === "not_configured") {
+    return "Knowledge actions are disabled because SAGAD_API_BASE_URL is not configured for the console.";
+  }
+
+  return detail || "Knowledge actions are disabled until Agent Studio is connected.";
+}
+
 export function KnowledgeInventory({ overview }: { overview: unknown }) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -135,6 +155,9 @@ export function KnowledgeInventory({ overview }: { overview: unknown }) {
   const sources = rowsFromOverview(root, "sources");
   const missingKnowledge = rowsFromOverview(root, "missingKnowledge");
   const liveSource = textOf(root, ["source"], "mock");
+  const connectionStatus = textOf(root, ["connectionStatus"], "not_configured");
+  const agentStudioBaseUrl = textOf(root, ["agentStudioBaseUrl"], "");
+  const connectionDetail = textOf(root, ["connectionDetail"], "");
   const actionsDisabled = liveSource !== "agent-studio";
   const reviewDocuments = documents.filter(isReviewRow);
   const approvedCount = documents.filter((row) =>
@@ -317,11 +340,7 @@ export function KnowledgeInventory({ overview }: { overview: unknown }) {
 
         {actionsDisabled ? (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            Knowledge actions are disabled because the console is using preview data. Set
-            {" "}
-            <code className="rounded bg-amber-100 px-1 py-0.5">SAGAD_API_BASE_URL</code>
-            {" "}
-            to connect Agent Studio for uploads, approval, sync, and search testing.
+            {knowledgeConnectionMessage(connectionStatus, agentStudioBaseUrl, connectionDetail)}
           </div>
         ) : null}
 

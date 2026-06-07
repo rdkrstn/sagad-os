@@ -1,4 +1,4 @@
-import { auth } from "../../../../../auth";
+import { getCurrentSession } from "@/lib/auth/session";
 import { jsonResponse } from "@/lib/agent-studio-proxy";
 import {
   extensionOf,
@@ -26,7 +26,7 @@ function optionalTextField(form: FormData, name: string): string | undefined {
 }
 
 export async function GET(): Promise<Response> {
-  const session = await auth();
+  const session = await getCurrentSession();
   if (!session?.user?.id) {
     return jsonResponse({ detail: "Authentication required." }, 401);
   }
@@ -35,7 +35,7 @@ export async function GET(): Promise<Response> {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const session = await auth();
+  const session = await getCurrentSession();
   if (!session?.user?.id) {
     return jsonResponse({ detail: "Authentication required." }, 401);
   }

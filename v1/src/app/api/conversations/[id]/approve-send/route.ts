@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "../../../../../../auth";
+import { getCurrentSession } from "@/lib/auth/session";
 import {
   agentStudioBaseUrl,
   agentStudioHeaders,
@@ -17,7 +17,7 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
-  const session = await auth();
+  const session = await getCurrentSession();
   if (!session?.user?.id) {
     return jsonResponse({ detail: "Authentication required." }, 401);
   }

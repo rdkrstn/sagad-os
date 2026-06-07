@@ -1,6 +1,6 @@
-# Northstar Apparel Sales And Shipping FAQ
+# Sagad Demo Operations Sales And Shipping FAQ
 
-Use approved answer language for common Northstar Apparel support and sales questions. The demo company is intentionally seeded so a new self-hosted install does not start empty.
+Use approved answer language for common Sagad Demo Operations support and sales questions. The demo company is intentionally seeded so a new self-hosted install does not start empty.
 
 For sizing or purchase questions, answer with fit guidance and one clear next step. If the buyer is between sizes, say most customers size up for a relaxed fit.
 

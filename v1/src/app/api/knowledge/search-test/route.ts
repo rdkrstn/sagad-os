@@ -1,4 +1,4 @@
-import { auth } from "../../../../../auth";
+import { getCurrentSession } from "@/lib/auth/session";
 import { jsonResponse } from "@/lib/agent-studio-proxy";
 import { proxyAgentStudioJson } from "@/lib/knowledge-proxy";
 
@@ -37,7 +37,7 @@ function normalizePayload(value: unknown): KnowledgeSearchPayload {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const session = await auth();
+  const session = await getCurrentSession();
   if (!session?.user?.id) {
     return jsonResponse({ detail: "Authentication required." }, 401);
   }

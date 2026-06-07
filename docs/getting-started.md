@@ -12,7 +12,7 @@ npm run dev
 
 Then open `http://localhost:3000`.
 
-The console ships with `Northstar Apparel Support` demo data:
+The console ships with `Sagad Demo Operations` demo data:
 
 - sample Chatwoot-style conversations;
 - Twenty CRM-style customer context;
