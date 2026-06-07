@@ -115,6 +115,7 @@ Agent Studio also owns provider connection configuration. Chatwoot and Twenty CR
 It also includes `langgraph.json` for official LangSmith Studio visual debugging of the local `sagad_conversation` graph. Studio is for graph design and inspection; the Sagad Console is for supervisor operations.
 
 LiteLLM is supported as an optional OpenAI-compatible model gateway so Agent Studio can test OpenAI and DeepSeek credits through one server-side endpoint.
+The current conversation graph remains deterministic; LiteLLM readiness is adapter infrastructure for the next agent-drafting PR, not full autonomous model drafting yet.
 
 Location: `agent-studio/`
 
@@ -291,6 +292,7 @@ real Chatwoot message
 ```
 
 Repeated messages from the same Chatwoot session append to the same Sagad conversation row. The console can use Agent Studio WebSocket events to refresh queue and review screens without manual reload.
+Agent Studio stores Chatwoot as the source provider while preserving the real customer medium as the conversation channel, such as Email, Web Chat, SMS, WhatsApp, or Unknown. Conversation Review can enrich a selected thread with Chatwoot last-seen, unread, source ID, inbox, and can-reply context without fetching remote provider details in the queue list.
 
 Provider failures are visible in the product, not only in container logs. Conversation Review shows Tool & Delivery Results for the selected thread, and Integrations shows recent Backend Diagnostics from Agent Studio audit events, including webhook token failures, ignored outgoing/private events, duplicate retries, send attempts, and failed provider HTTP responses.
 

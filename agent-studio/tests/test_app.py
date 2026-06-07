@@ -91,6 +91,93 @@ def test_chatwoot_webhook_threads_same_conversation_messages() -> None:
     assert listed[0]["id"] == first["id"]
 
 
+def test_chatwoot_email_webhook_maps_channel_and_keeps_provider() -> None:
+    response = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "event": "message_created",
+            "id": 1101,
+            "content": "I emailed about my refund.",
+            "message_type": "incoming",
+            "conversation": {"id": 110},
+            "inbox": {"id": 7, "name": "Support Email", "channel_type": "Channel::Email"},
+            "sender": {"name": "Email Customer"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["channel"] == "email"
+    assert payload["chatwoot_context"]["normalized_channel"] == "email"
+    assert payload["messages"][0]["provider"] == "chatwoot"
+
+
+def test_chatwoot_web_widget_webhook_maps_channel() -> None:
+    response = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "event": "message_created",
+            "id": 1102,
+            "content": "Can I book service?",
+            "message_type": "incoming",
+            "conversation": {"id": 111},
+            "inbox": {"id": 8, "name": "Website", "channel_type": "Channel::WebWidget"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["channel"] == "web_chat"
+    assert payload["chatwoot_context"]["inbox"]["name"] == "Website"
+
+
+def test_chatwoot_missing_source_falls_back_unknown() -> None:
+    response = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "event": "message_created",
+            "id": 1103,
+            "content": "No source metadata here.",
+            "message_type": "incoming",
+            "conversation": {"id": 112},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["channel"] == "unknown"
+
+
+def test_chatwoot_thread_preserves_existing_normalized_channel() -> None:
+    first = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "event": "message_created",
+            "id": 1104,
+            "content": "First email.",
+            "message_type": "incoming",
+            "conversation": {"id": 113},
+            "inbox": {"channel_type": "Channel::Email"},
+        },
+    ).json()
+    second = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "event": "message_created",
+            "id": 1105,
+            "content": "Second message without source metadata.",
+            "message_type": "incoming",
+            "conversation": {"id": 113},
+        },
+    ).json()
+
+    assert second["id"] == first["id"]
+    assert second["channel"] == "email"
+    assert [message["provider"] for message in second["messages"]] == [
+        "chatwoot",
+        "chatwoot",
+    ]
+
+
 def test_chatwoot_webhook_retry_is_idempotent_by_message_id() -> None:
     payload = {
         "event": "message_created",
@@ -283,6 +370,123 @@ def test_approve_send_failure_records_chatwoot_tool_result(
         params={"conversation_id": created["id"]},
     ).json()["events"]
     assert any(event["event_type"] == "chatwoot.send.failed" for event in events)
+
+
+def test_get_conversation_fetches_chatwoot_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHATWOOT_BASE_URL", "https://chat.example.test")
+    monkeypatch.setenv("CHATWOOT_ACCOUNT_ID", "1")
+    monkeypatch.setenv("CHATWOOT_API_ACCESS_TOKEN", "good-token")
+    get_settings.cache_clear()
+
+    async def mock_get(
+        self: httpx.AsyncClient,
+        url: str,
+        **kwargs: object,
+    ) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": 610,
+                "channel": "Channel::Email",
+                "can_reply": True,
+                "unread_count": 3,
+                "last_activity_at": 1_780_000_000,
+                "source_id": "source-email-123",
+                "status": "open",
+                "priority": "high",
+                "labels": ["refund"],
+                "waiting_since": 1_780_000_030,
+                "inbox": {
+                    "id": 44,
+                    "name": "Support Email",
+                    "channel_type": "Channel::Email",
+                    "provider": "email",
+                },
+                "meta": {"sender": {"last_seen_at": 1_780_000_010}},
+                "assignee": {"last_seen_at": 1_780_000_020},
+            },
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={"id": 6101, "content": "I emailed you.", "conversation": {"id": 610}},
+    ).json()
+
+    response = client.get(f"/conversations/{created['id']}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["channel"] == "email"
+    assert payload["chatwoot_context"]["fetch_status"] == "ready"
+    assert payload["chatwoot_context"]["unread_count"] == 3
+    assert payload["chatwoot_context"]["can_reply"] is True
+    assert payload["chatwoot_context"]["source_id"] == "source-email-123"
+    assert payload["chatwoot_context"]["inbox"]["name"] == "Support Email"
+
+
+def test_get_conversation_details_failure_keeps_local_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHATWOOT_BASE_URL", "https://chat.example.test")
+    monkeypatch.setenv("CHATWOOT_ACCOUNT_ID", "1")
+    monkeypatch.setenv("CHATWOOT_API_ACCESS_TOKEN", "bad-token")
+    get_settings.cache_clear()
+
+    async def mock_get(
+        self: httpx.AsyncClient,
+        url: str,
+        **kwargs: object,
+    ) -> httpx.Response:
+        return httpx.Response(503, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={"id": 6201, "content": "Local fallback.", "conversation": {"id": 620}},
+    ).json()
+
+    response = client.get(f"/conversations/{created['id']}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == created["id"]
+    assert payload["chatwoot_context"]["fetch_status"] == "failed"
+    assert "HTTP 503" in payload["chatwoot_context"]["fetch_error"]
+
+
+def test_approve_send_blocks_when_chatwoot_cannot_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def forbidden_post(
+        self: httpx.AsyncClient,
+        url: str,
+        **kwargs: object,
+    ) -> httpx.Response:
+        raise AssertionError("Chatwoot send should not be called.")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", forbidden_post)
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "id": 6301,
+            "content": "Can you reply?",
+            "conversation": {"id": 630, "can_reply": False, "source_id": "closed-source"},
+        },
+    ).json()
+
+    response = client.post(
+        f"/conversations/{created['id']}/approve-send",
+        json={"approved": True, "supervisor_id": "qa-lead"},
+    )
+
+    assert response.status_code == 409
+    assert "cannot receive replies" in response.json()["detail"]
 
 
 def test_integration_configs_show_runtime_chatwoot_env(

@@ -155,11 +155,12 @@ def _diagnostic_event_from_row(row: Mapping[str, object]) -> DiagnosticEvent:
 
 
 def _inbound_message_from_record(record: ConversationRecord) -> ConversationMessageRecord:
+    provider = "chatwoot" if record.chatwoot_conversation_id else record.channel
     return ConversationMessageRecord(
         sender_type="customer",
         body=record.incoming_message,
         external_message_id=record.chatwoot_message_id,
-        provider=record.channel,
+        provider=provider,
         payload={
             "chatwoot_conversation_id": record.chatwoot_conversation_id,
             "customer_name": record.customer_name,
@@ -426,6 +427,7 @@ class PostgresConversationStore:
                   risk_level,
                   retrieved_knowledge,
                   crm_context,
+                  chatwoot_context,
                   tool_plans,
                   tool_results,
                   draft_reply,
@@ -450,6 +452,7 @@ class PostgresConversationStore:
                   %(risk_level)s,
                   %(retrieved_knowledge)s,
                   %(crm_context)s,
+                  %(chatwoot_context)s,
                   %(tool_plans)s,
                   %(tool_results)s,
                   %(draft_reply)s,
@@ -472,6 +475,7 @@ class PostgresConversationStore:
                   risk_level = EXCLUDED.risk_level,
                   retrieved_knowledge = EXCLUDED.retrieved_knowledge,
                   crm_context = EXCLUDED.crm_context,
+                  chatwoot_context = EXCLUDED.chatwoot_context,
                   tool_plans = EXCLUDED.tool_plans,
                   tool_results = EXCLUDED.tool_results,
                   draft_reply = EXCLUDED.draft_reply,
@@ -717,6 +721,7 @@ class PostgresConversationStore:
             "risk_level": row["risk_level"],
             "retrieved_knowledge": _json_list(row["retrieved_knowledge"]),
             "crm_context": row["crm_context"],
+            "chatwoot_context": row.get("chatwoot_context"),
             "tool_plans": _json_list(row["tool_plans"]),
             "tool_results": _json_list(row["tool_results"]),
             "draft_reply": row["draft_reply"],
@@ -750,6 +755,9 @@ class PostgresConversationStore:
             "retrieved_knowledge": Jsonb(_dump_models(record.retrieved_knowledge)),
             "crm_context": Jsonb(_dump_model(record.crm_context))
             if record.crm_context
+            else None,
+            "chatwoot_context": Jsonb(_dump_model(record.chatwoot_context))
+            if record.chatwoot_context
             else None,
             "tool_plans": Jsonb(_dump_models(record.tool_plans)),
             "tool_results": Jsonb(_dump_models(record.tool_results)),

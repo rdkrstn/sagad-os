@@ -6,7 +6,13 @@ export type ConversationChannel =
   | "sms"
   | "email"
   | "voice"
-  | "facebook";
+  | "facebook"
+  | "instagram"
+  | "whatsapp"
+  | "telegram"
+  | "line"
+  | "api"
+  | "unknown";
 
 export type ConversationStatus =
   | "active"

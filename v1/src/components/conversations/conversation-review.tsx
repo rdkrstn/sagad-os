@@ -261,12 +261,14 @@ export function ConversationReview({
             }
             eyebrow="Thread"
           >
-            <div className="grid grid-cols-2 gap-3 border-b bg-muted/30 p-4 text-xs md:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 border-b bg-muted/30 p-4 text-xs md:grid-cols-6">
               {[
+                ["Channel", textOf(primary, ["sourceChannel", "channel"], "Unknown")],
                 ["Intent", textOf(primary, ["intent", "driver"], "Unknown")],
                 ["Trust Score", textOf(primary, ["confidence", "aiConfidence"], "n/a")],
                 ["Risk", textOf(primary, ["severity", "priority"], "Normal")],
                 ["Send", textOf(primary, ["sendStatus", "hitlStatus"], "Review")],
+                ["Can reply", textOf(primary, ["canReply"], "Unknown")],
               ].map(([label, value]) => (
                 <div key={label}>
                   <div className="text-muted-foreground">{label}</div>
@@ -461,6 +463,35 @@ export function ConversationReview({
                 );
               })}
             </div>
+          </SectionPanel>
+
+          <SectionPanel title="Chatwoot Context" eyebrow="Source / last seen">
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 p-4 text-xs">
+              {[
+                ["Source channel", ["sourceChannel", "channel"]],
+                ["Inbox", ["inboxName"]],
+                ["Unread", ["unreadCount"]],
+                ["Can reply", ["canReply"]],
+                ["Last activity", ["lastActivityAt"]],
+                ["Contact last seen", ["contactLastSeenAt"]],
+                ["Assignee last seen", ["assigneeLastSeenAt"]],
+                ["Source ID", ["sourceId"]],
+              ].map(([label, keys]) => (
+                <div key={label as string}>
+                  <dt className="font-medium text-muted-foreground">{label as string}</dt>
+                  <dd className="mt-1 break-words text-foreground">
+                    {textOf(primary, keys as string[], "n/a")}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            {textOf(primary, ["chatwootFetchError"], "") ? (
+              <Alert className="mx-4 mb-4 py-2">
+                <AlertDescription className="text-xs">
+                  {textOf(primary, ["chatwootFetchError"], "")}
+                </AlertDescription>
+              </Alert>
+            ) : null}
           </SectionPanel>
 
           <SectionPanel title="CRM Context" eyebrow="Twenty external">

@@ -2,6 +2,7 @@ import type {
   ClassifierIntent,
   ContactDriver,
   Conversation,
+  ConversationChannel,
   CrmContact,
   DashboardData,
   McpTool,
@@ -85,6 +86,32 @@ interface AgentStudioConversationMessage {
   created_at: string;
 }
 
+interface AgentStudioChatwootInboxContext {
+  id: string | null;
+  name: string | null;
+  channel_type: string | null;
+  provider: string | null;
+}
+
+interface AgentStudioChatwootContext {
+  normalized_channel: string | null;
+  contact_last_seen_at: string | null;
+  agent_last_seen_at: string | null;
+  assignee_last_seen_at: string | null;
+  last_activity_at: string | null;
+  unread_count: number | null;
+  can_reply: boolean | null;
+  source_id: string | null;
+  inbox: AgentStudioChatwootInboxContext | null;
+  status: string | null;
+  priority: string | null;
+  labels: string[];
+  waiting_since: string | null;
+  fetch_status: "not_fetched" | "ready" | "failed" | "unconfigured";
+  fetch_error: string | null;
+  fetched_at: string | null;
+}
+
 interface AgentStudioConversation {
   id: string;
   chatwoot_conversation_id: string | null;
@@ -98,6 +125,7 @@ interface AgentStudioConversation {
   retrieved_knowledge: AgentStudioKnowledgeHit[];
   tool_plans: AgentStudioToolPlan[];
   tool_results: AgentStudioToolResult[];
+  chatwoot_context?: AgentStudioChatwootContext | null;
   draft_reply: string;
   qa_findings: AgentStudioQaFinding[];
   compliance_status: "pass" | "needs_review" | "blocked";
@@ -360,6 +388,45 @@ function titleCase(value: string): string {
   return value
     .replaceAll("_", " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function normalizeConversationChannel(value: string | null | undefined): ConversationChannel {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (
+    [
+      "web_chat",
+      "sms",
+      "email",
+      "voice",
+      "facebook",
+      "instagram",
+      "whatsapp",
+      "telegram",
+      "line",
+      "api",
+      "unknown",
+    ].includes(normalized)
+  ) {
+    return normalized as ConversationChannel;
+  }
+  return "unknown";
+}
+
+function conversationChannelLabel(channel: ConversationChannel): string {
+  const labels: Record<ConversationChannel, string> = {
+    web_chat: "Web Chat",
+    sms: "SMS",
+    email: "Email",
+    voice: "Voice",
+    facebook: "Facebook",
+    instagram: "Instagram",
+    whatsapp: "WhatsApp",
+    telegram: "Telegram",
+    line: "LINE",
+    api: "API",
+    unknown: "Unknown",
+  };
+  return labels[channel];
 }
 
 function percent(value: number): string {
@@ -634,6 +701,11 @@ function toAgentStudioConversationView(
 ): ConversationView {
   const lane = laneForAgentStudioConversation(conversation);
   const confidence = conversation.retrieved_knowledge.length > 0 ? 0.88 : 0.68;
+  const chatwootContext = conversation.chatwoot_context ?? null;
+  const normalizedChannel = normalizeConversationChannel(
+    chatwootContext?.normalized_channel ?? conversation.channel,
+  );
+  const channelLabel = conversationChannelLabel(normalizedChannel);
   const ageMinutes = minutesBetween(conversation.created_at, new Date().toISOString());
   const knowledgeContext = conversation.retrieved_knowledge.map((hit) => ({
     title: hit.title,
@@ -705,7 +777,8 @@ function toAgentStudioConversationView(
     contactId: `chatwoot-${conversation.chatwoot_conversation_id ?? conversation.id}`,
     assignedAgentId: "agent-ai-dispatch",
     supervisorPodId: "pod-intake",
-    channel: "web_chat",
+    channel: normalizedChannel,
+    sourceChannel: channelLabel,
     subject: latestCustomerMessage.slice(0, 80),
     openedAt: conversation.created_at,
     updatedAt: conversation.updated_at,
@@ -740,6 +813,24 @@ function toAgentStudioConversationView(
     name: conversation.customer_name,
     source: "Chatwoot",
     channelProvider: "Chatwoot",
+    provider: "Chatwoot",
+    chatwootContext,
+    chatwootFetchStatus: chatwootContext?.fetch_status ?? "not_fetched",
+    chatwootFetchError: chatwootContext?.fetch_error ?? "",
+    inboxName: chatwootContext?.inbox?.name ?? "Chatwoot inbox",
+    inboxChannelType: chatwootContext?.inbox?.channel_type ?? "",
+    sourceId: chatwootContext?.source_id ?? "",
+    unreadCount: chatwootContext?.unread_count ?? 0,
+    canReply:
+      chatwootContext?.can_reply === null || chatwootContext?.can_reply === undefined
+        ? "Unknown"
+        : chatwootContext.can_reply
+          ? "Yes"
+          : "No",
+    lastActivityAt: chatwootContext?.last_activity_at ?? conversation.updated_at,
+    contactLastSeenAt: chatwootContext?.contact_last_seen_at ?? "",
+    agentLastSeenAt: chatwootContext?.agent_last_seen_at ?? "",
+    assigneeLastSeenAt: chatwootContext?.assignee_last_seen_at ?? "",
     lane,
     queueType: lane,
     reason: "Agent Studio generated a draft that requires supervisor approval before sending.",
@@ -778,7 +869,7 @@ function toAgentStudioConversationView(
       customerValue: "Unknown",
       risk: titleCase(conversation.risk_level),
       owner: "Intake Pod",
-      area: "Web chat",
+      area: channelLabel,
     },
     customerContext: {
       lifecycle: "Chatwoot visitor",
@@ -786,7 +877,7 @@ function toAgentStudioConversationView(
       customerValue: "Unknown",
       risk: titleCase(conversation.risk_level),
       owner: "Intake Pod",
-      area: "Web chat",
+      area: channelLabel,
     },
     decisionTrail: [
       {

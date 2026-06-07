@@ -7,7 +7,12 @@ from typing import Annotated
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
 
-from agent_studio.chatwoot import send_approved_reply
+from agent_studio.chatwoot import (
+    chatwoot_context_from_payload,
+    fetch_conversation_details,
+    send_approved_reply,
+)
+from agent_studio.chatwoot_mapping import channel_from_payload
 from agent_studio.config import Settings
 from agent_studio.config import get_settings
 from agent_studio.db import TrustedContext, initialize_database
@@ -974,12 +979,20 @@ async def receive_chatwoot_webhook(
         )
         return existing_record
 
+    normalized_channel = channel_from_payload(
+        payload,
+        existing_channel=existing_record.channel if existing_record else None,
+    )
+    chatwoot_context = chatwoot_context_from_payload(
+        payload.model_dump(mode="json", exclude_none=True),
+        normalized_channel=normalized_channel,
+    )
     initial_state = {
         "conversation_id": conversation_id,
         "chatwoot_conversation_id": _conversation_id(payload),
         "chatwoot_message_id": chatwoot_message_id,
         "customer_name": _customer_name(payload),
-        "channel": "chatwoot",
+        "channel": normalized_channel,
         "incoming_message": incoming_message,
         "trace_url": None,
     }
@@ -994,6 +1007,7 @@ async def receive_chatwoot_webhook(
         intent=str(final_state.get("intent", "unknown")),
         risk_level=final_state.get("risk_level", "medium"),
         retrieved_knowledge=final_state.get("retrieved_knowledge", []),
+        chatwoot_context=chatwoot_context,
         draft_reply=str(final_state.get("draft_reply", "")),
         qa_findings=final_state.get("qa_findings", []),
         compliance_status=final_state.get("compliance_status", "needs_review"),
@@ -1065,7 +1079,7 @@ def list_conversations(
 
 
 @app.get("/conversations/{conversation_id}", response_model=ConversationRecord)
-def get_conversation(
+async def get_conversation(
     conversation_id: str,
     x_sagad_org_id: Annotated[str | None, Header()] = None,
     x_sagad_user_id: Annotated[str | None, Header()] = None,
@@ -1077,6 +1091,29 @@ def get_conversation(
     record = store.get(conversation_id, context=context)
     if record is None:
         raise HTTPException(status_code=404, detail="Conversation not found.")
+    if record.chatwoot_conversation_id:
+        chatwoot_context = await fetch_conversation_details(
+            settings=configured_settings(get_settings(), context),
+            chatwoot_conversation_id=record.chatwoot_conversation_id,
+            fallback_channel=record.channel,
+        )
+        record.chatwoot_context = chatwoot_context
+        if (
+            chatwoot_context.normalized_channel
+            and record.channel in {"chatwoot", "unknown"}
+        ):
+            record.channel = chatwoot_context.normalized_channel
+        if chatwoot_context.fetch_status in {"ready", "failed"}:
+            record = store.save(record, context=context)
+            if chatwoot_context.fetch_status == "failed":
+                _record_diagnostic_event(
+                    event_type="chatwoot.details.failed",
+                    summary="Chatwoot conversation details could not be fetched.",
+                    status_value="warning",
+                    conversation_id=record.id,
+                    payload={"fetch_error": chatwoot_context.fetch_error or "unknown"},
+                    context=context,
+                )
     return record
 
 
@@ -1120,6 +1157,24 @@ async def approve_send(
         raise HTTPException(status_code=409, detail="Conversation is not waiting for approval.")
 
     content = request.edited_reply or record.draft_reply
+    if record.chatwoot_context and record.chatwoot_context.can_reply is False:
+        _record_diagnostic_event(
+            event_type="chatwoot.send.blocked",
+            summary="Chatwoot reports this conversation cannot receive replies.",
+            status_value="warning",
+            conversation_id=record.id,
+            payload={
+                "chatwoot_conversation_id": record.chatwoot_conversation_id,
+                "source_id": record.chatwoot_context.source_id,
+            },
+            context=context,
+            actor_type="user",
+            actor_id=request.supervisor_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Chatwoot reports this conversation cannot receive replies.",
+        )
     _log_event(
         logging.INFO,
         "chatwoot.send.attempt",

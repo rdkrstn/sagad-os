@@ -244,6 +244,32 @@ class DiagnosticEvent(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class ChatwootInboxContext(BaseModel):
+    id: str | None = None
+    name: str | None = None
+    channel_type: str | None = None
+    provider: str | None = None
+
+
+class ChatwootConversationContext(BaseModel):
+    normalized_channel: str | None = None
+    contact_last_seen_at: datetime | None = None
+    agent_last_seen_at: datetime | None = None
+    assignee_last_seen_at: datetime | None = None
+    last_activity_at: datetime | None = None
+    unread_count: int | None = None
+    can_reply: bool | None = None
+    source_id: str | None = None
+    inbox: ChatwootInboxContext | None = None
+    status: str | None = None
+    priority: str | None = None
+    labels: list[str] = Field(default_factory=list)
+    waiting_since: datetime | None = None
+    fetch_status: Literal["not_fetched", "ready", "failed", "unconfigured"] = "not_fetched"
+    fetch_error: str | None = None
+    fetched_at: datetime | None = None
+
+
 class ChatwootWebhookPayload(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -284,6 +310,7 @@ class ConversationRecord(BaseModel):
     risk_level: Literal["low", "medium", "high"] = "medium"
     retrieved_knowledge: list[KnowledgeHit] = Field(default_factory=list)
     crm_context: CrmContactContext | None = None
+    chatwoot_context: ChatwootConversationContext | None = None
     tool_plans: list[ToolPlan] = Field(default_factory=list)
     tool_results: list[ToolResult] = Field(default_factory=list)
     draft_reply: str = ""
