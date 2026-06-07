@@ -154,6 +154,7 @@ interface AgentStudioKnowledgeDocument {
   version: number;
   approval_status: "needs_review" | "approved" | "archived";
   chunk_count: number;
+  last_embedded_at?: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -237,6 +238,35 @@ interface IntegrationConnectionList {
 
 const demoNow = "2026-06-04T09:00:00+08:00";
 const clone = <T>(value: T): T => structuredClone(value);
+
+function viewText(
+  row: ViewRecord,
+  keys: string[],
+  fallback = "",
+): string {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) return value;
+    if (typeof value === "number") return String(value);
+    if (typeof value === "boolean") return value ? "Yes" : "No";
+  }
+
+  return fallback;
+}
+
+function viewRecordArray(row: ViewRecord, keys: string[]): ViewRecord[] {
+  for (const key of keys) {
+    const value = row[key];
+    if (Array.isArray(value)) {
+      return value.filter(
+        (item): item is ViewRecord =>
+          Boolean(item) && typeof item === "object" && !Array.isArray(item),
+      );
+    }
+  }
+
+  return [];
+}
 
 const contactById = new Map(mockContacts.map((contact) => [contact.id, contact]));
 const agentById = new Map(mockAgents.map((agent) => [agent.id, agent]));
@@ -1595,6 +1625,14 @@ function supervisorPodViews(): ViewRecord[] {
   });
 }
 
+function isSentStatus(value: unknown): boolean {
+  const normalized = String(value ?? "")
+    .toLowerCase()
+    .replaceAll("_", " ");
+
+  return normalized === "sent" || normalized === "delivered";
+}
+
 // TODO: Replace with real fetch from Agent Studio once API is available, and remove mockConversations from the dashboard data.
 export async function getDashboardData(): Promise<DashboardViewData> {
   const liveConversations = await fetchAgentStudioConversations();
@@ -1629,10 +1667,10 @@ export async function getDashboardData(): Promise<DashboardViewData> {
       aiDraftedResponses: isDemoSeed ? 91 : conversations.length,
       aiDrafted: isDemoSeed ? 91 : conversations.length,
       autoSentResponses: isDemoSeed ? 42 : conversations.filter((conversation) =>
-        String(conversation.sendStatus).toLowerCase().includes("sent"),
+        isSentStatus(conversation.sendStatus),
       ).length,
       autoSent: isDemoSeed ? 42 : conversations.filter((conversation) =>
-        String(conversation.sendStatus).toLowerCase().includes("sent"),
+        isSentStatus(conversation.sendStatus),
       ).length,
       approvalRequired: isDemoSeed ? 31 : approvalConversations.length,
       needsApproval: isDemoSeed ? 31 : approvalConversations.length,
@@ -1730,6 +1768,146 @@ export async function getSopReferences(): Promise<SopView[]> {
   return clone(mockSopReferences.map(toSopView));
 }
 
+export async function getCustomers(): Promise<ViewRecord[]> {
+  const conversations = await getConversations();
+
+  return clone(
+    mockContacts.map((contact) => {
+      const relatedConversations = conversations.filter(
+        (conversation) => String(conversation.contactId) === contact.id,
+      );
+      const openTasks = contact.tasks.filter((task) => task.status === "open");
+      const lastConversation = relatedConversations[0];
+
+      return {
+        id: contact.id,
+        name: contact.displayName,
+        customerName: contact.displayName,
+        phoneMasked: contact.phoneMasked,
+        emailMasked: contact.emailMasked ?? "Not provided",
+        city: contact.city,
+        stage: titleCase(contact.leadStage),
+        leadStage: titleCase(contact.leadStage),
+        tags: contact.tags,
+        notes: contact.notes,
+        tasks: contact.tasks,
+        openTasks: openTasks.length,
+        serviceHistory: contact.serviceHistory,
+        lastService:
+          contact.serviceHistory[0]?.serviceType ??
+          contact.appointments[0]?.serviceType ??
+          "No service history",
+        risk: contact.tags.includes("human-takeover")
+          ? "High"
+          : contact.tags.includes("refund")
+            ? "Review"
+            : "Normal",
+        conversations: relatedConversations.length,
+        lastConversationStatus: lastConversation?.queueStatus ?? "No active conversation",
+        lastConversationSummary:
+          lastConversation?.summary ?? contact.notes[0] ?? "No current notes",
+        owner: openTasks[0]?.ownerId
+          ? (agentById.get(openTasks[0].ownerId)?.name ?? "Ops")
+          : "Ops",
+      };
+    }),
+  );
+}
+
+export async function getAuditEvents(): Promise<ViewRecord[]> {
+  const conversations = await getConversations();
+
+  return clone(
+    conversations.flatMap((conversation) => {
+      const trailEvents = viewRecordArray(conversation, [
+        "decisionTrail",
+        "aiDecisionTrail",
+      ]).map((event, index) => ({
+          id: `${String(conversation.id)}-${index}`,
+          conversationId: conversation.id,
+          customerName: conversation.customerName,
+          event:
+            viewText(event, ["step", "label", "type"], "Audit event") ||
+            "Audit event",
+          status: viewText(event, ["status", "result"], "Logged"),
+          actor: viewText(event, ["actor"], "SagadOS"),
+          detail: viewText(event, ["rationale", "detail", "description"], ""),
+          createdAt:
+            viewText(event, ["createdAt", "time", "timestamp"], "") ||
+            viewText(conversation, ["updatedAt", "openedAt"], ""),
+        }));
+      const sendStatus = viewText(conversation, ["sendStatus"], "");
+      const queueStatus = viewText(conversation, ["queueStatus", "status"], "");
+      const synthesizedEvents: ViewRecord[] = [
+        {
+          id: `${String(conversation.id)}-draft-created`,
+          conversationId: conversation.id,
+          customerName: conversation.customerName,
+          event: "AI draft created",
+          status: viewText(conversation, ["confidence", "aiConfidence"], "Drafted"),
+          actor: "Sagad agents",
+          detail: viewText(conversation, ["draftReply", "suggestedReply"], "Draft generated for supervisor review."),
+          createdAt: viewText(conversation, ["updatedAt", "openedAt"], ""),
+        },
+      ];
+
+      if (queueStatus.toLowerCase().includes("approval")) {
+        synthesizedEvents.push({
+          id: `${String(conversation.id)}-approval-requested`,
+          conversationId: conversation.id,
+          customerName: conversation.customerName,
+          event: "Approval requested",
+          status: queueStatus,
+          actor: "Sagad approvals",
+          detail: viewText(conversation, ["reason", "queueReason"], "Supervisor approval required."),
+          createdAt: viewText(conversation, ["updatedAt", "openedAt"], ""),
+        });
+      }
+
+      if (isSentStatus(sendStatus)) {
+        synthesizedEvents.push({
+          id: `${String(conversation.id)}-reply-sent`,
+          conversationId: conversation.id,
+          customerName: conversation.customerName,
+          event: "Reply sent",
+          status: "Sent",
+          actor: "Sagad audit",
+          detail: "Final customer response delivery was recorded.",
+          createdAt: viewText(conversation, ["updatedAt", "openedAt"], ""),
+        });
+      }
+
+      if (queueStatus.toLowerCase().includes("escal")) {
+        synthesizedEvents.push({
+          id: `${String(conversation.id)}-escalation-created`,
+          conversationId: conversation.id,
+          customerName: conversation.customerName,
+          event: "Escalation created",
+          status: queueStatus,
+          actor: "Supervisor",
+          detail: viewText(conversation, ["reason", "summary"], "Conversation escalated to a human supervisor."),
+          createdAt: viewText(conversation, ["updatedAt", "openedAt"], ""),
+        });
+      }
+
+      for (const toolResult of viewRecordArray(conversation, ["toolResults", "deliveryResults"])) {
+        synthesizedEvents.push({
+          id: `${String(conversation.id)}-${viewText(toolResult, ["id", "toolName"], "tool")}`,
+          conversationId: conversation.id,
+          customerName: conversation.customerName,
+          event: "Tool called",
+          status: viewText(toolResult, ["status"], "Logged"),
+          actor: viewText(toolResult, ["provider"], "Agent Studio"),
+          detail: viewText(toolResult, ["detail"], "Tool result recorded."),
+          createdAt: viewText(conversation, ["updatedAt", "openedAt"], ""),
+        });
+      }
+
+      return [...trailEvents, ...synthesizedEvents];
+    }),
+  );
+}
+
 export async function getKnowledgeIngestionOverview(): Promise<ViewRecord> {
   const [liveDocuments, liveJobs, liveSources] = await Promise.all([
     fetchAgentStudioKnowledgeDocuments(),
@@ -1754,6 +1932,9 @@ export async function getKnowledgeIngestionOverview(): Promise<ViewRecord> {
       content: document.content,
       contentHash: document.content_hash,
       jobId: document.job_id,
+      lastEmbeddedAt:
+        document.last_embedded_at ??
+        viewText(document.metadata, ["last_embedded_at", "lastEmbeddedAt"], document.updated_at),
       updatedAt: document.updated_at,
       createdAt: document.created_at,
       metadata: document.metadata,

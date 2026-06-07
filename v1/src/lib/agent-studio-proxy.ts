@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { Session } from "next-auth";
 
 export type IntegrationProvider = "chatwoot" | "twenty";
+type SagadRole = NonNullable<Session["user"]["role"]>;
 
 export function agentStudioBaseUrl(): string | null {
   const value = process.env.SAGAD_API_BASE_URL?.trim();
@@ -50,4 +51,14 @@ export async function parseAgentStudioResponse(
 
 export function isIntegrationProvider(value: string): value is IntegrationProvider {
   return value === "chatwoot" || value === "twenty";
+}
+
+export function hasIntegrationAdminRole(
+  role: SagadRole | null | undefined,
+): boolean {
+  return role === "owner" || role === "admin";
+}
+
+export function hasApprovalRole(role: SagadRole | null | undefined): boolean {
+  return role === "owner" || role === "admin" || role === "supervisor";
 }

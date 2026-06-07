@@ -37,11 +37,14 @@ export async function POST(
     );
   }
 
-  const response = await fetch(`${baseUrl}/integration-configs/${provider}/test`, {
-    method: "POST",
-    headers: agentStudioHeaders(session),
-    cache: "no-store",
-  });
+  const response = await fetch(
+    `${baseUrl}/integration-configs/${provider}/disable`,
+    {
+      method: "POST",
+      headers: agentStudioHeaders(session),
+      cache: "no-store",
+    },
+  );
 
   return jsonResponse(await parseAgentStudioResponse(response), response.status);
 }
