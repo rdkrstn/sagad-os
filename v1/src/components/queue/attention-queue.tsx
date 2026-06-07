@@ -90,8 +90,11 @@ export function AttentionQueue({ conversations }: { conversations: unknown }) {
           <div className="font-medium text-foreground">
             {textOf(row, ["customerName", "contact", "name"])}
           </div>
-          <div className="text-muted-foreground">
-            {textOf(row, ["channel", "source"], "Inbox")}
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <span>{textOf(row, ["sourceChannel", "channel", "source"], "Inbox")}</span>
+            {numberOf(row, ["unreadCount"]) > 0 ? (
+              <Badge variant="outline">{numberOf(row, ["unreadCount"])} unread</Badge>
+            ) : null}
           </div>
         </div>
       ),

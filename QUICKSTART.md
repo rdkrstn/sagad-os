@@ -145,6 +145,7 @@ docker compose -f compose.preview.yaml --profile litellm up -d --build
 ```
 
 LiteLLM exposes an OpenAI-compatible `/v1` endpoint for server-side Agent Studio model calls. Use it when testing OpenAI and DeepSeek credits through one gateway.
+For VPS usage, keep LiteLLM private on the Docker network and point Agent Studio at `http://sagad-litellm:4000/v1`. Use `OPENAI_MODEL=sagad-openai-fast` or another alias from `infra/litellm/config.example.yaml`; raw names such as `gpt-5.4` only work if that exact LiteLLM alias exists.
 
 For a VPS that already uses Nginx Proxy Manager on an external Docker network, copy the example to a local ignored compose file:
 
@@ -230,6 +231,7 @@ Chatwoot inbound message
 ```
 
 Repeated customer messages in the same Chatwoot session append to the same Sagad conversation and regenerate the latest supervised draft. The console live-sync chip uses `SAGAD_WS_PUBLIC_URL` plus short-lived tokens signed with `SAGAD_REALTIME_SECRET` to refresh on Agent Studio WebSocket events.
+Chatwoot remains the provider, but the conversation channel is the real customer medium. Email webhooks should render as Email, web widget traffic as Web Chat, and missing source metadata as Unknown. Conversation detail reads can enrich the selected thread with last-seen, unread count, inbox metadata, source ID, and can-reply state.
 
 Twenty CRM starts read-only. Writes remain disabled or dry-run until approval gates and write-policy tests are verified.
 

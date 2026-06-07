@@ -14,6 +14,11 @@ model_list:
       model: deepseek/deepseek-chat
       api_key: os.environ/DEEPSEEK_API_KEY
 
+  - model_name: sagad-openai-embedding
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_connection_pool_limit: 10
