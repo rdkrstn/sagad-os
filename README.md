@@ -78,7 +78,7 @@ flowchart LR
 
 ## Demo Workspace
 
-Do not bring your own data first. The preview starts with `Northstar Apparel Support` demo data:
+Do not bring your own data first. The preview starts with `Sagad Demo Operations` seeded data:
 
 - Chatwoot demo inbox conversations;
 - Twenty CRM-style contacts;
@@ -94,11 +94,11 @@ The first screen shows `TODAY'S AI OPS` metrics, including messages received, AI
 
 ### Sagad Console
 
-The supervisor UI for queues, approvals, conversations, agent performance, contact drivers, QA/SOP review, knowledge inventory, the operator/admin Integrations page, and Settings.
+The supervisor UI for Command Center, Review Queue, Conversations, Contact Drivers, Reports, Agents, Skills, Graphs, Tools, MCP Servers, Traces, Knowledge Base, Policy & QA, Evaluations, Adapters, and Settings.
 
-The console direction follows the SagadOS Premium Open Ops design system: calm, modular, inspectable, and operator-focused. Product surfaces should show visible system state, clear borders, restrained navy/teal accents, and transparent ownership rather than AI-magic or glossy SaaS framing.
+The console direction follows the SagadOS High-Contrast Infra OS design system: black/white identity, warm paper light mode, graphite dark mode, compact operator density, and green only for active, healthy, connected, ready, selected, or primary action states.
 
-Integrations is for operator health monitoring and Owner/Admin connection setup. Developer payloads, DTO contracts, webhook samples, and low-level tool details belong under `Settings -> Advanced`, not in the main integrations page.
+Adapters is for operator health monitoring. Tools is the callable action registry. MCP Servers is the external capability server registry. Developer payloads, DTO contracts, webhook samples, and low-level setup details belong under `Settings -> Advanced`.
 
 Location: `v1/`
 
@@ -345,7 +345,7 @@ Current:
 
 - Next.js supervisor console preview.
 - Agent Studio FastAPI + LangGraph backend preview.
-- Northstar Apparel Support seeded demo workspace.
+- Sagad Demo Operations seeded workspace.
 - Golden demo loop with sample conversations, drafts, approvals, audit trail events, and basic AI Ops metrics.
 - Chatwoot and Twenty operator/admin setup and monitoring boundaries.
 - Governed local knowledge ingestion with review-first approval, OpenAI embeddings, and pgvector retrieval.

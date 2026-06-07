@@ -22,7 +22,7 @@ export const mockAgents: Agent[] = [
     status: "busy",
     activeConversationCount: 42,
     languages: ["en", "fil"],
-    podId: "pod-northstar-ai-ops",
+    podId: "pod-sagad-ai-ops",
   },
   {
     id: "agent-support-ai",
@@ -31,7 +31,7 @@ export const mockAgents: Agent[] = [
     status: "reviewing",
     activeConversationCount: 49,
     languages: ["en", "fil"],
-    podId: "pod-northstar-ai-ops",
+    podId: "pod-sagad-ai-ops",
   },
   {
     id: "agent-supervisor-harper",
@@ -40,14 +40,14 @@ export const mockAgents: Agent[] = [
     status: "reviewing",
     activeConversationCount: 3,
     languages: ["en"],
-    podId: "pod-northstar-ai-ops",
+    podId: "pod-sagad-ai-ops",
   },
 ];
 
 export const mockSupervisorPods: SupervisorPod[] = [
   {
-    id: "pod-northstar-ai-ops",
-    name: "Northstar AI Ops Pod",
+    id: "pod-sagad-ai-ops",
+    name: "Sagad AI Ops Pod",
     queueLabel: "Sales, support, refunds, and escalations",
     leadSupervisorId: "agent-supervisor-harper",
     agentIds: ["agent-sales-ai", "agent-support-ai", "agent-supervisor-harper"],
@@ -419,7 +419,7 @@ export const mockConversations: Conversation[] = [
     id: "conv-refund-unclear",
     contactId: "contact-riley-refund",
     assignedAgentId: "agent-support-ai",
-    supervisorPodId: "pod-northstar-ai-ops",
+    supervisorPodId: "pod-sagad-ai-ops",
     channel: "web_chat",
     status: "needs_review",
     priority: "high",
@@ -488,7 +488,7 @@ export const mockConversations: Conversation[] = [
     id: "conv-shipping-status",
     contactId: "contact-jordan-shipping",
     assignedAgentId: "agent-support-ai",
-    supervisorPodId: "pod-northstar-ai-ops",
+    supervisorPodId: "pod-sagad-ai-ops",
     channel: "web_chat",
     status: "resolved",
     priority: "normal",
@@ -551,7 +551,7 @@ export const mockConversations: Conversation[] = [
     id: "conv-sales-sizing",
     contactId: "contact-sam-sizing",
     assignedAgentId: "agent-sales-ai",
-    supervisorPodId: "pod-northstar-ai-ops",
+    supervisorPodId: "pod-sagad-ai-ops",
     channel: "web_chat",
     status: "resolved",
     priority: "normal",
@@ -613,7 +613,7 @@ export const mockConversations: Conversation[] = [
     id: "conv-angry-escalation",
     contactId: "contact-casey-angry",
     assignedAgentId: "agent-supervisor-harper",
-    supervisorPodId: "pod-northstar-ai-ops",
+    supervisorPodId: "pod-sagad-ai-ops",
     channel: "email",
     status: "human_takeover",
     priority: "urgent",
@@ -676,7 +676,7 @@ export const mockConversations: Conversation[] = [
     id: "conv-tool-failure",
     contactId: "contact-morgan-tool",
     assignedAgentId: "agent-support-ai",
-    supervisorPodId: "pod-northstar-ai-ops",
+    supervisorPodId: "pod-sagad-ai-ops",
     channel: "web_chat",
     status: "needs_review",
     priority: "urgent",
@@ -829,8 +829,8 @@ export const mockMcpTools: McpTool[] = [
 
 export const homeServicesDashboardData: DashboardData = {
   account: {
-    id: "acct-northstar-apparel-support",
-    name: "Northstar Apparel Support",
+    id: "acct-sagad-demo-ops",
+    name: "Sagad Demo Operations",
     industry: "retail",
     timezone: "America/Chicago",
   },

@@ -1,8 +1,8 @@
 import { IntegrationsHealthConsole } from "@/components/integrations/integrations-health-console";
-import { getIntegrationConnections } from "@/lib/api/sagad-api";
+import { getIntegrationHealth } from "@/lib/api/sagad-api";
 
 export default async function IntegrationsPage() {
-  const connections = await getIntegrationConnections();
+  const connections = await getIntegrationHealth();
 
   return <IntegrationsHealthConsole connections={connections} />;
 }

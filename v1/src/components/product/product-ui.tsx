@@ -1,4 +1,5 @@
 import type { LucideIcon } from "lucide-react";
+import Image from "next/image";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -94,6 +95,37 @@ export function LogoPlaceholder({
   );
 }
 
+export function SagadLogo({
+  markOnly = false,
+  theme = "dark",
+  size = 30,
+}: {
+  markOnly?: boolean;
+  theme?: "dark" | "light";
+  size?: number;
+}) {
+  const src = markOnly
+    ? theme === "dark"
+      ? "/brand/sagados-b-logo.svg"
+      : "/brand/sagados-w-logo.svg"
+    : theme === "dark"
+      ? "/brand/sagados-horizontal-monochrome-w.svg"
+      : "/brand/sagados-horizontal-monochrome-b.svg";
+
+  return (
+    <Image
+      alt={markOnly ? "SagadOS" : "SagadOS wordmark"}
+      className={cn(
+        "shrink-0 border border-border object-contain",
+        markOnly ? "bg-black" : "bg-white",
+      )}
+      height={markOnly ? size : Math.round(size * 1.8)}
+      src={src}
+      width={markOnly ? size : Math.round(size * 4.6)}
+    />
+  );
+}
+
 export function Panel({
   title,
   eyebrow,
@@ -110,11 +142,11 @@ export function Panel({
   bodyClassName?: string;
 }) {
   return (
-    <Card className={cn("gap-0 overflow-hidden py-0 shadow-[var(--shadow-soft)]", className)}>
-      <CardHeader className="flex min-h-13 flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+    <Card className={cn("gap-0 overflow-hidden rounded-md py-0 shadow-none", className)}>
+      <CardHeader className="flex min-h-11 flex-col gap-2 border-b border-border px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           {eyebrow ? (
-            <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            <div className="font-mono text-[10px] font-semibold uppercase text-muted-foreground">
               {eyebrow}
             </div>
           ) : null}
@@ -172,11 +204,11 @@ export function MetricCard({
   className?: string;
 }) {
   return (
-    <div className={cn("rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-soft)]", className)}>
+    <div className={cn("rounded-md border border-border bg-card p-3 shadow-none", className)}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-xs font-medium text-muted-foreground">{label}</div>
-          <div className="mt-2 text-3xl font-bold tracking-tight text-foreground">
+          <div className="text-[11px] font-medium text-muted-foreground">{label}</div>
+          <div className="mt-1 text-2xl font-bold text-foreground">
             {value}
           </div>
         </div>
@@ -237,6 +269,7 @@ export function ApprovalActionBar({
   onReject,
   onEscalate,
   onMissingKnowledge,
+  onTakeOver,
   className,
 }: {
   disabled?: boolean;
@@ -245,6 +278,7 @@ export function ApprovalActionBar({
   onReject?: () => void;
   onEscalate?: () => void;
   onMissingKnowledge?: () => void;
+  onTakeOver?: () => void;
   className?: string;
 }) {
   return (
@@ -257,6 +291,9 @@ export function ApprovalActionBar({
       </Button>
       <Button disabled={disabled} onClick={onMissingKnowledge} size="sm" type="button" variant="outline">
         Mark Missing Knowledge
+      </Button>
+      <Button disabled={disabled} onClick={onTakeOver} size="sm" type="button" variant="outline">
+        Take Over
       </Button>
       <Button disabled={disabled} onClick={onEdit} size="sm" type="button" variant="outline">
         Edit Draft

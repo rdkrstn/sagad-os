@@ -7,6 +7,8 @@ import {
   BarChart3,
   Bell,
   BookOpen,
+  Bot,
+  BrainCircuit,
   CheckCircle2,
   ClipboardCheck,
   Database,
@@ -18,12 +20,15 @@ import {
   LogOut,
   Menu,
   Moon,
+  Network,
   PlugZap,
-  Search,
+  Route,
+  ServerCog,
   Settings,
+  ShieldCheck,
   Sun,
   UserCog,
-  Users,
+  Wrench,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -39,7 +44,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import {
   Sheet,
@@ -54,7 +58,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { LogoPlaceholder, StatusPill } from "@/components/product/product-ui";
+import { SagadLogo, StatusPill } from "@/components/product/product-ui";
 import { ConsoleRealtimeStatus } from "@/components/realtime/console-realtime-status";
 import { cn } from "@/lib/utils";
 
@@ -67,59 +71,140 @@ type NavItem = {
   icon: LucideIcon;
 };
 
-const navItems: NavItem[] = [
-  { href: "/", label: "Overview", code: "OV", icon: Gauge },
-  { href: "/conversations", label: "Conversations", code: "CV", icon: ClipboardCheck },
-  { href: "/approvals", label: "Approvals", code: "AP", icon: ListChecks },
-  { href: "/customers", label: "Customers", code: "CU", icon: Users },
-  { href: "/knowledge", label: "Knowledge", code: "KB", icon: BookOpen },
-  { href: "/workflows", label: "Workflows", code: "WF", icon: GitBranch },
-  { href: "/integrations", label: "Integrations", code: "IN", icon: PlugZap },
-  { href: "/analytics", label: "Analytics", code: "AN", icon: BarChart3 },
-  { href: "/logs", label: "Logs", code: "LG", icon: FileText },
-  { href: "/settings", label: "Settings", code: "ST", icon: Settings },
+type NavSection = {
+  label: string;
+  items: NavItem[];
+};
+
+const navSections: NavSection[] = [
+  {
+    label: "Operations",
+    items: [
+      { href: "/", label: "Command Center", code: "CC", icon: Gauge },
+      { href: "/review-queue", label: "Review Queue", code: "RQ", icon: ListChecks },
+      { href: "/conversations", label: "Conversations", code: "CV", icon: ClipboardCheck },
+      { href: "/drivers", label: "Contact Drivers", code: "DR", icon: Route },
+      { href: "/reports", label: "Reports", code: "RP", icon: BarChart3 },
+    ],
+  },
+  {
+    label: "Agent Studio",
+    items: [
+      { href: "/agents", label: "Agents", code: "AG", icon: Bot },
+      { href: "/skills", label: "Skills", code: "SK", icon: BrainCircuit },
+      { href: "/graphs", label: "Graphs", code: "GR", icon: GitBranch },
+      { href: "/tools", label: "Tools", code: "TL", icon: Wrench },
+      { href: "/mcp-servers", label: "MCP Servers", code: "MC", icon: ServerCog },
+      { href: "/traces", label: "Traces", code: "TR", icon: Network },
+    ],
+  },
+  {
+    label: "Knowledge & QA",
+    items: [
+      { href: "/knowledge", label: "Knowledge Base", code: "KB", icon: BookOpen },
+      { href: "/qa", label: "Policy & QA", code: "QA", icon: ShieldCheck },
+      { href: "/evaluations", label: "Evaluations", code: "EV", icon: FileText },
+    ],
+  },
+  {
+    label: "Platform",
+    items: [
+      { href: "/integrations", label: "Adapters", code: "AD", icon: PlugZap },
+      { href: "/settings", label: "Settings", code: "ST", icon: Settings },
+    ],
+  },
 ];
 
 const routeMeta: Array<{ match: string; title: string; description: string }> = [
   {
-    match: "/conversations",
-    title: "Conversations",
-    description: "Supervisor queue, AI drafts, approvals, and routing state.",
+    match: "/review-queue",
+    title: "Review Queue",
+    description: "AI drafts and actions that need human judgment before anything leaves the system.",
   },
   {
     match: "/approvals",
-    title: "Approvals",
-    description: "Low-confidence replies, escalation gates, and supervisor decisions.",
+    title: "Review Queue",
+    description: "AI drafts and actions that need human judgment before anything leaves the system.",
   },
   {
-    match: "/customers",
-    title: "Customers",
-    description: "CRM context, lead stage, service history, and pending tasks.",
+    match: "/conversations",
+    title: "Conversations",
+    description: "Inspect the message, customer context, AI reasoning, knowledge, tools, approval, audit, and trace.",
   },
   {
-    match: "/knowledge",
-    title: "Knowledge",
-    description: "Approved sources, review state, retrieval tests, and missing topics.",
-  },
-  {
-    match: "/workflows",
-    title: "Workflows",
-    description: "Agent routing flows, approval thresholds, and tool checkpoints.",
-  },
-  {
-    match: "/integrations",
-    title: "Integrations",
-    description: "Operator-facing adapter health and approval-gated connection state.",
+    match: "/drivers",
+    title: "Contact Drivers",
+    description: "Track why customers contact the operation, which agent handles it, and where risk or cost is increasing.",
   },
   {
     match: "/analytics",
-    title: "Analytics",
-    description: "Automation, approval, rejection, escalation, and trust-score reporting.",
+    title: "Reports",
+    description: "Operational reporting for approvals, trust, escalations, knowledge gaps, and outcomes.",
+  },
+  {
+    match: "/reports",
+    title: "Reports",
+    description: "Operational reporting for approvals, trust, escalations, knowledge gaps, and outcomes.",
+  },
+  {
+    match: "/agents",
+    title: "Agents",
+    description: "Configure and monitor the AI workers assigned to service operations.",
+  },
+  {
+    match: "/skills",
+    title: "Skills",
+    description: "Reusable playbooks that combine instructions, knowledge, tools, and approval rules.",
+  },
+  {
+    match: "/workflows",
+    title: "Graphs",
+    description: "Stateful orchestration flows that route AI work through context, tools, approvals, and audit.",
+  },
+  {
+    match: "/graphs",
+    title: "Graphs",
+    description: "Stateful orchestration flows that route AI work through context, tools, approvals, and audit.",
+  },
+  {
+    match: "/tools",
+    title: "Tools",
+    description: "Approved actions agents can use, with risk levels, permissions, and approval requirements.",
+  },
+  {
+    match: "/mcp-servers",
+    title: "MCP Servers",
+    description: "External capability servers that expose tools, resources, and prompts to approved Sagad agents.",
+  },
+  {
+    match: "/traces",
+    title: "Traces",
+    description: "Developer observability for agent runs, tool calls, latency, errors, and LangSmith references.",
+  },
+  {
+    match: "/knowledge",
+    title: "Knowledge Base",
+    description: "Approved sources, review state, retrieval tests, and missing topics.",
+  },
+  {
+    match: "/qa",
+    title: "Policy & QA",
+    description: "Approval rules, risk gates, QA rubrics, and compliance checks for AI service work.",
+  },
+  {
+    match: "/evaluations",
+    title: "Evaluations",
+    description: "Score agent work against policy, trust, tool reliability, and knowledge coverage.",
+  },
+  {
+    match: "/integrations",
+    title: "Adapters",
+    description: "Provider-agnostic connections for channels, CRMs, knowledge, audit, webhooks, and workflows.",
   },
   {
     match: "/logs",
-    title: "Logs",
-    description: "Audit events for AI drafts, retrieval, tool calls, approvals, and sends.",
+    title: "Traces",
+    description: "Developer observability for audit events, AI drafts, retrieval, tool calls, approvals, and sends.",
   },
   {
     match: "/settings",
@@ -171,50 +256,59 @@ function SidebarNav({
     <nav
       aria-label="Product navigation"
       className={cn(
-        "grid content-start gap-1 overflow-y-auto",
+        "grid content-start gap-4 overflow-y-auto",
         compact ? "px-2 py-3" : "px-3 py-4",
       )}
     >
-      {navItems.map((item) => {
-        const Icon = item.icon;
-        const active = isActive(pathname, item.href);
-        const content = (
-          <Link
-            aria-current={active ? "page" : undefined}
-            className={cn(
-              "flex h-10 items-center gap-2.5 rounded-md px-3 text-sm font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-              active && "bg-[rgba(0,212,170,0.12)] text-foreground",
-              compact && "justify-center px-0",
-            )}
-            href={item.href}
-          >
-            <span
-              className={cn(
-                "grid size-5 shrink-0 place-items-center rounded-sm border border-current font-mono text-[9px] opacity-75",
-                active && "text-[var(--accent-text)]",
-              )}
-            >
-              {compact ? <Icon aria-hidden="true" size={13} /> : item.code}
-            </span>
-            {!compact ? <span className="min-w-0 flex-1 truncate">{item.label}</span> : null}
-          </Link>
-        );
+      {navSections.map((section) => (
+        <div className="grid gap-1" key={section.label}>
+          {!compact ? (
+            <div className="px-3 font-mono text-[10px] font-semibold uppercase text-muted-foreground">
+              {section.label}
+            </div>
+          ) : null}
+          {section.items.map((item) => {
+            const Icon = item.icon;
+            const active = isActive(pathname, item.href);
+            const content = (
+              <Link
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "group flex h-8 items-center gap-2.5 rounded-sm px-3 text-[13px] font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                  active && "bg-[rgba(0,212,170,0.12)] text-foreground",
+                  compact && "justify-center px-0",
+                )}
+                href={item.href}
+              >
+                <span
+                  className={cn(
+                    "grid size-5 shrink-0 place-items-center border border-current font-mono text-[9px] opacity-70 transition-opacity group-hover:opacity-100",
+                    active && "text-[var(--accent-text)] opacity-100",
+                  )}
+                >
+                  {compact ? <Icon aria-hidden="true" size={13} /> : item.code}
+                </span>
+                {!compact ? <span className="min-w-0 flex-1 truncate">{item.label}</span> : null}
+              </Link>
+            );
 
-        const wrappedContent = closeOnNavigate ? (
-          <SheetClose asChild>{content}</SheetClose>
-        ) : (
-          content
-        );
+            const wrappedContent = closeOnNavigate ? (
+              <SheetClose asChild>{content}</SheetClose>
+            ) : (
+              content
+            );
 
-        return compact ? (
-          <Tooltip key={item.href}>
-            <TooltipTrigger asChild>{wrappedContent}</TooltipTrigger>
-            <TooltipContent side="right">{item.label}</TooltipContent>
-          </Tooltip>
-        ) : (
-          <div key={item.href}>{wrappedContent}</div>
-        );
-      })}
+            return compact ? (
+              <Tooltip key={item.href}>
+                <TooltipTrigger asChild>{wrappedContent}</TooltipTrigger>
+                <TooltipContent side="right">{item.label}</TooltipContent>
+              </Tooltip>
+            ) : (
+              <div key={item.href}>{wrappedContent}</div>
+            );
+          })}
+        </div>
+      ))}
     </nav>
   );
 }
@@ -222,26 +316,26 @@ function SidebarNav({
 function SidebarFooter() {
   return (
     <div className="mt-auto border-t border-border p-3">
-      <div className="rounded-lg border border-border bg-surface-2 p-3">
+      <div className="rounded-md border border-border bg-surface-2 p-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-              Environment
+            <div className="font-mono text-[10px] font-semibold uppercase text-muted-foreground">
+              Runtime
             </div>
-            <div className="mt-1 truncate text-sm font-semibold text-foreground">
-              Local / Preview / Production
+            <div className="mt-1 truncate text-[13px] font-semibold text-foreground">
+              Preview workspace
             </div>
           </div>
-          <StatusPill tone="good">Healthy</StatusPill>
+          <StatusPill tone="info">Seeded</StatusPill>
         </div>
         <div className="mt-3 grid gap-2 text-xs text-muted-foreground">
           <div className="flex items-center justify-between gap-2">
-            <span>System status</span>
-            <span className="font-mono text-[var(--accent-text)]">Healthy / Degraded</span>
+            <span>Outbound writes</span>
+            <span className="font-mono text-[var(--accent-text)]">Approval-gated</span>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <span>Operator role</span>
-            <span>Supervisor</span>
+            <span>Provider calls</span>
+            <span>Server-side</span>
           </div>
         </div>
       </div>
@@ -255,8 +349,8 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
   const meta = useMemo(
     () =>
       routeMeta.find((item) => pathname.startsWith(item.match)) ?? {
-        title: "Overview",
-        description: "SagadOS operator console for supervised AI customer operations.",
+        title: "Command Center",
+        description: "Live supervision surface for AI work, approval load, agent health, and missing knowledge.",
       },
     [pathname],
   );
@@ -269,17 +363,17 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
       )}
       data-theme={theme}
     >
-      <div className="grid min-h-screen lg:grid-cols-[260px_minmax(0,1fr)]">
+      <div className="grid min-h-screen lg:grid-cols-[248px_minmax(0,1fr)]">
         <aside className="hidden min-h-screen border-r border-border bg-card lg:flex lg:flex-col">
-          <div className="flex min-h-16 items-center gap-3 border-b border-border px-5">
-            <LogoPlaceholder />
+          <div className="flex min-h-14 items-center gap-3 border-b border-border px-4">
+            <SagadLogo markOnly theme={theme} />
             <div className="min-w-0">
-              <div className="text-[15px] font-bold tracking-tight">SagadOS</div>
-              <div className="text-[11px] text-muted-foreground">AI customer ops</div>
+              <div className="text-[15px] font-bold">SagadOS</div>
+              <div className="font-mono text-[10px] uppercase text-muted-foreground">Open-source AI Ops</div>
             </div>
             <div className="ml-auto flex items-center gap-1.5 font-mono text-[10px] uppercase text-muted-foreground">
               <span className="size-1.5 rounded-full bg-[var(--accent)] shadow-[0_0_0_3px_rgba(0,212,170,0.14)]" />
-              local
+              gated
             </div>
           </div>
           <SidebarNav pathname={pathname} />
@@ -288,7 +382,7 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
 
         <div className="flex min-h-screen min-w-0 flex-col">
           <header className="sticky top-0 z-30 border-b border-border bg-card/95 backdrop-blur">
-            <div className="flex min-h-16 items-center gap-3 px-4 lg:px-6">
+            <div className="flex min-h-14 items-center gap-3 px-4 lg:px-5">
               <Sheet>
                 <SheetTrigger asChild>
                   <Button className="lg:hidden" size="icon" variant="outline">
@@ -299,7 +393,7 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
                 <SheetContent className="w-72 border-border bg-card p-0" side="left">
                   <SheetHeader className="border-b border-border px-4 py-4 text-left">
                     <SheetTitle className="flex items-center gap-3">
-                      <LogoPlaceholder />
+                      <SagadLogo markOnly theme={theme} />
                       SagadOS
                     </SheetTitle>
                   </SheetHeader>
@@ -309,28 +403,12 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
               </Sheet>
 
               <div className="min-w-0 flex-1">
-                <h1 className="truncate text-xl font-bold tracking-tight lg:text-2xl">
+                <h1 className="truncate text-lg font-bold lg:text-xl">
                   {meta.title}
                 </h1>
                 <p className="mt-0.5 hidden truncate text-xs text-muted-foreground md:block">
                   {meta.description}
                 </p>
-              </div>
-
-              <div className="hidden min-w-64 max-w-sm flex-1 xl:block">
-                <div className="relative">
-                  <Search
-                    aria-hidden="true"
-                    className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-                    size={15}
-                  />
-                  <Input
-                    aria-label="Search console preview"
-                    className="h-9 bg-muted pl-8"
-                    placeholder="Search conversations, customers, logs"
-                    readOnly
-                  />
-                </div>
               </div>
 
               <div className="hidden items-center gap-2 lg:flex">
@@ -424,7 +502,7 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
               </div>
             </div>
           </header>
-          <main className="min-w-0 flex-1 overflow-y-auto p-4 lg:p-6">
+          <main className="min-w-0 flex-1 overflow-y-auto p-3 lg:p-4">
             {children}
           </main>
         </div>
