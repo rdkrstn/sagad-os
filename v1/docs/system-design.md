@@ -6,7 +6,7 @@ Sagad OS is an open-source, self-hostable AI-native BPO platform. The `v1/` cons
 
 Sagad OS does not replace every tool. It coordinates Chatwoot, Twenty CRM, LangSmith, generic webhooks, future MCP servers, and client internal systems through Agent Studio adapter boundaries.
 
-The console direction follows the SagadOS Premium Open Ops design system: open-source infrastructure, self-hosted ownership, visible structure, modular panels, status rows, clear borders, and restrained navy/teal accents. It should feel calm and inspectable for operators while staying technical enough for admins and builders.
+The console direction follows the SagadOS High-Contrast Infra OS design system: black/white identity, warm paper light mode, graphite dark mode, clear borders, compact operator density, and green only as a system-active signal. It should feel inspectable and technical without becoming a generic SaaS dashboard.
 
 ## System Boundary
 
@@ -184,4 +184,4 @@ npm run lint
 npm run build
 ```
 
-When the route is changed, inspect the rendered app in a browser and verify that it still reads as Premium Open Ops infrastructure: calm, transparent, modular, and operator/admin focused rather than a landing page or generic AI product.
+When the route is changed, inspect the rendered app in a browser and verify that it still reads as SagadOS High-Contrast Infra OS infrastructure: compact, transparent, operator/admin focused, and explicit about preview versus connected capabilities.

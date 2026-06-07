@@ -2,94 +2,66 @@ import { Activity, PlugZap, ServerCog, ShieldCheck } from "lucide-react";
 import { MetricCard, Panel, SourcePill, StatusPill } from "@/components/product/product-ui";
 import { asArray, asRecord, textOf } from "@/components/ui/data-access";
 
-const plannedIntegrations = [
-  {
-    name: "LiteLLM",
-    kind: "Model gateway",
-    status: "Ready",
-    owner: "Agent Studio",
-    detail: "Provider routing and credentials remain server-side.",
-  },
-  {
-    name: "LangSmith",
-    kind: "Observability",
-    status: "Optional",
-    owner: "Agent Studio",
-    detail: "Graph, tool, approval, and failure traces when env vars are configured.",
-  },
-  {
-    name: "Uptime Kuma",
-    kind: "Monitoring",
-    status: "Planned",
-    owner: "Infrastructure",
-    detail: "External uptime dashboard placeholder for self-hosted deployments.",
-  },
-  {
-    name: "MCP / FastMCP",
-    kind: "Future tool facade",
-    status: "Planned",
-    owner: "Agent Studio",
-    detail: "Future provider-neutral tool layer behind approval and audit policy.",
-  },
-];
-
 export function IntegrationsHealthConsole({ connections }: { connections: unknown }) {
-  const liveRows = asArray(connections).map(asRecord);
-  const rows = [
-    ...liveRows.map((row) => ({
-      name: textOf(row, ["name", "provider"], "Integration"),
-      kind: textOf(row, ["kind"], "Adapter"),
-      status: textOf(row, ["status"], "Unconfigured"),
-      owner: "Agent Studio",
-      detail: textOf(row, ["detail"], "Configured through server-side Agent Studio adapter."),
-    })),
-    ...plannedIntegrations,
-  ];
+  const rows = asArray(connections).map(asRecord);
   const connected = rows.filter((row) =>
-    ["ready", "healthy", "optional"].some((status) =>
-      row.status.toLowerCase().includes(status),
+    ["connected", "ready", "healthy"].some((status) =>
+      textOf(row, ["visibilityStatus", "status"], "").toLowerCase().includes(status),
     ),
+  ).length;
+  const planned = rows.filter((row) =>
+    textOf(row, ["visibilityStatus", "status"], "").toLowerCase().includes("planned"),
   ).length;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <section className="grid gap-3 md:grid-cols-4">
-        <MetricCard detail="Operator-facing adapter rows" icon={PlugZap} label="Integrations" value={rows.length} />
-        <MetricCard detail="Ready or optional services" icon={Activity} label="Ready" value={connected} />
+        <MetricCard detail="Channels, CRMs, knowledge, observability" icon={PlugZap} label="Adapters" value={rows.length} />
+        <MetricCard detail="Confirmed ready/connected" icon={Activity} label="Connected" value={connected} />
         <MetricCard detail="Server-side credentials only" icon={ShieldCheck} label="Browser secrets" value="0" />
-        <MetricCard detail="Planned platform services" icon={ServerCog} label="Roadmap" value={plannedIntegrations.length} />
+        <MetricCard detail="Roadmap-visible, not faked" icon={ServerCog} label="Planned" value={planned} />
       </section>
 
-      <Panel action={<StatusPill tone="info">Health only</StatusPill>} title="Integrations Health" eyebrow="Operator view">
+      <Panel action={<StatusPill tone="info">Health only</StatusPill>} title="Adapters Health" eyebrow="Provider boundary">
         <div className="divide-y divide-border">
           {rows.map((row) => (
             <div
-              className="grid gap-4 px-4 py-4 xl:grid-cols-[minmax(0,1fr)_220px_180px]"
-              key={`${row.name}-${row.kind}`}
+              className="grid gap-3 px-3 py-3 xl:grid-cols-[minmax(0,1fr)_180px_180px_180px]"
+              key={`${textOf(row, ["name", "provider"], "adapter")}-${textOf(row, ["kind", "entityKind"], "")}`}
             >
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="font-semibold text-foreground">{row.name}</div>
-                  <SourcePill>{row.kind}</SourcePill>
-                  <StatusPill status={row.status}>{row.status}</StatusPill>
+                  <div className="font-semibold text-foreground">
+                    {textOf(row, ["name", "provider"], "Adapter")}
+                  </div>
+                  <SourcePill>{textOf(row, ["kind", "entityKind"], "Adapter")}</SourcePill>
+                  <StatusPill status={textOf(row, ["visibilityStatus", "status"], "Preview")}>
+                    {textOf(row, ["visibilityStatus", "status"], "Preview")}
+                  </StatusPill>
                 </div>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">{row.detail}</p>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  {textOf(row, ["detail"], "Configured through server-side Agent Studio adapter.")}
+                </p>
               </div>
-              <div className="rounded-lg border border-border bg-surface-2 p-3 text-xs text-muted-foreground">
-                <div className="text-[11px] uppercase tracking-[0.08em]">Owner</div>
-                <div className="mt-1 font-semibold text-foreground">{row.owner}</div>
+              <div className="border border-border bg-surface-2 p-3 text-xs text-muted-foreground">
+                <div className="font-mono text-[10px] uppercase">Mode</div>
+                <div className="mt-1 font-semibold text-foreground">{textOf(row, ["mode", "api_mode"], "Preview")}</div>
               </div>
-              <div className="rounded-lg border border-border bg-surface-2 p-3 text-xs text-muted-foreground">
-                <div className="text-[11px] uppercase tracking-[0.08em]">Boundary</div>
-                <div className="mt-1 font-semibold text-foreground">Server-side</div>
+              <div className="border border-border bg-surface-2 p-3 text-xs text-muted-foreground">
+                <div className="font-mono text-[10px] uppercase">Access</div>
+                <div className="mt-1 font-semibold text-foreground">{textOf(row, ["access"], "Approval-gated")}</div>
+              </div>
+              <div className="border border-border bg-surface-2 p-3 text-xs text-muted-foreground">
+                <div className="font-mono text-[10px] uppercase">Boundary</div>
+                <div className="mt-1 font-semibold text-foreground">{textOf(row, ["boundary"], "Server-side")}</div>
               </div>
             </div>
           ))}
         </div>
       </Panel>
 
-      <div className="rounded-lg border border-border bg-card p-4 text-sm leading-6 text-muted-foreground">
-        Credential setup, webhook samples, DTO contracts, raw JSON, and provider diagnostics belong under Settings Advanced or the legacy admin setup surface, not this operator health screen.
+      <div className="border border-border bg-card p-3 text-sm leading-6 text-muted-foreground">
+        No browser-direct provider calls: credentials, Chatwoot sends, Twenty reads/writes, LangSmith, model gateway, and future MCP access stay behind Sagad APIs or Agent Studio.
       </div>
     </div>
   );

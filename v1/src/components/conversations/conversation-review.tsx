@@ -57,6 +57,27 @@ function selectedAgent(row: LooseRecord) {
     : "Support Agent";
 }
 
+function selectedSkill(row: LooseRecord) {
+  const driver = textOf(row, ["driver", "intent", "reason"], "").toLowerCase();
+  if (driver.includes("refund") || driver.includes("return")) return "Refund Resolver";
+  if (driver.includes("sales") || driver.includes("sizing") || driver.includes("pricing")) {
+    return "Sales Sizing Assistant";
+  }
+  if (driver.includes("angry") || driver.includes("escal")) return "Angry Customer De-escalation";
+  if (driver.includes("account")) return "Account Verification";
+  return "Order Status Lookup";
+}
+
+function graphVersion(row: LooseRecord) {
+  return textOf(row, ["graph", "graphVersion"], "Default Support Graph v0.1.4");
+}
+
+function riskLevel(row: LooseRecord) {
+  const priority = textOf(row, ["priority", "risk", "riskLevel"], "Medium");
+  if (priority.toLowerCase().includes("urgent")) return "High";
+  return priority;
+}
+
 function workflowState(row: LooseRecord) {
   const status = textOf(row, ["queueStatus", "hitlStatus", "status"], "Pending approval");
   const sendStatus = textOf(row, ["sendStatus"], "").toLowerCase();
@@ -113,9 +134,25 @@ export function ConversationReview({
     "tool_results",
     "deliveryResults",
   ]).map(asRecord);
+  const policyChecks = nestedArray(primary, [
+    "policyChecks",
+    "qaFindings",
+    "qa_findings",
+  ]).map(asRecord);
   const confidence = confidenceNumber(primary);
   const currentWorkflowState =
     stateByConversation[primaryId] ?? workflowState(primary);
+  const currentAgent = selectedAgent(primary);
+  const currentSkill = selectedSkill(primary);
+  const currentGraph = graphVersion(primary);
+  const currentDriver = textOf(primary, ["driver", "intent", "reason"], "Unknown driver");
+  const currentRisk = riskLevel(primary);
+  const traceId = textOf(primary, ["traceId", "langSmithTraceId"], primaryId ? `preview-${primaryId}` : "Preview trace");
+  const mcpServersUsed = toolResults.some((result) =>
+    textOf(result, ["toolName", "tool_name", "name"], "").toLowerCase().includes("mcp"),
+  )
+    ? ["MCP tool layer"]
+    : [];
 
   function setDraftReply(value: string): void {
     if (!primaryId) return;
@@ -272,7 +309,7 @@ export function ConversationReview({
         </div>
       </Panel>
 
-      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-4">
           <Panel
             action={
@@ -290,7 +327,7 @@ export function ConversationReview({
             <div className="grid gap-3 border-b border-border bg-muted/40 p-4 sm:grid-cols-3">
               <div>
                 <div className="text-xs text-muted-foreground">Selected agent</div>
-                <div className="mt-1 font-semibold text-foreground">{selectedAgent(primary)}</div>
+                <div className="mt-1 font-semibold text-foreground">{currentAgent}</div>
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">Approval state</div>
@@ -367,6 +404,12 @@ export function ConversationReview({
                     "Missing knowledge topic flagged for Knowledge review in this review session.",
                   )
                 }
+                onTakeOver={() =>
+                  recordLocalWorkflowAction(
+                    "Human takeover",
+                    "Supervisor took ownership of the conversation in this review session.",
+                  )
+                }
                 onReject={() => void submitDecision(false)}
               />
               {actionMessage ? (
@@ -379,6 +422,36 @@ export function ConversationReview({
         </div>
 
         <div className="space-y-4">
+          <Panel
+            action={<StatusPill status={currentRisk}>{currentRisk}</StatusPill>}
+            title="AI Run"
+            eyebrow="Driver -> Agent -> Skill -> Graph"
+          >
+            <div className="grid gap-3 p-3 text-sm">
+              {[
+                ["Driver", currentDriver],
+                ["Agent", currentAgent],
+                ["Skill", currentSkill],
+                ["Graph", currentGraph],
+                ["Trust", `${confidence}%`],
+                ["Trace", traceId],
+              ].map(([label, value]) => (
+                <div
+                  className="grid grid-cols-[84px_minmax(0,1fr)] gap-3 border-b border-border pb-2 last:border-b-0 last:pb-0"
+                  key={label}
+                >
+                  <div className="font-mono text-[10px] uppercase text-muted-foreground">
+                    {label}
+                  </div>
+                  <div className="min-w-0 font-semibold text-foreground">{value}</div>
+                </div>
+              ))}
+              <div className="rounded-sm border border-border bg-surface-2 p-2 text-xs leading-5 text-muted-foreground">
+                Approval required when trust is low, policy is unclear, write/send tools are planned, or a human takeover condition is detected.
+              </div>
+            </div>
+          </Panel>
+
           <Panel
             action={<StatusPill tone="info">{knowledge.length} sources</StatusPill>}
             title="Knowledge Sources"
@@ -406,6 +479,36 @@ export function ConversationReview({
                   </div>
                 </div>
               ))}
+            </div>
+          </Panel>
+
+          <Panel
+            action={<StatusPill tone={policyChecks.length > 0 ? "warning" : "neutral"}>{policyChecks.length} checks</StatusPill>}
+            title="Policy Checks"
+            eyebrow="QA gate"
+          >
+            <div className="divide-y divide-border">
+              {policyChecks.length === 0 ? (
+                <div className="p-3 text-sm leading-6 text-muted-foreground">
+                  No policy findings were returned. Keep approval gating active for risky sends.
+                </div>
+              ) : null}
+              {policyChecks.map((check, index) => {
+                const status = textOf(check, ["status", "rating", "result"], "Needs Review");
+                return (
+                  <div className="p-3" key={textOf(check, ["id", "name"], String(index))}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="font-semibold text-foreground">
+                        {textOf(check, ["name", "label", "criterion"], "Policy check")}
+                      </div>
+                      <StatusPill status={status}>{status}</StatusPill>
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      {textOf(check, ["description", "notes", "detail"], "Policy check recorded for this run.")}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
           </Panel>
 
@@ -468,6 +571,18 @@ export function ConversationReview({
                   </p>
                 </div>
               ))}
+            </div>
+          </Panel>
+
+          <Panel
+            action={<StatusPill tone={mcpServersUsed.length > 0 ? "info" : "neutral"}>{mcpServersUsed.length} used</StatusPill>}
+            title="MCP Capabilities"
+            eyebrow="External servers"
+          >
+            <div className="p-3 text-sm leading-6 text-muted-foreground">
+              {mcpServersUsed.length > 0
+                ? mcpServersUsed.join(", ")
+                : "None used in this run. MCP servers are visible in Agent Studio but disabled unless routed server-side."}
             </div>
           </Panel>
 

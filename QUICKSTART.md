@@ -22,11 +22,11 @@ External systems connect through Agent Studio adapters:
 
 Browser code must not call Chatwoot, Twenty, Uptime Kuma, LangSmith, MCP, or client internal systems directly.
 
-The default preview is seeded with `Northstar Apparel Support` demo data: Chatwoot-style conversations, Twenty-style contacts, approved SOPs, AI drafts, approval states, audit logs, and basic AI Ops metrics.
+The default preview is seeded with `Sagad Demo Operations` data: Chatwoot-style conversations, Twenty-style contacts, approved SOPs, AI drafts, approval states, audit logs, and basic AI Ops metrics.
 
-The console direction follows the SagadOS Premium Open Ops design system: calm, modular, inspectable, transparent, and operator-focused. The UI should show routes, states, modules, logs, docs, and configuration without AI-magic framing.
+The console direction follows the SagadOS High-Contrast Infra OS design system: black/white identity, warm paper light mode, graphite dark mode, compact operator density, and green only for active, healthy, connected, ready, selected, or primary action states.
 
-The Integrations page is operator/admin-facing: Owner and Admin users can set up and test Chatwoot/Twenty connections, while Supervisor users can monitor redacted readiness and health. Developer payloads, DTO contracts, and webhook/tool examples belong under `Settings -> Advanced`.
+The Adapters page is operator-facing health visibility. Tools and MCP Servers are separate Agent Studio concepts. Developer payloads, DTO contracts, and webhook/tool examples belong under `Settings -> Advanced`.
 
 ## Prerequisites
 

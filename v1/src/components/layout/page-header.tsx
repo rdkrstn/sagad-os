@@ -8,15 +8,15 @@ export function PageHeader({
   meta?: string;
 }) {
   return (
-    <div className="mb-4 flex flex-col justify-between gap-2 border-b pb-4 lg:flex-row lg:items-end">
+    <div className="mb-3 flex flex-col justify-between gap-2 border-b border-border pb-3 lg:flex-row lg:items-end">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">
+        <h2 className="text-base font-semibold text-foreground">
           {title}
-        </h1>
+        </h2>
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{description}</p>
       </div>
       {meta ? (
-        <div className="text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
+        <div className="font-mono text-[10px] font-medium uppercase text-muted-foreground">
           {meta}
         </div>
       ) : null}

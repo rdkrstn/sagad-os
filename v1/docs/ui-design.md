@@ -69,19 +69,14 @@ Use concise labels:
 
 ### App Shell
 
-The app shell uses a 260px sidebar, compact 64px topbar, replaceable logo placeholder, workspace/environment status, search placeholder, theme toggle, alerts, and user placeholder. Do not import or hardcode the final SagadOS SVG logo unless explicitly requested.
+The app shell uses a compact grouped sidebar, 56px topbar, brand-suite SagadOS mark, workspace/environment status, theme toggle, alerts, and user menu. Logo assets come from `brand-suite`; green variants are reserved for active/system moments.
 
 Top-level navigation:
 
-- `Overview`
-- `Conversations`
-- `Approvals`
-- `Customers`
-- `Knowledge`
-- `Workflows`
-- `Integrations`
-- `Analytics`
-- `Logs`
+- Operations: `Command Center`, `Review Queue`, `Conversations`, `Contact Drivers`, `Reports`
+- Agent Studio: `Agents`, `Skills`, `Graphs`, `Tools`, `MCP Servers`, `Traces`
+- Knowledge & QA: `Knowledge Base`, `Policy & QA`, `Evaluations`
+- Platform: `Adapters`, `Settings`
 - `Settings`
 
 ### Metrics Row

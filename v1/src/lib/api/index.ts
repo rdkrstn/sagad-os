@@ -1590,9 +1590,9 @@ function attentionSummary(conversations: ConversationView[]): ViewRecord[] {
       count: rows.length,
       total: rows.length,
       items: rows.length,
-      owner: "Northstar AI Ops Pod",
-      team: "Northstar AI Ops Pod",
-      pod: "Northstar AI Ops Pod",
+      owner: "Sagad AI Ops Pod",
+      team: "Sagad AI Ops Pod",
+      pod: "Sagad AI Ops Pod",
       severity:
         group === "Failed tool/send" || group === "Escalated"
           ? "High risk"
@@ -2074,6 +2074,332 @@ export async function getSopRefs(): Promise<SopView[]> {
 
 export async function getMcpTools(): Promise<ToolView[]> {
   return clone([...previewToolViews(), ...mockMcpTools.map(toToolView)]);
+}
+
+export async function getSkills(): Promise<ViewRecord[]> {
+  return clone([
+    {
+      id: "skill-refund-resolver",
+      name: "Refund Resolver",
+      description: "Checks order context, refund SOP, sale-item exceptions, and drafts a supervisor-safe response.",
+      status: "Active",
+      version: "v3",
+      agents: ["Support Agent"],
+      drivers: ["Refund policy", "Return request"],
+      knowledgeDomains: ["Refund SOP", "Sales Policy", "Exception Rules"],
+      allowedTools: ["crm.lookup_contact", "knowledge.search", "chatwoot.draft_reply"],
+      approvalRules: ["Sale item", "Refund over threshold", "Policy confidence below 80%", "Angry customer"],
+      testCases: 8,
+    },
+    {
+      id: "skill-order-status",
+      name: "Order Status Lookup",
+      description: "Finds order status, carrier context, and drafts informational replies without promising compensation.",
+      status: "Active",
+      version: "v1",
+      agents: ["Support Agent"],
+      drivers: ["Order status", "Delivery issue"],
+      knowledgeDomains: ["Shipping FAQ", "Carrier Escalation"],
+      allowedTools: ["crm.lookup_contact", "knowledge.search", "chatwoot.draft_reply"],
+      approvalRules: ["Failed carrier lookup", "Compensation request"],
+      testCases: 5,
+    },
+    {
+      id: "skill-sales-sizing",
+      name: "Sales Sizing Assistant",
+      description: "Uses product guidance and CRM history to answer fit, exchange, and purchase-readiness questions.",
+      status: "Active",
+      version: "v2",
+      agents: ["Sales Agent"],
+      drivers: ["Sales sizing questions", "Pricing question"],
+      knowledgeDomains: ["Product Sizing", "Exchange Policy"],
+      allowedTools: ["knowledge.search", "crm.lookup_contact", "chatwoot.draft_reply"],
+      approvalRules: ["Discount request", "Policy exception"],
+      testCases: 6,
+    },
+    {
+      id: "skill-angry-customer",
+      name: "Angry Customer De-escalation",
+      description: "Acknowledges frustration, avoids promises, and routes high-risk compensation requests to a supervisor.",
+      status: "Draft",
+      version: "v0.4",
+      agents: ["Escalation Agent", "Support Agent"],
+      drivers: ["Angry customer escalation"],
+      knowledgeDomains: ["Escalation Rules", "Brand Tone Safety"],
+      allowedTools: ["knowledge.search", "chatwoot.draft_reply"],
+      approvalRules: ["Always approval-gated"],
+      testCases: 4,
+    },
+    {
+      id: "skill-account-verification",
+      name: "Account Verification",
+      description: "Verifies account metadata and asks for missing non-sensitive details before agent action.",
+      status: "Planned",
+      version: "v0.1",
+      agents: ["Support Agent"],
+      drivers: ["Account verification"],
+      knowledgeDomains: ["Account SOP", "PII Redaction"],
+      allowedTools: ["crm.lookup_contact"],
+      approvalRules: ["PII ambiguity", "Account mismatch"],
+      testCases: 2,
+    },
+  ]);
+}
+
+export async function getGraphs(): Promise<ViewRecord[]> {
+  return clone([
+    {
+      id: "graph-support-default",
+      name: "Default Support Graph",
+      description: "Routes inbound service work through context, tools, policy, HITL, send, audit, and trace.",
+      status: "Active",
+      version: "v0.1.4",
+      trigger: "inbound.customer_message",
+      nodes: [
+        "Classify",
+        "CRM Lookup",
+        "Knowledge Retrieval",
+        "Agent + Skill Selection",
+        "Draft",
+        "QA Gate",
+        "HITL Approval",
+        "Send",
+        "Audit",
+      ],
+      hitlPausePoints: ["QA Gate", "HITL Approval", "Failed Tool"],
+      allowedAgents: ["Support Agent", "Sales Agent", "Escalation Agent"],
+      allowedTools: ["crm.lookup_contact", "knowledge.search", "chatwoot.draft_reply", "chatwoot.send_message"],
+      retryPolicy: "Retry read tools once, then route to supervisor.",
+      fallbackPath: "Escalate to human takeover with audit event.",
+    },
+    {
+      id: "graph-sales-default",
+      name: "Sales Qualification Graph",
+      description: "Qualifies buying intent, retrieves sizing context, drafts next question, and gates discounts.",
+      status: "Draft",
+      version: "v0.2.0",
+      trigger: "driver.sales_sizing",
+      nodes: ["Classify", "CRM Lookup", "Sizing Retrieval", "Sales Agent", "Draft", "Policy Gate", "Audit"],
+      hitlPausePoints: ["Discount Request", "Policy Gate"],
+      allowedAgents: ["Sales Agent"],
+      allowedTools: ["crm.lookup_contact", "knowledge.search", "chatwoot.draft_reply"],
+      retryPolicy: "No write retries in preview.",
+      fallbackPath: "Ask clarifying question.",
+    },
+  ]);
+}
+
+export async function getMcpServers(): Promise<ViewRecord[]> {
+  return clone([
+    {
+      id: "mcp-google-drive",
+      name: "Google Drive MCP",
+      transport: "planned",
+      status: "Planned",
+      authMode: "oauth",
+      trustLevel: "Internal",
+      toolsCount: 2,
+      resourcesCount: 2,
+      promptsCount: 0,
+      allowedAgents: ["Support Agent", "QA Agent"],
+      allowedSkills: ["Refund Resolver", "Order Status Lookup"],
+      detail: "Roadmap visibility only. File search must stay behind Agent Studio.",
+      tools: ["search_files", "get_file"],
+      resources: ["files", "folders"],
+    },
+    {
+      id: "mcp-notion",
+      name: "Notion MCP",
+      transport: "planned",
+      status: "Testing",
+      authMode: "api-key",
+      trustLevel: "Sandbox",
+      toolsCount: 2,
+      resourcesCount: 2,
+      promptsCount: 1,
+      allowedAgents: ["QA Agent"],
+      allowedSkills: ["Policy Review"],
+      detail: "Sandbox only. Prompts are importable templates, not automatically active production prompts.",
+      tools: ["query_database", "retrieve_page"],
+      resources: ["pages", "databases"],
+    },
+    {
+      id: "mcp-internal-crm",
+      name: "Internal CRM MCP",
+      transport: "planned",
+      status: "Planned",
+      authMode: "service-account",
+      trustLevel: "Production",
+      toolsCount: 0,
+      resourcesCount: 0,
+      promptsCount: 0,
+      allowedAgents: ["Support Agent"],
+      allowedSkills: ["Account Verification"],
+      detail: "Not connected in public preview. Use native Agent Studio CRM adapters today.",
+      tools: [],
+      resources: [],
+    },
+  ]);
+}
+
+export async function getAgentRunTraces(): Promise<ViewRecord[]> {
+  const conversations = await getConversations();
+
+  return clone(
+    conversations.map((conversation, index) => ({
+      id: `run-${String(conversation.id)}`,
+      conversationId: conversation.id,
+      customerName: conversation.customerName,
+      agent: conversation.assignedTo ?? "Support Agent",
+      skill: String(conversation.driver ?? "").toLowerCase().includes("refund")
+        ? "Refund Resolver"
+        : String(conversation.driver ?? "").toLowerCase().includes("sales")
+          ? "Sales Sizing Assistant"
+          : "Order Status Lookup",
+      graph: "Default Support Graph v0.1.4",
+      driver: conversation.driver,
+      status: conversation.queueStatus ?? "Needs Approval",
+      trust: conversation.confidence ?? conversation.aiConfidence ?? "72%",
+      risk: conversation.priority ?? "Medium",
+      langSmithTraceId: conversation.traceUrl ? `ls-${String(conversation.id).slice(-8)}` : "Preview trace",
+      traceUrl: conversation.traceUrl ?? "",
+      latency: `${(6.8 + index * 0.7).toFixed(1)}s`,
+      tokens: 1800 + index * 230,
+      estimatedCost: `$${(0.04 + index * 0.01).toFixed(2)}`,
+      toolsCalled: ["crm.lookup_contact", "knowledge.search", "chatwoot.draft_reply"],
+      mcpServersUsed: index % 2 === 0 ? [] : ["Google Drive MCP"],
+      errorSummary: String(conversation.queueStatus ?? "").toLowerCase().includes("failed")
+        ? "Provider delivery failed after approval."
+        : "",
+      startedAt: conversation.openedAt,
+    })),
+  );
+}
+
+export async function getEvaluations(): Promise<ViewRecord[]> {
+  const conversations = await getConversations();
+
+  return clone([
+    {
+      id: "eval-policy-gates",
+      name: "Policy Gate Coverage",
+      status: "Needs Review",
+      score: "82%",
+      sampleSize: conversations.length,
+      focus: "Approval rules, risk gates, and unclear SOP handling.",
+      failures: conversations.filter((row) =>
+        String(row.queueStatus).toLowerCase().includes("approval"),
+      ).length,
+      recommendation: "Add sale-item refund exception tests and require QA approval before auto-send.",
+    },
+    {
+      id: "eval-tool-reliability",
+      name: "Tool Reliability",
+      status: "Preview",
+      score: "91%",
+      sampleSize: conversations.length,
+      focus: "CRM lookup, knowledge retrieval, and provider delivery results.",
+      failures: conversations.filter((row) =>
+        String(row.queueStatus).toLowerCase().includes("failed"),
+      ).length,
+      recommendation: "Keep write/send tools approval-gated and retry read tools once before escalation.",
+    },
+    {
+      id: "eval-tone-safety",
+      name: "Brand Tone Safety",
+      status: "Healthy",
+      score: "94%",
+      sampleSize: conversations.length,
+      focus: "Empathy, no over-promising, no policy hallucination.",
+      failures: 0,
+      recommendation: "Maintain supervisor review for angry-customer escalation skill.",
+    },
+  ]);
+}
+
+export async function getIntegrationHealth(): Promise<ViewRecord[]> {
+  const connections = await getIntegrationConnections();
+  const connectionRows = connections.map((row) => ({
+    ...row,
+    entityKind: "adapter",
+    visibilityStatus: String(row.status ?? "").toLowerCase().includes("ready")
+      ? "Connected"
+      : "Preview",
+    access: String(row.api_mode ?? "").toLowerCase().includes("read")
+      ? "Read-only"
+      : "Approval-gated",
+    source: "Agent Studio proxy",
+    boundary: "Server-side",
+  }));
+
+  return clone([
+    ...connectionRows,
+    {
+      id: "health-markdown-knowledge",
+      name: "Markdown Knowledge Packs",
+      entityKind: "knowledge_source",
+      kind: "Knowledge",
+      status: "Preview",
+      visibilityStatus: "Preview",
+      mode: "Local ingestion",
+      access: "Read-only retrieval",
+      source: "Agent Studio",
+      boundary: "Server-side",
+      detail: "Approved knowledge is retrievable by agents; writes require Knowledge review.",
+    },
+    {
+      id: "health-langsmith",
+      name: "LangSmith",
+      entityKind: "service",
+      kind: "Observability",
+      status: "Missing env",
+      visibilityStatus: "Missing env",
+      mode: "Optional",
+      access: "Trace metadata",
+      source: "Agent Studio",
+      boundary: "Server-side",
+      detail: "Trace links appear when LangSmith environment variables are configured.",
+    },
+    {
+      id: "health-litellm",
+      name: "LiteLLM",
+      entityKind: "service",
+      kind: "Model gateway",
+      status: agentStudioBaseUrl() ? "Preview" : "Missing env",
+      visibilityStatus: agentStudioBaseUrl() ? "Preview" : "Missing env",
+      mode: "Server-side model routing",
+      access: "No browser credentials",
+      source: "Agent Studio",
+      boundary: "Server-side",
+      detail: "Provider routing and credentials remain outside the browser.",
+    },
+    {
+      id: "health-generic-webhooks",
+      name: "Generic Webhooks",
+      entityKind: "adapter",
+      kind: "Workflow",
+      status: "Planned",
+      visibilityStatus: "Planned",
+      mode: "Approval-gated writes",
+      access: "Disabled in preview",
+      source: "Roadmap",
+      boundary: "Server-side",
+      detail: "Future provider-neutral webhook handoff governed by Agent Studio.",
+    },
+    {
+      id: "health-mcp-fastmcp",
+      name: "MCP / FastMCP",
+      entityKind: "mcp_server",
+      kind: "Capability server",
+      status: "Planned",
+      visibilityStatus: "Planned",
+      mode: "External tool/resource provider",
+      access: "Disabled in preview",
+      source: "Roadmap",
+      boundary: "Server-side",
+      detail: "MCP servers are shown for roadmap visibility and are not called from browser code.",
+    },
+  ]);
 }
 
 // TODO: Replace with real fetch from Agent Studio once API is available, and remove mockMcpTools from the tool connections list.

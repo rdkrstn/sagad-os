@@ -27,10 +27,10 @@ export function DataTable<T>({
 }) {
   return (
     <>
-      <div className="divide-y md:hidden">
+      <div className="divide-y divide-border md:hidden">
         {rows.length > 0 ? (
           rows.map((row, rowIndex) => (
-            <div className="grid gap-3 p-3" key={rowIndex}>
+            <div className="grid gap-3 bg-card p-3" key={rowIndex}>
               {columns.map((column) => (
                 <div className="min-w-0" key={column.key}>
                   {column.label ? (
@@ -40,7 +40,7 @@ export function DataTable<T>({
                   ) : null}
                   <div
                     className={cn(
-                      "min-w-0 break-words text-xs text-muted-foreground",
+                      "min-w-0 break-words text-xs text-foreground",
                       column.className,
                     )}
                   >
@@ -60,11 +60,11 @@ export function DataTable<T>({
       <div className="hidden overflow-x-auto md:block">
       <Table className="min-w-full text-xs">
         <TableHeader>
-          <TableRow className="bg-muted/50 text-[11px] uppercase tracking-[0.06em]">
+          <TableRow className="sticky top-0 z-10 bg-surface-2 font-mono text-[10px] uppercase">
             {columns.map((column) => (
               <TableHead
                 className={cn(
-                  "h-8 whitespace-nowrap px-3 text-[11px] font-semibold",
+                  "h-8 whitespace-nowrap border-b border-border px-3 text-[10px] font-semibold text-muted-foreground",
                   column.className,
                 )}
                 key={column.key}
@@ -78,11 +78,11 @@ export function DataTable<T>({
         <TableBody>
           {rows.length > 0 ? (
             rows.map((row, rowIndex) => (
-              <TableRow className="align-top" key={rowIndex}>
+              <TableRow className="align-top transition-colors hover:bg-muted/45" key={rowIndex}>
                 {columns.map((column) => (
                   <TableCell
                     className={cn(
-                      "max-w-[22rem] whitespace-normal break-words px-3 py-2.5 text-muted-foreground",
+                      "max-w-[22rem] whitespace-normal break-words border-b border-border px-3 py-2.5 text-foreground first:font-semibold",
                       column.className,
                     )}
                     key={column.key}
