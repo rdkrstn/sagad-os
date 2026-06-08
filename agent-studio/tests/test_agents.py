@@ -2,7 +2,7 @@ import os
 import pytest
 from unittest.mock import patch, MagicMock
 from agent_studio.agents import AgentRegistry, AgentConfig
-from agent_studio.graph import draft_reply
+from agent_studio.graph import draft_reply, select_markdown_agent
 from agent_studio.state import AgentStudioState
 
 def test_agent_registry_parsing(tmp_path):
@@ -54,3 +54,31 @@ def test_draft_reply_with_litellm(mock_completion):
     tools = kwargs["tools"]
     assert tools is not None
     assert tools[0]["function"]["name"] == "crm.lookup_contact"
+
+
+def test_refund_intent_selects_refund_resolver_agent():
+    state: AgentStudioState = {
+        "incoming_message": "I need a refund.",
+        "normalized_message": "I need a refund.",
+        "intent": "refund_or_cancellation",
+        "risk_level": "high",
+    }
+
+    result = select_markdown_agent(state)
+
+    assert result["selected_agent"] == "refund_resolver"
+    assert result["customer_driver"] == "refund or cancellation"
+
+
+def test_pricing_intent_selects_sales_agent():
+    state: AgentStudioState = {
+        "incoming_message": "I already said pricing.",
+        "normalized_message": "I already said pricing.",
+        "intent": "pricing_lead",
+        "risk_level": "low",
+    }
+
+    result = select_markdown_agent(state)
+
+    assert result["selected_agent"] == "sales_agent"
+    assert result["customer_driver"] == "pricing or quote"
