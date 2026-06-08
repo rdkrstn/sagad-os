@@ -47,6 +47,19 @@ interface AgentStudioKnowledgeHit {
   excerpt: string;
 }
 
+interface AgentStudioMemoryHit {
+  id: string;
+  memory_type: string;
+  content: string;
+  source: string;
+  score: number;
+  conversation_id: string | null;
+  chatwoot_conversation_id: string | null;
+  source_message_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 interface AgentStudioQaFinding {
   label: string;
   status: "pass" | "watch" | "fail";
@@ -122,6 +135,8 @@ interface AgentStudioConversation {
   normalized_message: string;
   intent: string;
   risk_level: "low" | "medium" | "high";
+  memory_context?: AgentStudioMemoryHit[];
+  memory_diagnostic?: Record<string, unknown>;
   retrieved_knowledge: AgentStudioKnowledgeHit[];
   tool_plans: AgentStudioToolPlan[];
   tool_results: AgentStudioToolResult[];
@@ -826,6 +841,18 @@ function toAgentStudioConversationView(
     score: hit.score,
     excerpt: hit.excerpt,
   }));
+  const memoryContext = (conversation.memory_context ?? []).map((hit) => ({
+    id: hit.id,
+    memoryType: titleCase(hit.memory_type),
+    content: hit.content,
+    source: titleCase(hit.source),
+    score: hit.score,
+    conversationId: hit.conversation_id,
+    chatwootConversationId: hit.chatwoot_conversation_id,
+    sourceMessageId: hit.source_message_id,
+    metadata: hit.metadata,
+    createdAt: hit.created_at,
+  }));
   const qaCompliance = conversation.qa_findings.map((finding) => ({
     label: finding.label,
     status: titleCase(finding.status),
@@ -930,8 +957,10 @@ function toAgentStudioConversationView(
     chatwootFetchStatus: chatwootContext?.fetch_status ?? "not_fetched",
     chatwootFetchError: chatwootContext?.fetch_error ?? "",
     inboxName: chatwootContext?.inbox?.name ?? "Chatwoot inbox",
+    inboxId: chatwootContext?.inbox?.id ?? "",
     inboxChannelType: chatwootContext?.inbox?.channel_type ?? "",
     sourceId: chatwootContext?.source_id ?? "",
+    chatwootStatus: chatwootContext?.status ?? "",
     unreadCount: chatwootContext?.unread_count ?? 0,
     canReply:
       chatwootContext?.can_reply === null || chatwootContext?.can_reply === undefined
@@ -970,6 +999,8 @@ function toAgentStudioConversationView(
     sendStatus: titleCase(conversation.send_status),
     complianceStatus: titleCase(conversation.compliance_status),
     knowledgeContext,
+    memoryContext,
+    memoryDiagnostic: conversation.memory_diagnostic ?? {},
     qaCompliance,
     crmContext: {
       provider: "Twenty CRM",

@@ -557,6 +557,8 @@ def configured_settings(
             {
                 "chatwoot_base_url": chatwoot.base_url or settings.chatwoot_base_url,
                 "chatwoot_account_id": chatwoot.account_id or settings.chatwoot_account_id,
+                "chatwoot_inbox_identifier": chatwoot.inbox_id
+                or settings.chatwoot_inbox_identifier,
                 "chatwoot_api_access_token": chatwoot.api_access_token
                 or settings.chatwoot_api_access_token,
                 "chatwoot_webhook_token": chatwoot.webhook_token or settings.chatwoot_webhook_token,

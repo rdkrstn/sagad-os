@@ -6,6 +6,7 @@ import { useMemo, useState, useTransition } from "react";
 import {
   AlertCircle,
   Bot,
+  Brain,
   CheckCheck,
   Clock3,
   Eye,
@@ -42,7 +43,7 @@ import {
 } from "@/components/ui/data-access";
 import { cn } from "@/lib/utils";
 
-type RailTab = "context" | "knowledge" | "policy" | "audit" | "trace";
+type RailTab = "context" | "memory" | "knowledge" | "policy" | "audit" | "trace";
 type RailTabConfig = {
   id: RailTab;
   label: string;
@@ -253,6 +254,7 @@ export function ConversationReview({
     ...(localTrailByConversation[primaryId] ?? []),
   ];
   const knowledge = nestedArray(primary, ["knowledgeContext", "retrievedKnowledge"]).map(asRecord);
+  const memory = nestedArray(primary, ["memoryContext", "memory_context"]).map(asRecord);
   const toolResults = nestedArray(primary, [
     "toolResults",
     "tool_results",
@@ -272,6 +274,21 @@ export function ConversationReview({
   const currentDriver = textOf(primary, ["driver", "intent", "reason"], "Unknown driver");
   const currentRisk = riskLevel(primary);
   const customerName = textOf(primary, ["customerName", "contact", "name"], "Conversation");
+  const sourceId = textOf(primary, ["sourceId"], "");
+  const inboxId = textOf(primary, ["inboxId"], "");
+  const chatwootStatus = textOf(primary, ["chatwootStatus"], "").toLowerCase();
+  const sendStatus = textOf(primary, ["sendStatus"], "").toLowerCase();
+  const resolveDisabledReason = !hasConversation
+    ? "No conversation selected."
+    : chatwootStatus === "resolved"
+      ? "Conversation is already resolved."
+      : !sourceId
+        ? "Resolve needs a Chatwoot source ID."
+        : !inboxId
+          ? "Resolve needs a Chatwoot inbox identifier."
+          : sendStatus.includes("dry")
+            ? "Resolve is disabled while Chatwoot dry-run is active."
+            : "";
   const traceId = textOf(
     primary,
     ["traceId", "langSmithTraceId"],
@@ -284,6 +301,7 @@ export function ConversationReview({
     : [];
   const railTabs: RailTabConfig[] = [
     { id: "context", label: "Context", icon: Route },
+    { id: "memory", label: "Memory", count: memory.length, icon: Brain },
     { id: "knowledge", label: "Knowledge", count: knowledge.length, icon: FileText },
     { id: "policy", label: "Policy", count: policyChecks.length, icon: ShieldCheck },
     { id: "audit", label: "Audit", count: trail.length, icon: Clock3 },
@@ -375,6 +393,57 @@ export function ConversationReview({
       startTransition(() => router.refresh());
     } catch {
       setActionMessage("Could not reach the approval endpoint.");
+    }
+  }
+
+  async function submitResolve(): Promise<void> {
+    if (!primaryId) {
+      setActionMessage("No conversation selected.");
+      return;
+    }
+    if (resolveDisabledReason) {
+      setActionMessage(resolveDisabledReason);
+      return;
+    }
+
+    setActionMessage("Resolving Chatwoot conversation...");
+
+    try {
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(primaryId)}/resolve`,
+        {
+          method: "POST",
+        },
+      );
+      const payload = (await response.json()) as unknown;
+      const row = asRecord(payload);
+
+      if (!response.ok) {
+        setActionMessage(textOf(row, ["detail"], "Resolve action failed."));
+        return;
+      }
+
+      const context = asRecord(row.chatwoot_context);
+      const resolved = textOf(context, ["status"], "").toLowerCase() === "resolved";
+      const results = nestedArray(row, ["tool_results", "toolResults"]).map(asRecord);
+      const failed = results.some(
+        (result) =>
+          textOf(result, ["tool_name", "toolName"], "") ===
+            "chatwoot.conversations.resolve" &&
+          textOf(result, ["status"], "").toLowerCase().includes("failed"),
+      );
+
+      if (resolved) {
+        setStateByConversation((current) => ({ ...current, [primaryId]: "Resolved" }));
+        setActionMessage("Resolved in Chatwoot.");
+      } else if (failed) {
+        setActionMessage("Resolve failed. Review delivery result.");
+      } else {
+        setActionMessage("Resolve action recorded.");
+      }
+      startTransition(() => router.refresh());
+    } catch {
+      setActionMessage("Could not reach the resolve endpoint.");
     }
   }
 
@@ -686,6 +755,17 @@ export function ConversationReview({
                 <PencilLine aria-hidden="true" />
                 Edit Draft
               </Button>
+              <Button
+                disabled={!hasConversation || isPending || Boolean(resolveDisabledReason)}
+                onClick={() => void submitResolve()}
+                size="sm"
+                title={resolveDisabledReason || "Resolve conversation in Chatwoot"}
+                type="button"
+                variant="outline"
+              >
+                <CheckCheck aria-hidden="true" />
+                Resolve
+              </Button>
             </div>
             <Button
               disabled={!hasConversation || isPending}
@@ -818,6 +898,35 @@ export function ConversationReview({
                   ))}
                 </div>
               </EvidenceCard>
+            </>
+          ) : null}
+
+          {activeRailTab === "memory" ? (
+            <>
+              {memory.length === 0 ? (
+                <EvidenceCard>
+                  <div className="flex items-center gap-2 font-semibold text-foreground">
+                    <Brain aria-hidden="true" className="size-4 text-[var(--accent-text)]" />
+                    No memory context
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    Conversation memory appears after prior messages, approved replies, or resolution state exist.
+                  </p>
+                </EvidenceCard>
+              ) : null}
+              {memory.slice(0, 4).map((item, index) => (
+                <EvidenceCard key={textOf(item, ["id"], String(index))}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 truncate font-semibold text-foreground">
+                      {textOf(item, ["memoryType", "memory_type"], "Memory")}
+                    </div>
+                    <SourcePill>{textOf(item, ["source"], "Thread")}</SourcePill>
+                  </div>
+                  <p className="mt-2 line-clamp-3 text-xs leading-5 text-muted-foreground">
+                    {textOf(item, ["content", "summary", "detail"], "")}
+                  </p>
+                </EvidenceCard>
+              ))}
             </>
           ) : null}
 

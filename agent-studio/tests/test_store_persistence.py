@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from agent_studio.config import Settings
-from agent_studio.schemas import ConversationRecord, ToolPlan, ToolResult
+from agent_studio.schemas import ConversationRecord, MemoryHit, ToolPlan, ToolResult
 from agent_studio.store import (
     InMemoryConversationStore,
     PostgresConversationStore,
@@ -57,6 +57,60 @@ def test_ingestion_migration_defines_sources_jobs_errors_and_rls() -> None:
     assert "ADD COLUMN IF NOT EXISTS source_id" in migration
     assert "ADD COLUMN IF NOT EXISTS last_ingestion_job_id" in migration
     assert "ENABLE ROW LEVEL SECURITY" in migration
+
+
+def test_memory_migration_defines_conversation_memory_items_and_rls() -> None:
+    migration_path = Path(__file__).resolve().parents[1] / "migrations" / "0005_conversation_memory.sql"
+    migration = migration_path.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS conversation_memory_items" in migration
+    assert "memory_type" in migration
+    assert "embedding vector(1536)" in migration
+    assert "conversation_memory_items_org_thread_idx" in migration
+    assert "ENABLE ROW LEVEL SECURITY" in migration
+    assert "conversation_memory_items_org_isolation" in migration
+
+
+def test_in_memory_store_persists_and_ranks_memory_items() -> None:
+    conversation_store = InMemoryConversationStore()
+    conversation = conversation_store.save(
+        ConversationRecord(
+            id="conv-memory",
+            chatwoot_conversation_id="42",
+            incoming_message="hmmm pricing",
+            normalized_message="hmmm pricing",
+            intent="pricing_lead",
+            draft_reply="Which service do you need pricing for?",
+        ),
+    )
+
+    conversation_store.append_memory_items(
+        conversation.id,
+        [
+            MemoryHit(
+                memory_type="unresolved_ask",
+                content="Customer asked about pricing.",
+                source="conversation",
+                score=0.8,
+            ),
+            MemoryHit(
+                memory_type="prior_intent",
+                content="Customer driver: pricing or quote.",
+                source="conversation",
+                score=0.7,
+            ),
+        ],
+    )
+
+    hits = conversation_store.list_memory_items(
+        conversation.id,
+        query="I already said pricing",
+        limit=2,
+    )
+
+    assert len(hits) == 2
+    assert hits[0].score >= hits[1].score
+    assert any("pricing" in hit.content.lower() for hit in hits)
 
 
 @pytest.mark.skipif(

@@ -156,6 +156,46 @@ def test_chatwoot_webhook_threads_same_conversation_messages() -> None:
     assert listed[0]["id"] == first["id"]
 
 
+def test_chatwoot_followup_uses_memory_context_separate_from_knowledge(
+    mock_litellm_completion: object,
+) -> None:
+    client.post(
+        "/webhooks/chatwoot",
+        json={
+            "event": "message_created",
+            "id": 1011,
+            "content": "hmmm pricing",
+            "message_type": "incoming",
+            "conversation": {"id": 101},
+            "sender": {"name": "Memory Customer"},
+        },
+    )
+
+    second_response = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "event": "message_created",
+            "id": 1012,
+            "content": "I already said pricing",
+            "message_type": "incoming",
+            "conversation": {"id": 101},
+            "sender": {"name": "Memory Customer"},
+        },
+    )
+
+    assert second_response.status_code == 200
+    payload = second_response.json()
+    assert payload["memory_context"]
+    assert payload["retrieved_knowledge"]
+    assert payload["memory_diagnostic"]["memory_available"] is True
+    assert any("pricing" in item["content"].lower() for item in payload["memory_context"])
+
+    system_prompt = mock_litellm_completion.call_args.kwargs["messages"][0]["content"]  # type: ignore[attr-defined]
+    assert "Conversation Memory" in system_prompt
+    assert "Selected Source Pack" in system_prompt
+    assert "hmmm pricing" in system_prompt
+
+
 def test_chatwoot_email_webhook_maps_channel_and_keeps_provider() -> None:
     response = client.post(
         "/webhooks/chatwoot",
@@ -552,6 +592,198 @@ def test_approve_send_blocks_when_chatwoot_cannot_reply(
 
     assert response.status_code == 409
     assert "cannot receive replies" in response.json()["detail"]
+
+
+def test_resolve_conversation_blocks_when_chatwoot_dry_run() -> None:
+    client.put(
+        "/integration-configs/chatwoot",
+        headers={"X-Sagad-Role": "owner"},
+        json={
+            "base_url": "https://chat.example.test",
+            "account_id": "1",
+            "inbox_id": "public-inbox",
+            "api_access_token": "secret-token",
+            "enabled": True,
+            "dry_run": True,
+        },
+    )
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "id": 6401,
+            "content": "Thanks, that answers it.",
+            "conversation": {"id": 640, "source_id": "source-640", "status": "open"},
+        },
+    ).json()
+
+    response = client.post(
+        f"/conversations/{created['id']}/resolve",
+        headers={"X-Sagad-Role": "supervisor"},
+    )
+
+    assert response.status_code == 409
+    assert "dry-run" in response.json()["detail"].lower()
+
+
+def test_resolve_conversation_requires_source_id_and_inbox_identifier() -> None:
+    client.put(
+        "/integration-configs/chatwoot",
+        headers={"X-Sagad-Role": "owner"},
+        json={
+            "base_url": "https://chat.example.test",
+            "account_id": "1",
+            "api_access_token": "secret-token",
+            "enabled": True,
+            "dry_run": False,
+        },
+    )
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "id": 6501,
+            "content": "Close this.",
+            "conversation": {"id": 650, "status": "open"},
+        },
+    ).json()
+
+    missing_source = client.post(
+        f"/conversations/{created['id']}/resolve",
+        headers={"X-Sagad-Role": "supervisor"},
+    )
+    assert missing_source.status_code == 409
+    assert "source" in missing_source.json()["detail"].lower()
+
+    with_source = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "id": 6502,
+            "content": "My source is available now.",
+            "conversation": {"id": 651, "source_id": "source-651", "status": "open"},
+        },
+    ).json()
+    missing_inbox = client.post(
+        f"/conversations/{with_source['id']}/resolve",
+        headers={"X-Sagad-Role": "supervisor"},
+    )
+    assert missing_inbox.status_code == 409
+    assert "inbox" in missing_inbox.json()["detail"].lower()
+
+
+def test_resolve_conversation_records_successful_chatwoot_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client.put(
+        "/integration-configs/chatwoot",
+        headers={"X-Sagad-Role": "owner"},
+        json={
+            "base_url": "https://chat.example.test",
+            "account_id": "1",
+            "inbox_id": "public-inbox",
+            "api_access_token": "secret-token",
+            "enabled": True,
+            "dry_run": False,
+        },
+    )
+
+    async def mock_post(
+        self: httpx.AsyncClient,
+        url: str,
+        **kwargs: object,
+    ) -> httpx.Response:
+        assert url == (
+            "https://chat.example.test/public/api/v1/inboxes/public-inbox/"
+            "contacts/source-660/conversations/660/toggle_status"
+        )
+        assert kwargs["headers"] == {"api_access_token": "secret-token"}
+        return httpx.Response(
+            200,
+            json={"id": 660, "status": "resolved"},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "id": 6601,
+            "content": "You can close this now.",
+            "conversation": {"id": 660, "source_id": "source-660", "status": "open"},
+        },
+    ).json()
+
+    response = client.post(
+        f"/conversations/{created['id']}/resolve",
+        headers={"X-Sagad-Role": "supervisor"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["chatwoot_context"]["status"] == "resolved"
+    assert any(
+        result["tool_name"] == "chatwoot.conversations.resolve"
+        and result["status"] == "succeeded"
+        for result in payload["tool_results"]
+    )
+    assert any(
+        item["memory_type"] == "resolution_state"
+        and "resolved" in item["content"].lower()
+        for item in payload["memory_context"]
+    )
+
+
+def test_resolve_conversation_records_failed_chatwoot_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client.put(
+        "/integration-configs/chatwoot",
+        headers={"X-Sagad-Role": "owner"},
+        json={
+            "base_url": "https://chat.example.test",
+            "account_id": "1",
+            "inbox_id": "public-inbox",
+            "api_access_token": "secret-token",
+            "enabled": True,
+            "dry_run": False,
+        },
+    )
+
+    async def mock_post(
+        self: httpx.AsyncClient,
+        url: str,
+        **kwargs: object,
+    ) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={"error": "Not found"},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "id": 6701,
+            "content": "Close this too.",
+            "conversation": {"id": 670, "source_id": "source-670", "status": "open"},
+        },
+    ).json()
+
+    response = client.post(
+        f"/conversations/{created['id']}/resolve",
+        headers={"X-Sagad-Role": "supervisor"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["chatwoot_context"]["status"] == "open"
+    assert any(
+        result["tool_name"] == "chatwoot.conversations.resolve"
+        and result["status"] == "failed"
+        and result["data"]["http_status"] == 404
+        for result in payload["tool_results"]
+    )
 
 
 def test_integration_configs_show_runtime_chatwoot_env(
