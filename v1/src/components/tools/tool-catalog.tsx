@@ -810,14 +810,14 @@ export function ToolCatalog({
                     {meta.provider === "chatwoot" ? (
                       <div className="grid gap-3 sm:grid-cols-3">
                         <div className="space-y-1.5">
-                          <Label htmlFor="chatwoot-inbox-id">Inbox ID</Label>
+                          <Label htmlFor="chatwoot-inbox-id">Inbox identifier</Label>
                           <Input
                             disabled={!canManage}
                             id="chatwoot-inbox-id"
                             onChange={(event: ChangeEvent<HTMLInputElement>) =>
                               updateForm("chatwoot", "inbox_id", event.target.value)
                             }
-                            placeholder="Optional"
+                            placeholder="Required for resolve"
                             value={form.inbox_id}
                           />
                         </div>

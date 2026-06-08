@@ -19,11 +19,13 @@ from agent_studio.db import (
     resolve_trusted_context,
     set_app_context,
 )
+from agent_studio.embeddings import EmbeddingService, content_hash, tokenize, vector_literal
 from agent_studio.schemas import (
     ConversationMessageRecord,
     ConversationRecord,
     CrmContactContext,
     DiagnosticEvent,
+    MemoryHit,
     ToolPlan,
     ToolResult,
 )
@@ -86,6 +88,24 @@ class ConversationStoreProtocol(Protocol):
         event: DiagnosticEvent,
         context: StoreContext | None = None,
     ) -> DiagnosticEvent:
+        ...
+
+    def append_memory_items(
+        self,
+        conversation_id: str,
+        items: list[MemoryHit],
+        context: StoreContext | None = None,
+    ) -> None:
+        ...
+
+    def list_memory_items(
+        self,
+        conversation_id: str,
+        *,
+        query: str | None = None,
+        limit: int = 8,
+        context: StoreContext | None = None,
+    ) -> list[MemoryHit]:
         ...
 
     def list_events(
@@ -190,6 +210,39 @@ def _merge_messages(
     return sorted(merged, key=lambda message: message.created_at)
 
 
+def _memory_overlap_score(query: str | None, content: str) -> float:
+    if not query:
+        return 0.0
+    query_tokens = tokenize(query)
+    content_tokens = tokenize(content)
+    if not query_tokens or not content_tokens:
+        return 0.0
+    overlap = len(query_tokens.intersection(content_tokens))
+    return min(0.4, overlap / max(len(query_tokens), 1))
+
+
+def _memory_sort_key(query: str | None, hit: MemoryHit) -> tuple[float, datetime]:
+    return (hit.score + _memory_overlap_score(query, hit.content), hit.created_at)
+
+
+def _memory_from_row(row: Mapping[str, object]) -> MemoryHit:
+    score_value = row.get("rank_score", row.get("score", 0))
+    return MemoryHit(
+        id=str(row["id"]),
+        memory_type=str(row["memory_type"]),
+        content=str(row["content"]),
+        source=str(row["source"]),
+        score=float(score_value or 0),
+        conversation_id=str(row["conversation_id"]) if row["conversation_id"] else None,
+        chatwoot_conversation_id=str(row["chatwoot_conversation_id"])
+        if row["chatwoot_conversation_id"]
+        else None,
+        source_message_id=str(row["source_message_id"]) if row["source_message_id"] else None,
+        metadata=_json_dict(row.get("metadata")),
+        created_at=_coerce_datetime(row["created_at"]),
+    )
+
+
 def _trusted_context(context: StoreContext | None) -> TrustedContext:
     scoped = context or DEFAULT_CONTEXT
     return TrustedContext(
@@ -221,6 +274,7 @@ class InMemoryConversationStore:
     def __init__(self) -> None:
         self._records: dict[str, ConversationRecord] = {}
         self._events: list[DiagnosticEvent] = []
+        self._memory: dict[str, list[MemoryHit]] = {}
 
     def list(self, context: StoreContext | None = None) -> list[ConversationRecord]:
         return sorted(
@@ -296,6 +350,68 @@ class InMemoryConversationStore:
         self._events.append(event)
         return event
 
+    def append_memory_items(
+        self,
+        conversation_id: str,
+        items: list[MemoryHit],
+        context: StoreContext | None = None,
+    ) -> None:
+        if not items:
+            return
+        record = self._records.get(conversation_id)
+        existing = self._memory.setdefault(conversation_id, [])
+        seen = {
+            (item.memory_type, content_hash(item.content))
+            for item in existing
+        }
+        for item in items:
+            key = (item.memory_type, content_hash(item.content))
+            if key in seen:
+                continue
+            saved = item.model_copy(
+                update={
+                    "conversation_id": conversation_id,
+                    "chatwoot_conversation_id": item.chatwoot_conversation_id
+                    or (record.chatwoot_conversation_id if record else None),
+                    "created_at": item.created_at or _now(),
+                },
+            )
+            existing.append(saved)
+            seen.add(key)
+        if record is not None:
+            record.memory_context = self.list_memory_items(
+                conversation_id,
+                query=record.incoming_message,
+                context=context,
+            )
+            record.memory_diagnostic = {
+                "workflow": "store_memory",
+                "memory_available": bool(record.memory_context),
+                "selected_count": len(record.memory_context),
+            }
+            self._records[conversation_id] = record
+
+    def list_memory_items(
+        self,
+        conversation_id: str,
+        *,
+        query: str | None = None,
+        limit: int = 8,
+        context: StoreContext | None = None,
+    ) -> list[MemoryHit]:
+        hits = list(self._memory.get(conversation_id, []))
+        hits.sort(key=lambda item: _memory_sort_key(query, item), reverse=True)
+        ranked = []
+        for hit in hits[: max(limit, 0)]:
+            ranked.append(
+                hit.model_copy(
+                    update={
+                        "score": min(1.0, hit.score + _memory_overlap_score(query, hit.content)),
+                    },
+                ),
+            )
+        return ranked
+
     def list_events(
         self,
         *,
@@ -311,6 +427,7 @@ class InMemoryConversationStore:
     def clear(self) -> None:
         self._records.clear()
         self._events.clear()
+        self._memory.clear()
 
 
 class PostgresConversationStore:
@@ -318,6 +435,7 @@ class PostgresConversationStore:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.embedding_service = EmbeddingService(settings)
         initialize_database(settings)
 
     def list(self, context: StoreContext | None = None) -> list[ConversationRecord]:
@@ -707,6 +825,7 @@ class PostgresConversationStore:
     def clear(self) -> None:
         with connect(self.settings) as connection:
             connection.execute("TRUNCATE conversation_summaries CASCADE")
+            connection.execute("TRUNCATE conversation_memory_items CASCADE")
             connection.execute("TRUNCATE retrieval_hits CASCADE")
             connection.execute("TRUNCATE retrieval_runs CASCADE")
             connection.execute("TRUNCATE knowledge_chunk_embeddings CASCADE")
@@ -1089,6 +1208,117 @@ class PostgresConversationStore:
             ),
         )
 
+    def append_memory_items(
+        self,
+        conversation_id: str,
+        items: list[MemoryHit],
+        context: StoreContext | None = None,
+    ) -> None:
+        if not items:
+            return
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            record = self.get(conversation_id, context=context)
+            embedding_model = self.embedding_service.embedding_model
+            for item in items:
+                content = item.content.strip()
+                if not content:
+                    continue
+                embedding = vector_literal(self.embedding_service.embed_text(content))
+                connection.execute(
+                    """
+                    INSERT INTO conversation_memory_items (
+                      organization_id,
+                      conversation_id,
+                      chatwoot_conversation_id,
+                      customer_name,
+                      memory_type,
+                      content,
+                      source,
+                      score,
+                      source_message_id,
+                      metadata,
+                      embedding_model,
+                      embedding,
+                      content_hash
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector, %s)
+                    ON CONFLICT (organization_id, conversation_id, memory_type, content_hash)
+                    WHERE conversation_id IS NOT NULL
+                    DO UPDATE SET
+                      score = GREATEST(conversation_memory_items.score, EXCLUDED.score),
+                      metadata = conversation_memory_items.metadata || EXCLUDED.metadata,
+                      updated_at = now()
+                    """,
+                    (
+                        scoped.organization_id,
+                        conversation_id,
+                        item.chatwoot_conversation_id
+                        or (record.chatwoot_conversation_id if record else None),
+                        record.customer_name if record else None,
+                        item.memory_type,
+                        content,
+                        item.source,
+                        item.score,
+                        item.source_message_id,
+                        Jsonb(item.metadata),
+                        embedding_model,
+                        embedding,
+                        content_hash(content),
+                    ),
+                )
+            connection.commit()
+
+    def list_memory_items(
+        self,
+        conversation_id: str,
+        *,
+        query: str | None = None,
+        limit: int = 8,
+        context: StoreContext | None = None,
+    ) -> list[MemoryHit]:
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            if query:
+                embedding = vector_literal(self.embedding_service.embed_text(query))
+                rows = connection.execute(
+                    """
+                    SELECT
+                      *,
+                      GREATEST(score, 1 - (embedding <=> %s::vector)) AS rank_score
+                    FROM conversation_memory_items
+                    WHERE organization_id = %s
+                      AND conversation_id = %s
+                      AND embedding_model = %s
+                      AND embedding IS NOT NULL
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                    """,
+                    (
+                        embedding,
+                        scoped.organization_id,
+                        conversation_id,
+                        self.embedding_service.embedding_model,
+                        embedding,
+                        limit,
+                    ),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM conversation_memory_items
+                    WHERE organization_id = %s
+                      AND conversation_id = %s
+                    ORDER BY updated_at DESC
+                    LIMIT %s
+                    """,
+                    (scoped.organization_id, conversation_id, limit),
+                ).fetchall()
+            return [_memory_from_row(row) for row in rows]
+
     def _approval_decision(
         self,
         record: ConversationRecord,
@@ -1185,6 +1415,33 @@ class StoreProxy:
         context: StoreContext | None = None,
     ) -> DiagnosticEvent:
         return self._current().record_event(event, context=context)
+
+    def append_memory_items(
+        self,
+        conversation_id: str,
+        items: list[MemoryHit],
+        context: StoreContext | None = None,
+    ) -> None:
+        return self._current().append_memory_items(
+            conversation_id,
+            items,
+            context=context,
+        )
+
+    def list_memory_items(
+        self,
+        conversation_id: str,
+        *,
+        query: str | None = None,
+        limit: int = 8,
+        context: StoreContext | None = None,
+    ) -> list[MemoryHit]:
+        return self._current().list_memory_items(
+            conversation_id,
+            query=query,
+            limit=limit,
+            context=context,
+        )
 
     def list_events(
         self,

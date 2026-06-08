@@ -39,6 +39,7 @@ class Settings(BaseModel):
     agent_studio_internal_secret: str | None = None
     chatwoot_base_url: str | None = None
     chatwoot_account_id: str | None = None
+    chatwoot_inbox_identifier: str | None = None
     chatwoot_api_access_token: str | None = None
     chatwoot_webhook_token: str | None = None
     chatwoot_dry_run: bool = False
@@ -119,6 +120,8 @@ def get_settings() -> Settings:
         agent_studio_internal_secret=os.getenv("AGENT_STUDIO_INTERNAL_SECRET"),
         chatwoot_base_url=os.getenv("CHATWOOT_BASE_URL"),
         chatwoot_account_id=os.getenv("CHATWOOT_ACCOUNT_ID"),
+        chatwoot_inbox_identifier=os.getenv("CHATWOOT_INBOX_IDENTIFIER")
+        or os.getenv("CHATWOOT_INBOX_ID"),
         chatwoot_api_access_token=os.getenv("CHATWOOT_API_ACCESS_TOKEN"),
         chatwoot_webhook_token=os.getenv("CHATWOOT_WEBHOOK_TOKEN"),
         chatwoot_dry_run=_bool_env("CHATWOOT_DRY_RUN", False),

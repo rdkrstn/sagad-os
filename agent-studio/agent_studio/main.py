@@ -10,6 +10,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Response, WebSocket, 
 from agent_studio.chatwoot import (
     chatwoot_context_from_payload,
     fetch_conversation_details,
+    resolve_conversation,
     send_approved_reply,
 )
 from agent_studio.chatwoot_mapping import channel_from_payload
@@ -25,6 +26,7 @@ from agent_studio.integration_config import (
     integration_config_store,
 )
 from agent_studio.ingestion import KnowledgeIngestionService, build_knowledge_ingestion_store
+from agent_studio.memory_workflow import memory_items_from_record
 from agent_studio.realtime import realtime_manager, verify_realtime_token
 from agent_studio.retrieval import retriever
 from agent_studio.schemas import (
@@ -87,6 +89,8 @@ _SPRINT2_CONVERSATION_STATE_FIELDS = (
     "retrieval_confidence",
     "missing_knowledge",
     "retrieval_diagnostic",
+    "memory_context",
+    "memory_diagnostic",
 )
 
 
@@ -432,6 +436,78 @@ def _chatwoot_send_tool_result(
             data=_chatwoot_tool_payload(result),
         ),
     )
+
+
+def _chatwoot_resolve_tool_result(
+    record: ConversationRecord,
+    result: dict[str, object],
+) -> tuple[ToolPlan, ToolResult]:
+    status_value = str(result.get("status", "failed"))
+    tool_status = {
+        "resolved": "succeeded",
+        "dry_run": "dry_run",
+        "failed": "failed",
+    }.get(status_value, "failed")
+    plan = ToolPlan(
+        provider="Chatwoot",
+        tool_name="chatwoot.conversations.resolve",
+        action="resolve conversation",
+        risk_level="medium",
+        requires_approval=True,
+        approved=True,
+        dry_run=status_value == "dry_run",
+        args={
+            "chatwoot_conversation_id": record.chatwoot_conversation_id,
+            "source_id": record.chatwoot_context.source_id
+            if record.chatwoot_context
+            else None,
+        },
+    )
+    return (
+        plan,
+        ToolResult(
+            plan_id=plan.id,
+            provider="Chatwoot",
+            tool_name="chatwoot.conversations.resolve",
+            status=tool_status,  # type: ignore[arg-type]
+            detail=str(result.get("detail", "Chatwoot resolve completed.")),
+            external_id=str(result["external_id"]) if result.get("external_id") else None,
+            data=_chatwoot_tool_payload(result),
+        ),
+    )
+
+
+def _attach_memory_context(
+    record: ConversationRecord,
+    *,
+    context: StoreContext | None,
+) -> ConversationRecord:
+    memory_context = store.list_memory_items(
+        record.id,
+        query=record.incoming_message,
+        context=context,
+    )
+    record.memory_context = memory_context
+    record.memory_diagnostic = {
+        **(record.memory_diagnostic or {}),
+        "persisted_memory_count": len(memory_context),
+        "memory_available": bool(memory_context),
+    }
+    return record
+
+
+def _append_lifecycle_memory(
+    record: ConversationRecord,
+    *,
+    lifecycle_event: str,
+    context: StoreContext | None,
+) -> ConversationRecord:
+    store.append_memory_items(
+        record.id,
+        memory_items_from_record(record, lifecycle_event=lifecycle_event),
+        context=context,
+    )
+    return _attach_memory_context(record, context=context)
 
 
 def _require_supervisor_approval(approved: bool) -> None:
@@ -1003,6 +1079,14 @@ async def receive_chatwoot_webhook(
         "customer_name": _customer_name(payload),
         "channel": normalized_channel,
         "incoming_message": incoming_message,
+        "conversation_history": existing_record.messages if existing_record else [],
+        "memory_context": store.list_memory_items(
+            conversation_id,
+            query=incoming_message,
+            context=context,
+        )
+        if conversation_id
+        else [],
         "trace_url": None,
     }
     final_state = graph.invoke(initial_state)
@@ -1040,6 +1124,11 @@ async def receive_chatwoot_webhook(
     if conversation_id:
         record.id = conversation_id
     saved = store.save(record, context=context)
+    saved = _append_lifecycle_memory(
+        saved,
+        lifecycle_event="draft_created",
+        context=context,
+    )
     _log_event(
         logging.INFO,
         "chatwoot.webhook.persisted",
@@ -1088,7 +1177,12 @@ def list_conversations(
 ) -> ConversationListResponse:
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
-    return ConversationListResponse(conversations=store.list(context=context))
+    return ConversationListResponse(
+        conversations=[
+            _attach_memory_context(record, context=context)
+            for record in store.list(context=context)
+        ],
+    )
 
 
 @app.get("/conversations/{conversation_id}", response_model=ConversationRecord)
@@ -1127,7 +1221,115 @@ async def get_conversation(
                     payload={"fetch_error": chatwoot_context.fetch_error or "unknown"},
                     context=context,
                 )
-    return record
+    return _attach_memory_context(record, context=context)
+
+
+@app.post("/conversations/{conversation_id}/resolve", response_model=ConversationRecord)
+async def resolve_chatwoot_conversation(
+    conversation_id: str,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> ConversationRecord:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    _require_supervisor_approval(True)
+    record = store.get(conversation_id, context=context)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    if record.chatwoot_context and record.chatwoot_context.status == "resolved":
+        raise HTTPException(status_code=409, detail="Conversation is already resolved.")
+
+    settings = configured_settings(get_settings(), context)
+    if settings.chatwoot_dry_run:
+        raise HTTPException(
+            status_code=409,
+            detail="Chatwoot resolve is disabled while dry-run is enabled.",
+        )
+
+    source_id = record.chatwoot_context.source_id if record.chatwoot_context else None
+    if not source_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Chatwoot resolve requires a contact/source identifier.",
+        )
+
+    inbox_identifier = settings.chatwoot_inbox_identifier
+    if not inbox_identifier:
+        raise HTTPException(
+            status_code=409,
+            detail="Chatwoot resolve requires an inbox identifier.",
+        )
+
+    _record_diagnostic_event(
+        event_type="chatwoot.resolve.attempt",
+        summary="Supervisor requested Chatwoot conversation resolve.",
+        status_value="info",
+        conversation_id=record.id,
+        payload={
+            "chatwoot_conversation_id": record.chatwoot_conversation_id,
+            "source_id": source_id,
+            "inbox_identifier": inbox_identifier,
+        },
+        context=context,
+        actor_type="user",
+        actor_id=context.user_id,
+    )
+    result = await resolve_conversation(
+        settings=settings,
+        chatwoot_conversation_id=record.chatwoot_conversation_id,
+        contact_identifier=source_id,
+        inbox_identifier=inbox_identifier,
+    )
+    plan, tool_result = _chatwoot_resolve_tool_result(record, result)
+    if all(existing.id != plan.id for existing in record.tool_plans):
+        record.tool_plans.append(plan)
+    if all(existing.id != tool_result.id for existing in record.tool_results):
+        record.tool_results.append(tool_result)
+    if result["status"] == "resolved" and record.chatwoot_context:
+        record.chatwoot_context.status = "resolved"
+    record.updated_at = datetime.now(timezone.utc)
+    saved = store.save(record, context=context)
+    store.record_tool_execution(
+        plan,
+        tool_result,
+        conversation_id=saved.id,
+        context=context,
+    )
+    event_type = (
+        "chatwoot.resolve.succeeded"
+        if result["status"] == "resolved"
+        else "chatwoot.resolve.failed"
+    )
+    _record_diagnostic_event(
+        event_type=event_type,
+        summary=str(result.get("detail", "Chatwoot resolve completed.")),
+        status_value="success" if result["status"] == "resolved" else "error",
+        conversation_id=saved.id,
+        payload=_chatwoot_tool_payload(result),
+        context=context,
+        actor_type="user",
+        actor_id=context.user_id,
+    )
+    if result["status"] == "resolved":
+        saved = _append_lifecycle_memory(
+            saved,
+            lifecycle_event="resolved",
+            context=context,
+        )
+    else:
+        saved = _attach_memory_context(saved, context=context)
+    await realtime_manager.broadcast(
+        context.organization_id,
+        _realtime_event(
+            "conversation.resolved",
+            saved,
+            organization_id=context.organization_id,
+        ),
+    )
+    return saved
 
 
 @app.post("/conversations/{conversation_id}/approve-send", response_model=ConversationRecord)
@@ -1164,7 +1366,7 @@ async def approve_send(
                 organization_id=context.organization_id,
             ),
         )
-        return saved
+        return _attach_memory_context(saved, context=context)
 
     if record.approval_status not in {"needs_approval", "send_failed"}:
         raise HTTPException(status_code=409, detail="Conversation is not waiting for approval.")
@@ -1250,6 +1452,14 @@ async def approve_send(
         edited_reply=request.edited_reply,
         context=context,
     )
+    if result["status"] in {"sent", "dry_run"}:
+        saved = _append_lifecycle_memory(
+            saved,
+            lifecycle_event="approved_send",
+            context=context,
+        )
+    else:
+        saved = _attach_memory_context(saved, context=context)
     event_status = "success" if result["status"] in {"sent", "dry_run"} else "error"
     event_type = (
         "chatwoot.send.succeeded"

@@ -21,6 +21,18 @@ class ChatwootSendResult(TypedDict):
     external_id: NotRequired[str]
 
 
+class ChatwootResolveResult(TypedDict):
+    status: Literal["resolved", "dry_run", "failed"]
+    detail: str
+    provider: str
+    action: str
+    target_url: NotRequired[str]
+    http_status: NotRequired[int]
+    response_excerpt: NotRequired[str]
+    error_type: NotRequired[str]
+    external_id: NotRequired[str]
+
+
 def _response_excerpt(response: httpx.Response, limit: int = 500) -> str:
     text = response.text.strip()
     if len(text) <= limit:
@@ -359,4 +371,117 @@ async def send_approved_reply(
         http_status=response.status_code,
         response_excerpt=_response_excerpt(response),
         detail=f"Chatwoot send failed with HTTP {response.status_code}.",
+    )
+
+
+async def resolve_conversation(
+    *,
+    settings: Settings,
+    chatwoot_conversation_id: str | None,
+    contact_identifier: str | None,
+    inbox_identifier: str | None = None,
+) -> ChatwootResolveResult:
+    if not settings.chatwoot_configured:
+        return ChatwootResolveResult(
+            status="failed",
+            provider="Chatwoot",
+            action="chatwoot.conversations.resolve",
+            detail="Chatwoot credentials are not fully configured.",
+        )
+
+    if not chatwoot_conversation_id:
+        return ChatwootResolveResult(
+            status="failed",
+            provider="Chatwoot",
+            action="chatwoot.conversations.resolve",
+            detail="Missing Chatwoot conversation ID.",
+        )
+
+    resolved_inbox_identifier = inbox_identifier or settings.chatwoot_inbox_identifier
+    if not resolved_inbox_identifier:
+        return ChatwootResolveResult(
+            status="failed",
+            provider="Chatwoot",
+            action="chatwoot.conversations.resolve",
+            detail="Missing Chatwoot inbox identifier.",
+        )
+
+    if not contact_identifier:
+        return ChatwootResolveResult(
+            status="failed",
+            provider="Chatwoot",
+            action="chatwoot.conversations.resolve",
+            detail="Missing Chatwoot contact/source identifier.",
+        )
+
+    base_url = str(settings.chatwoot_base_url).rstrip("/")
+    url = (
+        f"{base_url}/public/api/v1/inboxes/{resolved_inbox_identifier}"
+        f"/contacts/{contact_identifier}"
+        f"/conversations/{chatwoot_conversation_id}/toggle_status"
+    )
+
+    if settings.chatwoot_dry_run:
+        return ChatwootResolveResult(
+            status="dry_run",
+            provider="Chatwoot",
+            action="chatwoot.conversations.resolve",
+            target_url=url,
+            detail="Chatwoot credentials are configured, but dry-run is enabled.",
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                url,
+                headers={"api_access_token": str(settings.chatwoot_api_access_token)},
+            )
+    except httpx.TimeoutException as exc:
+        return ChatwootResolveResult(
+            status="failed",
+            provider="Chatwoot",
+            action="chatwoot.conversations.resolve",
+            target_url=url,
+            error_type=exc.__class__.__name__,
+            detail="Chatwoot resolve timed out before a response was received.",
+        )
+    except httpx.RequestError as exc:
+        return ChatwootResolveResult(
+            status="failed",
+            provider="Chatwoot",
+            action="chatwoot.conversations.resolve",
+            target_url=url,
+            error_type=exc.__class__.__name__,
+            detail=f"Chatwoot resolve failed before receiving an HTTP response: {exc.__class__.__name__}.",
+        )
+
+    if response.is_success:
+        external_id: str | None = None
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if isinstance(body, dict):
+            id_value = body.get("id")
+            external_id = str(id_value) if id_value is not None else None
+        result = ChatwootResolveResult(
+            status="resolved",
+            provider="Chatwoot",
+            action="chatwoot.conversations.resolve",
+            target_url=url,
+            http_status=response.status_code,
+            detail="Chatwoot conversation resolved.",
+        )
+        if external_id:
+            result["external_id"] = external_id
+        return result
+
+    return ChatwootResolveResult(
+        status="failed",
+        provider="Chatwoot",
+        action="chatwoot.conversations.resolve",
+        target_url=url,
+        http_status=response.status_code,
+        response_excerpt=_response_excerpt(response),
+        detail=f"Chatwoot resolve failed with HTTP {response.status_code}.",
     )

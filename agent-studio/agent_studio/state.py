@@ -1,6 +1,14 @@
 from typing import Literal, TypedDict
 
-from agent_studio.schemas import CrmContactContext, KnowledgeHit, QaFinding, ToolPlan, ToolResult
+from agent_studio.schemas import (
+    ConversationMessageRecord,
+    CrmContactContext,
+    KnowledgeHit,
+    MemoryHit,
+    QaFinding,
+    ToolPlan,
+    ToolResult,
+)
 
 
 class AgentStudioState(TypedDict, total=False):
@@ -15,6 +23,9 @@ class AgentStudioState(TypedDict, total=False):
     risk_level: Literal["low", "medium", "high"]
     selected_agent: str | None
     customer_driver: str | None
+    conversation_history: list[ConversationMessageRecord]
+    memory_context: list[MemoryHit]
+    memory_diagnostic: dict[str, object]
     retrieved_knowledge: list[KnowledgeHit]
     retrieval_confidence: float | None
     missing_knowledge: bool

@@ -64,6 +64,19 @@ class KnowledgeHit(BaseModel):
     excerpt: str
 
 
+class MemoryHit(BaseModel):
+    id: str = Field(default_factory=lambda: f"mem_{uuid4().hex[:12]}")
+    memory_type: str
+    content: str
+    source: str = "conversation"
+    score: float = 0.0
+    conversation_id: str | None = None
+    chatwoot_conversation_id: str | None = None
+    source_message_id: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class KnowledgeIngestionFile(BaseModel):
     filename: str
     content: str
@@ -314,6 +327,8 @@ class ConversationRecord(BaseModel):
     retrieval_confidence: float | None = None
     missing_knowledge: bool = False
     retrieval_diagnostic: dict[str, object] = Field(default_factory=dict)
+    memory_context: list[MemoryHit] = Field(default_factory=list)
+    memory_diagnostic: dict[str, object] = Field(default_factory=dict)
     crm_context: CrmContactContext | None = None
     chatwoot_context: ChatwootConversationContext | None = None
     tool_plans: list[ToolPlan] = Field(default_factory=list)
