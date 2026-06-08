@@ -1260,7 +1260,12 @@ async def resolve_chatwoot_conversation(
     if not inbox_identifier:
         raise HTTPException(
             status_code=409,
-            detail="Chatwoot resolve requires an inbox identifier.",
+            detail=(
+                "Chatwoot resolve requires the API channel inbox identifier. "
+                "Set CHATWOOT_INBOX_IDENTIFIER or the Chatwoot integration "
+                "Inbox identifier to the value from API Channel -> Settings -> "
+                "Configuration; this is not the numeric inbox_id."
+            ),
         )
 
     _record_diagnostic_event(

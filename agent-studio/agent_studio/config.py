@@ -121,6 +121,7 @@ def get_settings() -> Settings:
         chatwoot_base_url=os.getenv("CHATWOOT_BASE_URL"),
         chatwoot_account_id=os.getenv("CHATWOOT_ACCOUNT_ID"),
         chatwoot_inbox_identifier=os.getenv("CHATWOOT_INBOX_IDENTIFIER")
+        or os.getenv("CHATWOOT_PUBLIC_INBOX_IDENTIFIER")
         or os.getenv("CHATWOOT_INBOX_ID"),
         chatwoot_api_access_token=os.getenv("CHATWOOT_API_ACCESS_TOKEN"),
         chatwoot_webhook_token=os.getenv("CHATWOOT_WEBHOOK_TOKEN"),

@@ -275,7 +275,6 @@ export function ConversationReview({
   const currentRisk = riskLevel(primary);
   const customerName = textOf(primary, ["customerName", "contact", "name"], "Conversation");
   const sourceId = textOf(primary, ["sourceId"], "");
-  const inboxId = textOf(primary, ["inboxId"], "");
   const chatwootStatus = textOf(primary, ["chatwootStatus"], "").toLowerCase();
   const sendStatus = textOf(primary, ["sendStatus"], "").toLowerCase();
   const resolveDisabledReason = !hasConversation
@@ -284,11 +283,9 @@ export function ConversationReview({
       ? "Conversation is already resolved."
       : !sourceId
         ? "Resolve needs a Chatwoot source ID."
-        : !inboxId
-          ? "Resolve needs a Chatwoot inbox identifier."
-          : sendStatus.includes("dry")
-            ? "Resolve is disabled while Chatwoot dry-run is active."
-            : "";
+        : sendStatus.includes("dry")
+          ? "Resolve is disabled while Chatwoot dry-run is active."
+          : "";
   const traceId = textOf(
     primary,
     ["traceId", "langSmithTraceId"],
