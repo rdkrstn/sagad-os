@@ -239,6 +239,8 @@ interface IntegrationConnectionList {
   connections: IntegrationConnectionView[];
 }
 
+type AgentStudioCatalogRecord = ViewRecord;
+
 const demoNow = "2026-06-04T09:00:00+08:00";
 const clone = <T>(value: T): T => structuredClone(value);
 const agentStudioFetchTimeoutMs = 3000;
@@ -276,6 +278,110 @@ function viewRecordArray(row: ViewRecord, keys: string[]): ViewRecord[] {
   }
 
   return [];
+}
+
+function viewPayloadArray(
+  payload: unknown,
+  keys: string[],
+): ViewRecord[] | null {
+  if (Array.isArray(payload)) {
+    return payload.filter(
+      (item): item is ViewRecord =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item),
+    );
+  }
+
+  const row = viewRecord(payload);
+  for (const key of keys) {
+    const value = row[key];
+    if (Array.isArray(value)) {
+      return value.filter(
+        (item): item is ViewRecord =>
+          Boolean(item) && typeof item === "object" && !Array.isArray(item),
+      );
+    }
+  }
+
+  return null;
+}
+
+function viewStringArray(row: ViewRecord, keys: string[]): string[] {
+  for (const key of keys) {
+    const value = row[key];
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => String(item).trim())
+        .filter((item) => item.length > 0);
+    }
+    if (typeof value === "string" && value.trim()) {
+      return value
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+    }
+  }
+
+  return [];
+}
+
+function viewBoolean(
+  row: ViewRecord,
+  keys: string[],
+  fallback = false,
+): boolean {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (["true", "yes", "1", "enabled", "required"].includes(normalized)) {
+        return true;
+      }
+      if (["false", "no", "0", "disabled", "none"].includes(normalized)) {
+        return false;
+      }
+    }
+  }
+
+  return fallback;
+}
+
+function viewOptionalBoolean(
+  row: ViewRecord,
+  keys: string[],
+): boolean | null {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (["true", "yes", "1", "enabled", "required"].includes(normalized)) {
+        return true;
+      }
+      if (["false", "no", "0", "disabled", "none"].includes(normalized)) {
+        return false;
+      }
+    }
+  }
+
+  return null;
+}
+
+function viewNestedRecord(row: ViewRecord, keys: string[]): ViewRecord {
+  for (const key of keys) {
+    const value = viewRecord(row[key]);
+    if (Object.keys(value).length > 0) return value;
+  }
+
+  return {};
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function jsonPreview(value: unknown): string {
+  return JSON.stringify(value ?? {}, null, 2);
 }
 
 const contactById = new Map(mockContacts.map((contact) => [contact.id, contact]));
@@ -366,7 +472,7 @@ async function agentStudioHeaders(): Promise<HeadersInit> {
     headers.set("X-Sagad-Internal-Secret", secret);
   }
 
-  const session = await getCurrentSession();
+  const session = await getCurrentSession().catch(() => null);
   if (session?.user?.id) {
     headers.set("X-Sagad-User-Id", session.user.id);
   }
@@ -460,6 +566,49 @@ async function fetchAgentStudioLiteLlmHealth(): Promise<AgentStudioFetchResult<V
     const record = viewRecord(payload);
     return Object.keys(record).length > 0 ? record : null;
   });
+}
+
+async function fetchAgentStudioToolManifests(): Promise<
+  AgentStudioFetchResult<AgentStudioCatalogRecord[]>
+> {
+  return fetchAgentStudioJson("/tools/manifests", (payload) =>
+    viewPayloadArray(payload, [
+      "manifests",
+      "tool_manifests",
+      "toolManifests",
+      "tools",
+      "items",
+    ]),
+  );
+}
+
+async function fetchAgentStudioSkills(): Promise<
+  AgentStudioFetchResult<AgentStudioCatalogRecord[]>
+> {
+  return fetchAgentStudioJson("/skills", (payload) =>
+    viewPayloadArray(payload, [
+      "skills",
+      "skill_definitions",
+      "skillDefinitions",
+      "available_skills",
+      "availableSkills",
+      "items",
+    ]),
+  );
+}
+
+async function fetchAgentStudioMcpDescriptors(): Promise<
+  AgentStudioFetchResult<AgentStudioCatalogRecord[]>
+> {
+  return fetchAgentStudioJson("/mcp/descriptors", (payload) =>
+    viewPayloadArray(payload, [
+      "descriptors",
+      "mcp_descriptors",
+      "mcpDescriptors",
+      "tools",
+      "items",
+    ]),
+  );
 }
 
 function summarizeAgentStudioStatus(
@@ -823,6 +972,74 @@ function classifierIntentForAgentStudio(intent: string): ClassifierIntent {
   return "unknown";
 }
 
+function nonEmptyRecord(records: ViewRecord[]): ViewRecord {
+  return records.find((record) => Object.keys(record).length > 0) ?? {};
+}
+
+function toolPolicyMetadata(
+  plan: ViewRecord,
+  result: ViewRecord = {},
+): ViewRecord {
+  const args = viewRecord(plan.args);
+  const data = viewRecord(result.data);
+  const decision = nonEmptyRecord([
+    viewNestedRecord(plan, ["policy_decision", "policyDecision"]),
+    viewNestedRecord(result, ["policy_decision", "policyDecision"]),
+    viewNestedRecord(args, ["policy_decision", "policyDecision", "decision"]),
+    viewNestedRecord(data, ["policy_decision", "policyDecision", "decision"]),
+  ]);
+  const allowed =
+    viewOptionalBoolean(decision, ["allowed"]) ??
+    viewOptionalBoolean(args, ["allowed"]) ??
+    viewOptionalBoolean(data, ["allowed"]);
+  const requiresApproval =
+    viewOptionalBoolean(decision, ["requires_approval", "requiresApproval"]) ??
+    viewOptionalBoolean(plan, ["requires_approval", "requiresApproval"]) ??
+    viewOptionalBoolean(args, ["requires_approval", "requiresApproval"]) ??
+    viewOptionalBoolean(data, ["requires_approval", "requiresApproval"]) ??
+    false;
+  const dryRun =
+    viewOptionalBoolean(decision, ["dry_run", "dryRun"]) ??
+    viewOptionalBoolean(plan, ["dry_run", "dryRun"]) ??
+    viewOptionalBoolean(result, ["dry_run", "dryRun"]) ??
+    viewOptionalBoolean(args, ["dry_run", "dryRun"]) ??
+    viewOptionalBoolean(data, ["dry_run", "dryRun"]) ??
+    viewText(result, ["status"], "").toLowerCase().includes("dry");
+  const blockedReason =
+    viewText(decision, ["blocked_reason", "blockedReason"], "") ||
+    viewText(args, ["blocked_reason", "blockedReason"], "") ||
+    viewText(data, ["blocked_reason", "blockedReason"], "");
+  const policyReasons = uniqueStrings([
+    ...viewStringArray(decision, [
+      "policy_reasons",
+      "policyReasons",
+      "reasons",
+    ]),
+    ...viewStringArray(args, ["policy_reasons", "policyReasons", "reasons"]),
+    ...viewStringArray(data, ["policy_reasons", "policyReasons", "reasons"]),
+    blockedReason,
+  ]);
+
+  return {
+    allowed,
+    status: allowed === null ? "Policy recorded" : allowed ? "Allowed" : "Blocked",
+    requiresApproval,
+    approval: requiresApproval ? "Required" : "Not required",
+    dryRun,
+    liveMode: dryRun ? "Dry-run" : "Live",
+    blockedReason,
+    policyReasons:
+      policyReasons.length > 0
+        ? policyReasons
+        : [
+            requiresApproval
+              ? "Tool requires approval before live execution."
+              : "Tool passed through Agent Studio policy.",
+          ],
+    decision,
+  };
+}
+
 function toAgentStudioConversationView(
   conversation: AgentStudioConversation,
 ): ConversationView {
@@ -858,38 +1075,171 @@ function toAgentStudioConversationView(
     status: titleCase(finding.status),
     detail: finding.detail,
   }));
-  const toolResults = (conversation.tool_results ?? []).map((result) => ({
-    id: result.id,
-    planId: result.plan_id,
-    provider: result.provider,
-    toolName: result.tool_name,
-    status: titleCase(result.status),
-    detail: result.detail,
-    externalId: result.external_id,
-    data: result.data,
-    httpStatus:
-      typeof result.data.http_status === "number"
-        ? result.data.http_status
-        : null,
-    responseExcerpt:
-      typeof result.data.response_excerpt === "string"
-        ? result.data.response_excerpt
-        : "",
-    targetUrl:
-      typeof result.data.target_url === "string" ? result.data.target_url : "",
-    errorType:
-      typeof result.data.error_type === "string" ? result.data.error_type : "",
-  }));
-  const toolPlans = (conversation.tool_plans ?? []).map((plan) => ({
-    id: plan.id,
-    provider: plan.provider,
-    toolName: plan.tool_name,
-    action: plan.action,
-    riskLevel: titleCase(plan.risk_level),
-    requiresApproval: plan.requires_approval,
-    approved: plan.approved,
-    dryRun: plan.dry_run,
-    args: plan.args,
+  const rawToolPlans = conversation.tool_plans ?? [];
+  const rawToolResults = conversation.tool_results ?? [];
+  const rawResultByPlanId = new Map(
+    rawToolResults.map((result) => [result.plan_id, result]),
+  );
+  const rawPlanById = new Map(rawToolPlans.map((plan) => [plan.id, plan]));
+  const toolPlans = rawToolPlans.map((plan) => {
+    const result = rawResultByPlanId.get(plan.id);
+    const policyDecision = toolPolicyMetadata(
+      {
+        ...plan,
+        args: plan.args,
+      },
+      result
+        ? {
+            ...result,
+            data: result.data,
+          }
+        : {},
+    );
+
+    return {
+      id: plan.id,
+      provider: plan.provider,
+      toolName: plan.tool_name,
+      action: plan.action,
+      riskLevel: titleCase(plan.risk_level),
+      requiresApproval: plan.requires_approval,
+      approved: plan.approved,
+      dryRun: plan.dry_run,
+      args: plan.args,
+      policyDecision,
+      policyReasons: viewStringArray(policyDecision, ["policyReasons"]),
+      blockedReason: viewText(policyDecision, ["blockedReason"], ""),
+      policyStatus: viewText(policyDecision, ["status"], "Policy recorded"),
+      liveMode: viewText(policyDecision, ["liveMode"], plan.dry_run ? "Dry-run" : "Live"),
+    };
+  });
+  const toolResults = rawToolResults.map((result) => {
+    const plan = rawPlanById.get(result.plan_id);
+    const policyDecision = toolPolicyMetadata(
+      plan
+        ? {
+            ...plan,
+            args: plan.args,
+          }
+        : {},
+      {
+        ...result,
+        data: result.data,
+      },
+    );
+
+    return {
+      id: result.id,
+      planId: result.plan_id,
+      provider: result.provider,
+      toolName: result.tool_name,
+      status: titleCase(result.status),
+      detail: result.detail,
+      externalId: result.external_id,
+      data: result.data,
+      action: plan?.action ?? "",
+      riskLevel: plan ? titleCase(plan.risk_level) : "Unknown",
+      requiresApproval:
+        plan?.requires_approval ??
+        viewBoolean(policyDecision, ["requiresApproval"]),
+      dryRun:
+        plan?.dry_run ??
+        viewBoolean(policyDecision, ["dryRun"], result.status === "dry_run"),
+      policyDecision,
+      policyReasons: viewStringArray(policyDecision, ["policyReasons"]),
+      blockedReason: viewText(policyDecision, ["blockedReason"], ""),
+      policyStatus: viewText(policyDecision, ["status"], "Policy recorded"),
+      liveMode: viewText(policyDecision, ["liveMode"], result.status === "dry_run" ? "Dry-run" : "Live"),
+      httpStatus:
+        typeof result.data.http_status === "number"
+          ? result.data.http_status
+          : null,
+      responseExcerpt:
+        typeof result.data.response_excerpt === "string"
+          ? result.data.response_excerpt
+          : "",
+      targetUrl:
+        typeof result.data.target_url === "string" ? result.data.target_url : "",
+      errorType:
+        typeof result.data.error_type === "string" ? result.data.error_type : "",
+    };
+  });
+  const resultViewByPlanId = new Map(
+    toolResults.map((result) => [String(result.planId), result]),
+  );
+  const toolEvidence = [
+    ...toolPlans.map((plan) => {
+      const result = resultViewByPlanId.get(String(plan.id));
+      return {
+        id: `${plan.id}-${result?.id ?? "pending"}`,
+        planId: plan.id,
+        resultId: result?.id ?? "",
+        provider: plan.provider,
+        toolName: plan.toolName,
+        action: plan.action,
+        planStatus: plan.policyStatus,
+        resultStatus: result?.status ?? "No result",
+        detail: result?.detail ?? plan.action,
+        externalId: result?.externalId ?? "",
+        riskLevel: plan.riskLevel,
+        requiresApproval: plan.requiresApproval,
+        approved: plan.approved,
+        dryRun: plan.dryRun,
+        liveMode: plan.liveMode,
+        args: plan.args,
+        resultData: result?.data ?? {},
+        httpStatus: result?.httpStatus ?? null,
+        responseExcerpt: result?.responseExcerpt ?? "",
+        targetUrl: result?.targetUrl ?? "",
+        errorType: result?.errorType ?? "",
+        policyDecision: plan.policyDecision,
+        policyReasons: plan.policyReasons,
+        blockedReason: plan.blockedReason,
+      };
+    }),
+    ...toolResults
+      .filter((result) => !rawPlanById.has(String(result.planId)))
+      .map((result) => ({
+        id: `${result.planId || "orphan"}-${result.id}`,
+        planId: result.planId,
+        resultId: result.id,
+        provider: result.provider,
+        toolName: result.toolName,
+        action: result.action,
+        planStatus: result.policyStatus,
+        resultStatus: result.status,
+        detail: result.detail,
+        externalId: result.externalId ?? "",
+        riskLevel: result.riskLevel,
+        requiresApproval: result.requiresApproval,
+        approved: false,
+        dryRun: result.dryRun,
+        liveMode: result.liveMode,
+        args: {},
+        resultData: result.data,
+        httpStatus: result.httpStatus,
+        responseExcerpt: result.responseExcerpt,
+        targetUrl: result.targetUrl,
+        errorType: result.errorType,
+        policyDecision: result.policyDecision,
+        policyReasons: result.policyReasons,
+        blockedReason: result.blockedReason,
+      })),
+  ];
+  const policyDecisions = toolEvidence.map((item) => ({
+    id: `${item.planId || item.resultId}-policy`,
+    toolName: item.toolName,
+    status: viewText(viewRecord(item.policyDecision), ["status"], item.planStatus),
+    riskLevel: item.riskLevel,
+    requiresApproval: item.requiresApproval,
+    dryRun: item.dryRun,
+    liveMode: item.liveMode,
+    blockedReason: item.blockedReason,
+    policyReasons: item.policyReasons,
+    detail:
+      item.policyReasons.length > 0
+        ? item.policyReasons.join(" ")
+        : "Tool policy decision was recorded by Agent Studio.",
   }));
   const threadMessages =
     conversation.messages && conversation.messages.length > 0
@@ -946,6 +1296,8 @@ function toAgentStudioConversationView(
     toolCallIds: toolResults.map((result) => result.id),
     toolPlans,
     toolResults,
+    toolEvidence,
+    policyDecisions,
     deliveryResults: toolResults,
     customerName: conversation.customer_name,
     contact: conversation.customer_name,
@@ -1002,6 +1354,10 @@ function toAgentStudioConversationView(
     memoryContext,
     memoryDiagnostic: conversation.memory_diagnostic ?? {},
     qaCompliance,
+    qaFindings: qaCompliance,
+    qa_findings: qaCompliance,
+    policyChecks: policyDecisions,
+    toolPolicyDecisions: policyDecisions,
     crmContext: {
       provider: "Twenty CRM",
       providerStatus: "Twenty external",
@@ -1045,11 +1401,21 @@ function toAgentStudioConversationView(
         status: titleCase(conversation.compliance_status),
         rationale: "Supervisor-gated preview policy requires approval before send.",
       },
-      ...toolResults.map((result) => ({
-        step: result.toolName,
-        status: result.status,
-        rationale: result.detail,
-      })),
+      ...toolEvidence.flatMap((item) => [
+        {
+          step: `${item.toolName} policy`,
+          status: viewText(viewRecord(item.policyDecision), ["status"], item.planStatus),
+          rationale:
+            item.policyReasons.length > 0
+              ? item.policyReasons.join(" ")
+              : "Tool policy decision recorded.",
+        },
+        {
+          step: `${item.toolName} result`,
+          status: item.resultStatus,
+          rationale: item.detail,
+        },
+      ]),
     ],
     aiDecisionTrail: [],
     messages: threadMessages.map((message) => ({
@@ -1091,6 +1457,111 @@ function toConversationView(conversation: Conversation): ConversationView {
       : conversation.classifier.confidence < 0.8
         ? "medium"
         : "low");
+  const toolPlans = conversation.toolCallIds.map((toolId) => {
+    const tool = toolById.get(toolId);
+    const toolName = tool?.name ?? toolId;
+    const requiresApproval = tool?.requiresApproval ?? true;
+    const policyDecision = {
+      allowed: !requiresApproval,
+      status: requiresApproval ? "Approval required" : "Allowed",
+      requiresApproval,
+      approval: requiresApproval ? "Required" : "Not required",
+      dryRun: requiresApproval,
+      liveMode: requiresApproval ? "Dry-run" : "Live",
+      blockedReason: requiresApproval ? "Supervisor approval is required before execution." : "",
+      policyReasons: requiresApproval
+        ? [
+            "Preview fallback keeps write and customer-facing tools approval-gated.",
+            "Agent Studio must approve policy before live provider execution.",
+          ]
+        : ["Preview fallback allows read-only tool use through Agent Studio."],
+    };
+
+    return {
+      id: `${toolId}-plan`,
+      provider: "Agent Studio",
+      toolName,
+      action: tool?.description ?? "Tool action planned by the orchestration layer.",
+      riskLevel: titleCase(requiresApproval ? "medium" : riskLevel),
+      requiresApproval,
+      approved: false,
+      dryRun: requiresApproval,
+      args: {
+        policy_decision: policyDecision,
+      },
+      policyDecision,
+      policyReasons: policyDecision.policyReasons,
+      blockedReason: policyDecision.blockedReason,
+      policyStatus: policyDecision.status,
+      liveMode: policyDecision.liveMode,
+    };
+  });
+  const toolResults = toolPlans.map((plan) => ({
+    id: `${plan.id}-result`,
+    planId: plan.id,
+    provider: plan.provider,
+    toolName: plan.toolName,
+    status: plan.requiresApproval ? "Planned" : "Dry Run",
+    detail: plan.requiresApproval
+      ? "Preview tool plan is waiting on supervisor approval."
+      : "Preview read tool is represented as a dry-run result.",
+    externalId: null,
+    data: {
+      policy_decision: plan.policyDecision,
+    },
+    action: plan.action,
+    riskLevel: plan.riskLevel,
+    requiresApproval: plan.requiresApproval,
+    dryRun: plan.dryRun,
+    policyDecision: plan.policyDecision,
+    policyReasons: plan.policyReasons,
+    blockedReason: plan.blockedReason,
+    policyStatus: plan.policyStatus,
+    liveMode: plan.liveMode,
+  }));
+  const toolEvidence = toolPlans.map((plan) => {
+    const result = toolResults.find((item) => item.planId === plan.id);
+    return {
+      id: `${plan.id}-${result?.id ?? "pending"}`,
+      planId: plan.id,
+      resultId: result?.id ?? "",
+      provider: plan.provider,
+      toolName: plan.toolName,
+      action: plan.action,
+      planStatus: plan.policyStatus,
+      resultStatus: result?.status ?? "No result",
+      detail: result?.detail ?? plan.action,
+      riskLevel: plan.riskLevel,
+      requiresApproval: plan.requiresApproval,
+      approved: plan.approved,
+      dryRun: plan.dryRun,
+      liveMode: plan.liveMode,
+      args: plan.args,
+      resultData: result?.data ?? {},
+      policyDecision: plan.policyDecision,
+      policyReasons: plan.policyReasons,
+      blockedReason: plan.blockedReason,
+    };
+  });
+  const policyDecisions = toolEvidence.map((item) => ({
+    id: `${item.planId}-policy`,
+    toolName: item.toolName,
+    status: viewText(viewRecord(item.policyDecision), ["status"], item.planStatus),
+    riskLevel: item.riskLevel,
+    requiresApproval: item.requiresApproval,
+    dryRun: item.dryRun,
+    liveMode: item.liveMode,
+    blockedReason: item.blockedReason,
+    policyReasons: item.policyReasons,
+    detail: item.policyReasons.join(" "),
+  }));
+  const qaFindings = [
+    {
+      label: "Supervisor approval policy",
+      status: conversation.reviewDecision ? "Watch" : "Pass",
+      detail: conversation.reviewDecision?.reason ?? "No supervisor approval required in mock state.",
+    },
+  ];
 
   return {
     ...conversation,
@@ -1133,6 +1604,12 @@ function toConversationView(conversation: Conversation): ConversationView {
     customerContext: contactContext(contact),
     decisionTrail: decisionTrail(conversation),
     aiDecisionTrail: decisionTrail(conversation),
+    toolPlans,
+    toolResults,
+    toolEvidence,
+    policyDecisions,
+    policyChecks: policyDecisions,
+    toolPolicyDecisions: policyDecisions,
     channelProvider: "Mock inbox",
     hitlStatus: conversation.reviewDecision ? "Needs approval" : "Auto-sent",
     sendStatus:
@@ -1145,13 +1622,9 @@ function toConversationView(conversation: Conversation): ConversationView {
             : "Drafted",
     complianceStatus: conversation.reviewDecision ? "Needs review" : "Pass",
     knowledgeContext: knowledgeForConversation(conversation),
-    qaCompliance: [
-      {
-        label: "Supervisor approval policy",
-        status: conversation.reviewDecision ? "Watch" : "Pass",
-        detail: conversation.reviewDecision?.reason ?? "No supervisor approval required in mock state.",
-      },
-    ],
+    qaCompliance: qaFindings,
+    qaFindings,
+    qa_findings: qaFindings,
     messages: conversation.messages.map((message) => ({
       ...message,
       sender: message.senderName,
@@ -1602,6 +2075,375 @@ function previewToolViews(): ToolView[] {
       ),
     },
   ];
+}
+
+function policyReasonsForTool(
+  row: ViewRecord,
+  policyDecision: ViewRecord = {},
+): string[] {
+  return uniqueStrings([
+    ...viewStringArray(row, ["policy_reasons", "policyReasons", "reasons"]),
+    ...viewStringArray(policyDecision, [
+      "policy_reasons",
+      "policyReasons",
+      "reasons",
+    ]),
+  ]);
+}
+
+function toToolManifestView(row: ViewRecord): ViewRecord {
+  const toolName = viewText(
+    row,
+    ["tool_name", "toolName", "tool", "name"],
+    "unknown.tool",
+  );
+  const provider = viewText(row, ["provider", "system"], "Agent Studio");
+  const skillName = viewText(
+    row,
+    ["skill_name", "skillName", "skill", "category"],
+    "agent-studio",
+  );
+  const mode = viewText(row, ["mode", "execution_mode", "executionMode"], "read");
+  const riskLevel = titleCase(viewText(row, ["risk_level", "riskLevel", "risk"], "medium"));
+  const requiresApproval = viewBoolean(row, [
+    "requires_approval",
+    "requiresApproval",
+  ]);
+  const enabled = viewBoolean(row, ["enabled"], true);
+  const dryRunDefault = viewBoolean(row, [
+    "dry_run_default",
+    "dryRunDefault",
+    "dry_run",
+    "dryRun",
+  ]);
+  const inputSchema = viewNestedRecord(row, ["input_schema", "inputSchema", "schema"]);
+  const policyDecision = viewNestedRecord(row, [
+    "policy_decision",
+    "policyDecision",
+  ]);
+  const policyReasons = policyReasonsForTool(row, policyDecision);
+
+  return {
+    ...row,
+    id: viewText(row, ["id"], `tool-${toolName}`),
+    name: toolName,
+    label: viewText(row, ["label", "display_name", "displayName"], titleCase(toolName)),
+    description: viewText(
+      row,
+      ["description", "detail"],
+      `${toolName} is exposed through Agent Studio tool policy.`,
+    ),
+    tool: toolName,
+    toolName,
+    provider,
+    system: provider,
+    skillName,
+    mode: titleCase(mode),
+    modeRaw: mode,
+    risk: riskLevel,
+    riskLevel,
+    allowedAgents: viewStringArray(row, ["allowed_agents", "allowedAgents"]),
+    requiresApproval,
+    approval: requiresApproval ? "Required" : "Not required",
+    enabled,
+    status: enabled ? "Available" : "Disabled",
+    health: enabled ? "Available" : "Disabled",
+    dryRun: dryRunDefault,
+    dryRunDefault,
+    liveMode: dryRunDefault ? "Dry-run default" : "Live when policy allows",
+    boundary: "Agent Studio server-side adapter",
+    policyDecision,
+    policyReasons:
+      policyReasons.length > 0
+        ? policyReasons
+        : [
+            requiresApproval
+              ? "Write or customer-facing tool remains approval-gated."
+              : "Read tool remains policy-wrapped by Agent Studio.",
+          ],
+    inputSchema,
+    inputSchemaJson: jsonPreview(inputSchema),
+    samplePayload: jsonPreview({ tool: toolName, args: inputSchema }),
+    payload: jsonPreview({ tool: toolName, args: inputSchema }),
+    source: "agent-studio",
+  };
+}
+
+function previewToolManifestViews(): ViewRecord[] {
+  return [...previewToolViews(), ...mockMcpTools.map(toToolView)].map((tool) =>
+    toToolManifestView({
+      ...tool,
+      tool_name: viewText(tool, ["tool", "name"], "unknown.tool"),
+      provider: viewText(tool, ["system", "provider"], "Agent Studio"),
+      skill_name: viewText(tool, ["team", "owner"], "agent-studio"),
+      mode: viewText(tool, ["mode"], tool.requiresApproval ? "write" : "read"),
+      risk_level: tool.requiresApproval ? "medium" : "low",
+      requires_approval: tool.requiresApproval,
+      enabled: viewText(tool, ["status"], "available") !== "disabled",
+      dry_run_default: tool.requiresApproval,
+      input_schema: viewRecord(
+        tool.requiresApproval
+          ? {
+              approved: "boolean",
+              supervisor_id: "string",
+              conversation_id: "string",
+            }
+          : {
+              conversation_id: "string",
+              query: "string",
+            },
+      ),
+      policy_reasons: tool.requiresApproval
+        ? [
+            "Preview fallback keeps write and customer-facing tools approval-gated.",
+            "Dry-run remains default until Agent Studio provider writes are enabled.",
+          ]
+        : ["Preview fallback allows read-only context tools through Agent Studio."],
+    }));
+}
+
+function toSkillDefinitionView(row: ViewRecord): ViewRecord {
+  const name = viewText(row, ["name", "skill_name", "skillName"], "unnamed_skill");
+  const riskLevel = titleCase(viewText(row, ["risk_level", "riskLevel", "risk"], "low"));
+  const requiresModel = viewBoolean(row, ["requires_model", "requiresModel"]);
+  const requiresTools = viewBoolean(row, ["requires_tools", "requiresTools"]);
+  const allowedAgents = viewStringArray(row, ["allowed_agents", "allowedAgents", "agents"]);
+  const requiredTools = viewStringArray(row, [
+    "required_tools",
+    "requiredTools",
+    "allowed_tools",
+    "allowedTools",
+    "tools",
+  ]);
+  const policyReasons = uniqueStrings([
+    ...viewStringArray(row, ["policy_reasons", "policyReasons", "approvalRules"]),
+    riskLevel === "High"
+      ? "High-risk skills stay supervisor-visible and approval-aware."
+      : "Skill definition is metadata only; provider tools still pass Agent Studio policy.",
+  ]);
+
+  return {
+    ...row,
+    id: viewText(row, ["id"], `skill-${name}`),
+    name,
+    label: titleCase(name),
+    description: viewText(row, ["description", "detail"], "Agent Studio skill definition."),
+    category: titleCase(viewText(row, ["category"], "workflow")),
+    status: viewText(row, ["status"], "Active"),
+    version: viewText(row, ["version"], "registry"),
+    agents: allowedAgents,
+    allowedAgents,
+    allowedTools: requiredTools,
+    requiredTools,
+    requiresModel,
+    requiresTools,
+    requiresApproval: viewBoolean(row, ["requires_approval", "requiresApproval"]),
+    risk: riskLevel,
+    riskLevel,
+    mode: requiresTools
+      ? "Tool-aware skill"
+      : requiresModel
+        ? "Model skill"
+        : "Deterministic skill",
+    dryRun: false,
+    liveMode: requiresTools ? "Tool policy decides dry-run/live" : "No provider execution",
+    policyReasons,
+    drivers: viewStringArray(row, ["drivers", "triggers", "contact_drivers"]),
+    knowledgeDomains: viewStringArray(row, [
+      "knowledge_domains",
+      "knowledgeDomains",
+      "domains",
+    ]),
+    approvalRules: policyReasons,
+    testCases: Number(row.test_cases ?? row.testCases ?? 0),
+    source: "agent-studio",
+  };
+}
+
+function previewSkillDefinitionViews(): ViewRecord[] {
+  const defaults: ViewRecord[] = [
+    {
+      name: "classify_message",
+      description: "Normalize inbound text and identify intent, sentiment, language, and operational risk.",
+      category: "routing",
+      allowed_agents: ["Support Agent", "Sales Agent", "Escalation Agent"],
+      requires_model: true,
+      requires_tools: false,
+      risk_level: "low",
+    },
+    {
+      name: "route_agent",
+      description: "Select the operating lane, AI worker, and supervisor pod from driver and risk.",
+      category: "routing",
+      allowed_agents: ["Sagad Dispatch AI"],
+      requires_model: false,
+      requires_tools: false,
+      risk_level: "low",
+    },
+    {
+      name: "retrieve_knowledge",
+      description: "Search approved KB, SOP, QA, compliance, and escalation sources through Agent Studio retrieval.",
+      category: "knowledge",
+      allowed_agents: ["Support Agent", "Sales Agent", "QA Agent"],
+      requires_model: false,
+      requires_tools: true,
+      risk_level: "low",
+      required_tools: ["knowledge.search"],
+    },
+    {
+      name: "summarize_thread",
+      description: "Produce concise operational context from prior messages without creating policy.",
+      category: "memory",
+      allowed_agents: ["Support Agent", "QA Agent"],
+      requires_model: true,
+      requires_tools: false,
+      risk_level: "low",
+    },
+    {
+      name: "plan_tools",
+      description: "Propose tool plans that must pass policy before dry-run or live execution.",
+      category: "tools",
+      allowed_agents: ["Support Agent", "Sales Agent", "Escalation Agent"],
+      requires_model: true,
+      requires_tools: true,
+      risk_level: "medium",
+      required_tools: ["tool manifest registry"],
+    },
+    {
+      name: "draft_reply",
+      description: "Draft a grounded customer response using selected knowledge and conversation context.",
+      category: "drafting",
+      allowed_agents: ["Support Agent", "Sales Agent"],
+      requires_model: true,
+      requires_tools: false,
+      risk_level: "medium",
+    },
+    {
+      name: "score_confidence",
+      description: "Score grounding, policy safety, risk, and handoff needs before supervisor review.",
+      category: "quality",
+      allowed_agents: ["QA Agent", "Support Agent"],
+      requires_model: true,
+      requires_tools: false,
+      risk_level: "medium",
+    },
+    {
+      name: "apply_guardrails",
+      description: "Apply hard blocks, human-review rules, and policy reasons before send or tool execution.",
+      category: "policy",
+      allowed_agents: ["QA Agent", "Escalation Agent"],
+      requires_model: false,
+      requires_tools: false,
+      risk_level: "high",
+    },
+    {
+      name: "create_approval_item",
+      description: "Create the supervisor approval record for risky replies, write tools, or blocked policy paths.",
+      category: "approval",
+      allowed_agents: ["Sagad Dispatch AI", "Escalation Agent"],
+      requires_model: false,
+      requires_tools: true,
+      risk_level: "high",
+      required_tools: ["approval queue"],
+      requires_approval: true,
+    },
+  ];
+
+  return defaults.map(toSkillDefinitionView);
+}
+
+function toMcpDescriptorView(row: ViewRecord): ViewRecord {
+  const name = viewText(row, ["name", "tool_name", "toolName"], "unknown.tool");
+  const mode = viewText(row, ["mode", "execution_mode", "executionMode"], "read");
+  const riskLevel = titleCase(viewText(row, ["risk_level", "riskLevel", "risk"], "low"));
+  const requiresApproval = viewBoolean(row, [
+    "requires_approval",
+    "requiresApproval",
+  ]);
+  const dryRunDefault = viewBoolean(row, [
+    "dry_run_default",
+    "dryRunDefault",
+    "dry_run",
+    "dryRun",
+  ]);
+  const enabled = viewBoolean(row, ["enabled"], true);
+  const policyWrapped = viewBoolean(row, [
+    "policy_wrapped",
+    "policyWrapped",
+  ], true);
+  const inputSchema = viewNestedRecord(row, ["input_schema", "inputSchema", "schema"]);
+  const policyReasons = uniqueStrings([
+    ...viewStringArray(row, ["policy_reasons", "policyReasons", "reasons"]),
+    policyWrapped
+      ? "Descriptor exposes only the Agent Studio policy-wrapped tool contract."
+      : "Descriptor is not policy-wrapped and should remain hidden from execution.",
+  ]);
+
+  return {
+    ...row,
+    id: viewText(row, ["id"], `mcp-${name}`),
+    name,
+    title: name,
+    description: viewText(
+      row,
+      ["description", "detail"],
+      "Descriptor-only MCP boundary generated by Agent Studio.",
+    ),
+    detail: viewText(
+      row,
+      ["detail", "description"],
+      "Descriptor only. Browser code never calls MCP servers or provider APIs directly.",
+    ),
+    transport: viewText(row, ["transport"], "descriptor"),
+    status: enabled ? "Descriptor ready" : "Disabled",
+    enabled,
+    policyWrapped,
+    mode: titleCase(mode),
+    modeRaw: mode,
+    risk: riskLevel,
+    riskLevel,
+    requiresApproval,
+    approval: requiresApproval ? "Required" : "Not required",
+    dryRun: dryRunDefault,
+    dryRunDefault,
+    liveMode: dryRunDefault ? "Dry-run default" : "Live when policy allows",
+    boundary: viewText(
+      row,
+      ["boundary"],
+      "MCP descriptor -> Agent Studio tool policy -> provider adapter",
+    ),
+    trustLevel: policyWrapped ? "Policy-wrapped" : "Descriptor only",
+    toolsCount: 1,
+    resourcesCount: Number(row.resources_count ?? row.resourcesCount ?? 0),
+    promptsCount: Number(row.prompts_count ?? row.promptsCount ?? 0),
+    tools: [name],
+    allowedAgents: viewStringArray(row, ["allowed_agents", "allowedAgents"]),
+    allowedSkills: viewStringArray(row, ["allowed_skills", "allowedSkills", "skill_name", "skillName"]),
+    policyReasons,
+    inputSchema,
+    inputSchemaJson: jsonPreview(inputSchema),
+    source: "agent-studio",
+  };
+}
+
+function previewMcpDescriptorViews(): ViewRecord[] {
+  return previewToolManifestViews()
+    .filter((tool) => viewBoolean(tool, ["enabled"], true))
+    .map((tool) =>
+      toMcpDescriptorView({
+        name: viewText(tool, ["toolName", "tool", "name"], "unknown.tool"),
+        description: viewText(tool, ["description"], ""),
+        mode: viewText(tool, ["modeRaw", "mode"], "read"),
+        risk_level: viewText(tool, ["riskLevel", "risk"], "low").toLowerCase(),
+        requires_approval: viewBoolean(tool, ["requiresApproval"]),
+        dry_run_default: viewBoolean(tool, ["dryRunDefault", "dryRun"]),
+        enabled: true,
+        policy_wrapped: true,
+        input_schema: viewNestedRecord(tool, ["inputSchema", "input_schema"]),
+        policy_reasons: viewStringArray(tool, ["policyReasons", "policy_reasons"]),
+        skill_name: viewText(tool, ["skillName"], "agent-studio"),
+      }),
+    );
 }
 
 // TODO: Replace with real fetch from Agent Studio once API is available, and remove mockConversations from the lane and queue health lists.
@@ -2201,78 +3043,34 @@ export async function getSopRefs(): Promise<SopView[]> {
   return getSopReferences();
 }
 
-export async function getMcpTools(): Promise<ToolView[]> {
-  return clone([...previewToolViews(), ...mockMcpTools.map(toToolView)]);
+export async function getMcpTools(): Promise<ViewRecord[]> {
+  const result = await fetchAgentStudioToolManifests();
+  const rows =
+    result.data?.map(toToolManifestView) ?? previewToolManifestViews();
+
+  return clone(
+    rows.map((row) => ({
+      ...row,
+      connectionStatus: result.status,
+      connectionDetail: result.detail ?? null,
+      source: result.status === "connected" ? "agent-studio" : "preview",
+    })),
+  );
 }
 
 export async function getSkills(): Promise<ViewRecord[]> {
-  return clone([
-    {
-      id: "skill-refund-resolver",
-      name: "Refund Resolver",
-      description: "Checks order context, refund SOP, sale-item exceptions, and drafts a supervisor-safe response.",
-      status: "Active",
-      version: "v3",
-      agents: ["Support Agent"],
-      drivers: ["Refund policy", "Return request"],
-      knowledgeDomains: ["Refund SOP", "Sales Policy", "Exception Rules"],
-      allowedTools: ["crm.lookup_contact", "knowledge.search", "chatwoot.draft_reply"],
-      approvalRules: ["Sale item", "Refund over threshold", "Policy confidence below 80%", "Angry customer"],
-      testCases: 8,
-    },
-    {
-      id: "skill-order-status",
-      name: "Order Status Lookup",
-      description: "Finds order status, carrier context, and drafts informational replies without promising compensation.",
-      status: "Active",
-      version: "v1",
-      agents: ["Support Agent"],
-      drivers: ["Order status", "Delivery issue"],
-      knowledgeDomains: ["Shipping FAQ", "Carrier Escalation"],
-      allowedTools: ["crm.lookup_contact", "knowledge.search", "chatwoot.draft_reply"],
-      approvalRules: ["Failed carrier lookup", "Compensation request"],
-      testCases: 5,
-    },
-    {
-      id: "skill-sales-sizing",
-      name: "Sales Sizing Assistant",
-      description: "Uses product guidance and CRM history to answer fit, exchange, and purchase-readiness questions.",
-      status: "Active",
-      version: "v2",
-      agents: ["Sales Agent"],
-      drivers: ["Sales sizing questions", "Pricing question"],
-      knowledgeDomains: ["Product Sizing", "Exchange Policy"],
-      allowedTools: ["knowledge.search", "crm.lookup_contact", "chatwoot.draft_reply"],
-      approvalRules: ["Discount request", "Policy exception"],
-      testCases: 6,
-    },
-    {
-      id: "skill-angry-customer",
-      name: "Angry Customer De-escalation",
-      description: "Acknowledges frustration, avoids promises, and routes high-risk compensation requests to a supervisor.",
-      status: "Draft",
-      version: "v0.4",
-      agents: ["Escalation Agent", "Support Agent"],
-      drivers: ["Angry customer escalation"],
-      knowledgeDomains: ["Escalation Rules", "Brand Tone Safety"],
-      allowedTools: ["knowledge.search", "chatwoot.draft_reply"],
-      approvalRules: ["Always approval-gated"],
-      testCases: 4,
-    },
-    {
-      id: "skill-account-verification",
-      name: "Account Verification",
-      description: "Verifies account metadata and asks for missing non-sensitive details before agent action.",
-      status: "Planned",
-      version: "v0.1",
-      agents: ["Support Agent"],
-      drivers: ["Account verification"],
-      knowledgeDomains: ["Account SOP", "PII Redaction"],
-      allowedTools: ["crm.lookup_contact"],
-      approvalRules: ["PII ambiguity", "Account mismatch"],
-      testCases: 2,
-    },
-  ]);
+  const result = await fetchAgentStudioSkills();
+  const rows =
+    result.data?.map(toSkillDefinitionView) ?? previewSkillDefinitionViews();
+
+  return clone(
+    rows.map((row) => ({
+      ...row,
+      connectionStatus: result.status,
+      connectionDetail: result.detail ?? null,
+      source: result.status === "connected" ? "agent-studio" : "preview",
+    })),
+  );
 }
 
 export async function getGraphs(): Promise<ViewRecord[]> {
@@ -2319,56 +3117,18 @@ export async function getGraphs(): Promise<ViewRecord[]> {
 }
 
 export async function getMcpServers(): Promise<ViewRecord[]> {
-  return clone([
-    {
-      id: "mcp-google-drive",
-      name: "Google Drive MCP",
-      transport: "planned",
-      status: "Planned",
-      authMode: "oauth",
-      trustLevel: "Internal",
-      toolsCount: 2,
-      resourcesCount: 2,
-      promptsCount: 0,
-      allowedAgents: ["Support Agent", "QA Agent"],
-      allowedSkills: ["Refund Resolver", "Order Status Lookup"],
-      detail: "Roadmap visibility only. File search must stay behind Agent Studio.",
-      tools: ["search_files", "get_file"],
-      resources: ["files", "folders"],
-    },
-    {
-      id: "mcp-notion",
-      name: "Notion MCP",
-      transport: "planned",
-      status: "Testing",
-      authMode: "api-key",
-      trustLevel: "Sandbox",
-      toolsCount: 2,
-      resourcesCount: 2,
-      promptsCount: 1,
-      allowedAgents: ["QA Agent"],
-      allowedSkills: ["Policy Review"],
-      detail: "Sandbox only. Prompts are importable templates, not automatically active production prompts.",
-      tools: ["query_database", "retrieve_page"],
-      resources: ["pages", "databases"],
-    },
-    {
-      id: "mcp-internal-crm",
-      name: "Internal CRM MCP",
-      transport: "planned",
-      status: "Planned",
-      authMode: "service-account",
-      trustLevel: "Production",
-      toolsCount: 0,
-      resourcesCount: 0,
-      promptsCount: 0,
-      allowedAgents: ["Support Agent"],
-      allowedSkills: ["Account Verification"],
-      detail: "Not connected in public preview. Use native Agent Studio CRM adapters today.",
-      tools: [],
-      resources: [],
-    },
-  ]);
+  const result = await fetchAgentStudioMcpDescriptors();
+  const rows =
+    result.data?.map(toMcpDescriptorView) ?? previewMcpDescriptorViews();
+
+  return clone(
+    rows.map((row) => ({
+      ...row,
+      connectionStatus: result.status,
+      connectionDetail: result.detail ?? null,
+      source: result.status === "connected" ? "agent-studio" : "preview",
+    })),
+  );
 }
 
 export async function getAgentRunTraces(): Promise<ViewRecord[]> {

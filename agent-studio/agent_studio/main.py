@@ -27,6 +27,7 @@ from agent_studio.integration_config import (
 )
 from agent_studio.ingestion import KnowledgeIngestionService, build_knowledge_ingestion_store
 from agent_studio.memory_workflow import memory_items_from_record
+from agent_studio.mcp_gateway import build_mcp_descriptors
 from agent_studio.realtime import realtime_manager, verify_realtime_token
 from agent_studio.retrieval import retriever
 from agent_studio.schemas import (
@@ -63,7 +64,10 @@ from agent_studio.schemas import (
     ToolPlan,
     ToolResult,
 )
+from agent_studio.skill_registry import list_skill_definitions
 from agent_studio.store import StoreContext, store
+from agent_studio.tool_manifests import ToolManifestRegistry
+from agent_studio.tool_policy import ToolPolicyContext, ToolPolicyDecision, evaluate_tool_policy
 from agent_studio.twenty import TwentyAdapter, twenty_status
 
 
@@ -81,6 +85,7 @@ knowledge_ingestion_service = KnowledgeIngestionService(
     get_settings(),
     runtime_retriever=retriever,
 )
+tool_manifest_registry = ToolManifestRegistry()
 
 # Populated by the Sprint 2 graph/retrieval workflow when those state fields exist.
 _SPRINT2_CONVERSATION_STATE_FIELDS = (
@@ -399,6 +404,140 @@ def _chatwoot_tool_payload(result: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _policy_agent_name(record: ConversationRecord | None = None) -> str:
+    if record and record.selected_agent:
+        return record.selected_agent
+    return "general_support"
+
+
+def _policy_metadata(
+    *,
+    decision: ToolPolicyDecision,
+    approved: bool,
+    supervisor_id: str | None,
+    risk_level: str,
+) -> dict[str, object]:
+    return {
+        "approval_gate": "supervisor_approval" if decision.requires_approval else "none",
+        "requires_approval": decision.requires_approval,
+        "approved": approved,
+        "supervisor_id": supervisor_id,
+        "risk_level": risk_level,
+        "allowed": decision.allowed,
+        "dry_run": decision.dry_run,
+        "blocked_reason": decision.blocked_reason,
+        "policy_reasons": list(decision.policy_reasons),
+    }
+
+
+def _attach_policy_metadata(
+    plan: ToolPlan,
+    result: ToolResult,
+    *,
+    decision: ToolPolicyDecision,
+    approved: bool,
+    supervisor_id: str | None,
+    risk_level: str,
+) -> tuple[ToolPlan, ToolResult]:
+    metadata = _policy_metadata(
+        decision=decision,
+        approved=approved,
+        supervisor_id=supervisor_id,
+        risk_level=risk_level,
+    )
+    decision_payload = decision.model_dump(mode="json")
+    plan.requires_approval = decision.requires_approval
+    plan.approved = approved
+    plan.dry_run = decision.dry_run
+    plan.args = {
+        **plan.args,
+        "policy_metadata": metadata,
+        "policy_decision": decision_payload,
+    }
+    result.data = {
+        **result.data,
+        "policy_metadata": metadata,
+        "policy_decision": decision_payload,
+    }
+    return plan, result
+
+
+def _blocked_policy_tool_result(
+    *,
+    tool_name: str,
+    action: str,
+    args: dict[str, object],
+    decision: ToolPolicyDecision,
+    approved: bool,
+    supervisor_id: str | None,
+    risk_level: str,
+) -> tuple[ToolPlan, ToolResult]:
+    manifest = tool_manifest_registry.get_manifest(tool_name)
+    plan = ToolPlan(
+        provider=manifest.provider,
+        tool_name=tool_name,
+        action=action,
+        risk_level=risk_level,  # type: ignore[arg-type]
+        requires_approval=decision.requires_approval,
+        approved=approved,
+        dry_run=True,
+        args=args,
+    )
+    result = ToolResult(
+        plan_id=plan.id,
+        provider=manifest.provider,
+        tool_name=tool_name,
+        status="blocked",
+        detail=decision.blocked_reason or "Tool blocked by Agent Studio policy.",
+        data={},
+    )
+    return _attach_policy_metadata(
+        plan,
+        result,
+        decision=decision,
+        approved=approved,
+        supervisor_id=supervisor_id,
+        risk_level=risk_level,
+    )
+
+
+def _chatwoot_policy_context(
+    settings: Settings,
+    record: ConversationRecord,
+    *,
+    approved: bool,
+    risk_level: str | None = None,
+) -> ToolPolicyContext:
+    return ToolPolicyContext(
+        selected_agent=_policy_agent_name(record),
+        conversation_risk=(risk_level or record.risk_level),  # type: ignore[arg-type]
+        approved=approved,
+        autonomous=False,
+        provider_enabled=True,
+        provider_configured=settings.chatwoot_configured,
+        provider_dry_run=settings.chatwoot_dry_run,
+        provider_writes_enabled=settings.chatwoot_send_enabled,
+    )
+
+
+def _twenty_policy_context(
+    settings: Settings,
+    *,
+    approved: bool,
+    risk_level: str = "medium",
+) -> ToolPolicyContext:
+    return ToolPolicyContext(
+        selected_agent="sales_agent",
+        conversation_risk=risk_level,  # type: ignore[arg-type]
+        approved=approved,
+        autonomous=False,
+        provider_enabled=settings.twenty_enabled,
+        provider_configured=settings.twenty_configured,
+        provider_dry_run=settings.twenty_dry_run,
+        provider_writes_enabled=settings.twenty_allow_writes,
+    )
+
+
 def _chatwoot_send_tool_result(
     record: ConversationRecord,
     result: dict[str, object],
@@ -584,6 +723,45 @@ def health_ready() -> dict[str, object]:
         "database_detail": database_detail,
         "knowledge_records": len(retriever.records),
     }
+
+
+@app.get("/skills")
+def skills(
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> dict[str, list[dict[str, object]]]:
+    _verify_internal_secret(x_sagad_internal_secret)
+    return {
+        "skills": [
+            skill.model_dump(mode="json")
+            for skill in list_skill_definitions()
+        ],
+    }
+
+
+@app.get("/tools/manifests")
+def tool_manifests(
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> dict[str, list[dict[str, object]]]:
+    _verify_internal_secret(x_sagad_internal_secret)
+    return {
+        "manifests": [
+            manifest.model_dump(mode="json")
+            for manifest in tool_manifest_registry.list_manifests()
+        ],
+    }
+
+
+@app.get("/mcp/descriptors")
+def mcp_descriptors(
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> dict[str, list[dict[str, object]]]:
+    _verify_internal_secret(x_sagad_internal_secret)
+    descriptors: list[dict[str, object]] = []
+    for descriptor in build_mcp_descriptors(tool_manifest_registry.list_manifests()):
+        payload = descriptor.model_dump(mode="json")
+        payload["policy_wrapped"] = descriptor.policy_wrapped
+        descriptors.append(payload)
+    return {"descriptors": descriptors}
 
 
 @app.get("/integrations", response_model=IntegrationListResponse)
@@ -1282,13 +1460,50 @@ async def resolve_chatwoot_conversation(
         actor_type="user",
         actor_id=context.user_id,
     )
-    result = await resolve_conversation(
-        settings=settings,
-        chatwoot_conversation_id=record.chatwoot_conversation_id,
-        contact_identifier=source_id,
-        inbox_identifier=inbox_identifier,
+    policy_decision = evaluate_tool_policy(
+        "chatwoot.conversations.resolve",
+        _chatwoot_policy_context(
+            settings,
+            record,
+            approved=True,
+            risk_level="medium",
+        ),
+        registry=tool_manifest_registry,
     )
-    plan, tool_result = _chatwoot_resolve_tool_result(record, result)
+    if policy_decision.allowed:
+        result = await resolve_conversation(
+            settings=settings,
+            chatwoot_conversation_id=record.chatwoot_conversation_id,
+            contact_identifier=source_id,
+            inbox_identifier=inbox_identifier,
+        )
+        plan, tool_result = _chatwoot_resolve_tool_result(record, result)
+        plan, tool_result = _attach_policy_metadata(
+            plan,
+            tool_result,
+            decision=policy_decision,
+            approved=True,
+            supervisor_id=context.user_id,
+            risk_level="medium",
+        )
+    else:
+        result = {
+            "status": "blocked",
+            "detail": policy_decision.blocked_reason or "Resolve blocked by policy.",
+            "error_type": "policy_blocked",
+        }
+        plan, tool_result = _blocked_policy_tool_result(
+            tool_name="chatwoot.conversations.resolve",
+            action="resolve conversation",
+            args={
+                "chatwoot_conversation_id": record.chatwoot_conversation_id,
+                "source_id": source_id,
+            },
+            decision=policy_decision,
+            approved=True,
+            supervisor_id=context.user_id,
+            risk_level="medium",
+        )
     if all(existing.id != plan.id for existing in record.tool_plans):
         record.tool_plans.append(plan)
     if all(existing.id != tool_result.id for existing in record.tool_results):
@@ -1313,7 +1528,10 @@ async def resolve_chatwoot_conversation(
         summary=str(result.get("detail", "Chatwoot resolve completed.")),
         status_value="success" if result["status"] == "resolved" else "error",
         conversation_id=saved.id,
-        payload=_chatwoot_tool_payload(result),
+        payload={
+            **_chatwoot_tool_payload(result),
+            "policy_metadata": tool_result.data.get("policy_metadata"),
+        },
         context=context,
         actor_type="user",
         actor_id=context.user_id,
@@ -1416,12 +1634,49 @@ async def approve_send(
         actor_type="user",
         actor_id=request.supervisor_id,
     )
-    result = await send_approved_reply(
-        settings=configured_settings(get_settings(), context),
-        chatwoot_conversation_id=record.chatwoot_conversation_id,
-        content=content,
+    settings = configured_settings(get_settings(), context)
+    policy_decision = evaluate_tool_policy(
+        "chatwoot.messages.send_approved",
+        _chatwoot_policy_context(
+            settings,
+            record,
+            approved=True,
+        ),
+        registry=tool_manifest_registry,
     )
-    plan, tool_result = _chatwoot_send_tool_result(record, result, content=content)
+    if policy_decision.allowed:
+        result = await send_approved_reply(
+            settings=settings,
+            chatwoot_conversation_id=record.chatwoot_conversation_id,
+            content=content,
+        )
+        plan, tool_result = _chatwoot_send_tool_result(record, result, content=content)
+        plan, tool_result = _attach_policy_metadata(
+            plan,
+            tool_result,
+            decision=policy_decision,
+            approved=True,
+            supervisor_id=request.supervisor_id,
+            risk_level=record.risk_level,
+        )
+    else:
+        result = {
+            "status": "blocked",
+            "detail": policy_decision.blocked_reason or "Send blocked by policy.",
+            "error_type": "policy_blocked",
+        }
+        plan, tool_result = _blocked_policy_tool_result(
+            tool_name="chatwoot.messages.send_approved",
+            action="send supervisor-approved reply",
+            args={
+                "chatwoot_conversation_id": record.chatwoot_conversation_id,
+                "content_preview": content[:160],
+            },
+            decision=policy_decision,
+            approved=True,
+            supervisor_id=request.supervisor_id,
+            risk_level=record.risk_level,
+        )
     record.draft_reply = content
     record.approval_status = "sent" if result["status"] in {"sent", "dry_run"} else "send_failed"
     record.send_status = result["status"]
@@ -1494,6 +1749,7 @@ async def approve_send(
             "approval_status": saved.approval_status,
             "tool_result_id": tool_result.id,
             "provider_result": _chatwoot_tool_payload(result),
+            "policy_metadata": tool_result.data.get("policy_metadata"),
         },
         context=context,
         actor_type="user",
@@ -1520,10 +1776,43 @@ async def crm_lookup_contact(
 ) -> CrmToolResponse:
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
-    crm_context, plan, result = await TwentyAdapter(configured_settings(get_settings(), context)).lookup_contact(
-        request.query,
-        conversation_id=request.conversation_id,
+    settings = configured_settings(get_settings(), context)
+    policy_decision = evaluate_tool_policy(
+        "crm.lookup_contact",
+        _twenty_policy_context(
+            settings,
+            approved=request.approved,
+            risk_level="low",
+        ),
+        registry=tool_manifest_registry,
     )
+    if policy_decision.allowed:
+        crm_context, plan, result = await TwentyAdapter(settings).lookup_contact(
+            request.query,
+            conversation_id=request.conversation_id,
+        )
+        plan, result = _attach_policy_metadata(
+            plan,
+            result,
+            decision=policy_decision,
+            approved=request.approved,
+            supervisor_id=request.supervisor_id,
+            risk_level="low",
+        )
+    else:
+        crm_context = None
+        plan, result = _blocked_policy_tool_result(
+            tool_name="crm.lookup_contact",
+            action="Lookup contact in external Twenty CRM.",
+            args={
+                "query": request.query,
+                "conversation_id": request.conversation_id,
+            },
+            decision=policy_decision,
+            approved=request.approved,
+            supervisor_id=request.supervisor_id,
+            risk_level="low",
+        )
     store.record_tool_execution(
         plan,
         result,
@@ -1545,12 +1834,41 @@ async def crm_create_note(
     _require_supervisor_approval(request.approved)
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
-    plan, result = await TwentyAdapter(configured_settings(get_settings(), context)).create_note(
-        request.contact_id,
-        request.note,
-        conversation_id=request.conversation_id,
-        approved=request.approved,
+    settings = configured_settings(get_settings(), context)
+    policy_decision = evaluate_tool_policy(
+        "crm.create_note",
+        _twenty_policy_context(settings, approved=request.approved),
+        registry=tool_manifest_registry,
     )
+    if policy_decision.allowed:
+        plan, result = await TwentyAdapter(settings).create_note(
+            request.contact_id,
+            request.note,
+            conversation_id=request.conversation_id,
+            approved=request.approved,
+        )
+        plan, result = _attach_policy_metadata(
+            plan,
+            result,
+            decision=policy_decision,
+            approved=request.approved,
+            supervisor_id=request.supervisor_id,
+            risk_level="medium",
+        )
+    else:
+        plan, result = _blocked_policy_tool_result(
+            tool_name="crm.create_note",
+            action="Create a note in external Twenty CRM.",
+            args={
+                "contact_id": request.contact_id,
+                "note": request.note,
+                "conversation_id": request.conversation_id,
+            },
+            decision=policy_decision,
+            approved=request.approved,
+            supervisor_id=request.supervisor_id,
+            risk_level="medium",
+        )
     store.record_tool_execution(
         plan,
         result,
@@ -1571,14 +1889,45 @@ async def crm_create_task(
     _require_supervisor_approval(request.approved)
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
-    plan, result = await TwentyAdapter(configured_settings(get_settings(), context)).create_task(
-        request.contact_id,
-        request.title,
-        due_at=request.due_at,
-        owner_id=request.owner_id,
-        conversation_id=request.conversation_id,
-        approved=request.approved,
+    settings = configured_settings(get_settings(), context)
+    policy_decision = evaluate_tool_policy(
+        "crm.create_task",
+        _twenty_policy_context(settings, approved=request.approved),
+        registry=tool_manifest_registry,
     )
+    if policy_decision.allowed:
+        plan, result = await TwentyAdapter(settings).create_task(
+            request.contact_id,
+            request.title,
+            due_at=request.due_at,
+            owner_id=request.owner_id,
+            conversation_id=request.conversation_id,
+            approved=request.approved,
+        )
+        plan, result = _attach_policy_metadata(
+            plan,
+            result,
+            decision=policy_decision,
+            approved=request.approved,
+            supervisor_id=request.supervisor_id,
+            risk_level="medium",
+        )
+    else:
+        plan, result = _blocked_policy_tool_result(
+            tool_name="crm.create_task",
+            action="Create a task in external Twenty CRM.",
+            args={
+                "contact_id": request.contact_id,
+                "title": request.title,
+                "due_at": request.due_at.isoformat() if request.due_at else None,
+                "owner_id": request.owner_id,
+                "conversation_id": request.conversation_id,
+            },
+            decision=policy_decision,
+            approved=request.approved,
+            supervisor_id=request.supervisor_id,
+            risk_level="medium",
+        )
     store.record_tool_execution(
         plan,
         result,
@@ -1599,12 +1948,45 @@ async def crm_update_lead_stage(
     _require_supervisor_approval(request.approved)
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
-    plan, result = await TwentyAdapter(configured_settings(get_settings(), context)).update_lead_stage(
-        request.contact_id,
-        request.lead_stage,
-        conversation_id=request.conversation_id,
-        approved=request.approved,
+    settings = configured_settings(get_settings(), context)
+    policy_decision = evaluate_tool_policy(
+        "crm.update_lead_stage",
+        _twenty_policy_context(
+            settings,
+            approved=request.approved,
+            risk_level="high",
+        ),
+        registry=tool_manifest_registry,
     )
+    if policy_decision.allowed:
+        plan, result = await TwentyAdapter(settings).update_lead_stage(
+            request.contact_id,
+            request.lead_stage,
+            conversation_id=request.conversation_id,
+            approved=request.approved,
+        )
+        plan, result = _attach_policy_metadata(
+            plan,
+            result,
+            decision=policy_decision,
+            approved=request.approved,
+            supervisor_id=request.supervisor_id,
+            risk_level="high",
+        )
+    else:
+        plan, result = _blocked_policy_tool_result(
+            tool_name="crm.update_lead_stage",
+            action="Update lead stage in external Twenty CRM.",
+            args={
+                "contact_id": request.contact_id,
+                "lead_stage": request.lead_stage,
+                "conversation_id": request.conversation_id,
+            },
+            decision=policy_decision,
+            approved=request.approved,
+            supervisor_id=request.supervisor_id,
+            risk_level="high",
+        )
     store.record_tool_execution(
         plan,
         result,

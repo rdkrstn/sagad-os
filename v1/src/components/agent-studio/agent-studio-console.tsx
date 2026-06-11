@@ -1,7 +1,6 @@
 import {
   Bot,
   BrainCircuit,
-  CheckCircle2,
   GitBranch,
   Network,
   Route,
@@ -21,7 +20,6 @@ import { DataTable } from "@/components/ui/data-table";
 import {
   asArray,
   asRecord,
-  numberOf,
   textOf,
   type LooseRecord,
 } from "@/components/ui/data-access";
@@ -157,6 +155,54 @@ export function AgentStudioRelationshipStrip({
 function listOf(row: LooseRecord, key: string): string[] {
   const value = row[key];
   return Array.isArray(value) ? value.map(String) : [];
+}
+
+function listFrom(row: LooseRecord, keys: string[]): string[] {
+  for (const key of keys) {
+    const value = row[key];
+    if (Array.isArray(value)) return value.map(String);
+    if (typeof value === "string" && value.trim()) {
+      return value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+  }
+
+  return [];
+}
+
+function boolText(
+  row: LooseRecord,
+  keys: string[],
+  trueText: string,
+  falseText: string,
+  fallback = "Unknown",
+) {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "boolean") return value ? trueText : falseText;
+    if (typeof value === "string") {
+      const normalized = value.toLowerCase();
+      if (["true", "yes", "required", "enabled"].includes(normalized)) {
+        return trueText;
+      }
+      if (["false", "no", "not required", "disabled"].includes(normalized)) {
+        return falseText;
+      }
+    }
+  }
+
+  return fallback;
+}
+
+function policyReasons(row: LooseRecord): string[] {
+  return listFrom(row, ["policyReasons", "policy_reasons", "reasons"]);
+}
+
+function schemaKeys(row: LooseRecord): string[] {
+  const schema = asRecord(row.inputSchema ?? row.input_schema ?? row.schema);
+  return Object.keys(schema).slice(0, 4);
 }
 
 function InlineList({ values }: { values: string[] }) {
@@ -303,32 +349,30 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
 
 export function SkillsConsole({ skills }: { skills: unknown }) {
   const rows = asArray(skills).map(asRecord);
+  const toolAware = rows.filter((row) =>
+    boolText(row, ["requiresTools", "requires_tools"], "yes", "no") === "yes",
+  ).length;
+  const modelBacked = rows.filter((row) =>
+    boolText(row, ["requiresModel", "requires_model"], "yes", "no") === "yes",
+  ).length;
 
   return (
     <div className="space-y-3">
       <CatalogIntro
         title="Skills"
-        description="Reusable playbooks that combine instructions, required context, knowledge domains, tools, output format, risk policy, approval rules, and tests."
+        description="Internal Agent Studio capabilities used by graph nodes. Skills can require model reasoning or tool manifests, but provider execution still goes through tool policy."
       />
       <AgentStudioRelationshipStrip active="skill" />
       <section className="grid gap-3 md:grid-cols-4">
-        <MetricCard detail="Published and draft playbooks" icon={BrainCircuit} label="Skills" value={rows.length} />
-        <MetricCard detail="Mapped from contact drivers" icon={GitBranch} label="Driver links" value={rows.reduce((sum, row) => sum + listOf(row, "drivers").length, 0)} />
-        <MetricCard detail="Approval rules declared" icon={ShieldCheck} label="Policy rules" value={rows.reduce((sum, row) => sum + listOf(row, "approvalRules").length, 0)} />
-        <MetricCard detail="Preview test inventory" icon={CheckCircle2} label="Test cases" value={rows.reduce((sum, row) => sum + numberOf(row, ["testCases"]), 0)} />
+        <MetricCard detail="Registry definitions" icon={BrainCircuit} label="Skills" value={rows.length} />
+        <MetricCard detail="Can request tool manifests" icon={Wrench} label="Tool-aware" value={toolAware} />
+        <MetricCard detail="Use model reasoning" icon={Bot} label="Model-backed" value={modelBacked} />
+        <MetricCard detail="Policy notes declared" icon={ShieldCheck} label="Policy rules" value={rows.reduce((sum, row) => sum + policyReasons(row).length, 0)} />
       </section>
       <div className="grid gap-3 xl:grid-cols-2">
         {rows.map((row) => {
           const name = textOf(row, ["name"], "Skill");
-          const lowerName = name.toLowerCase();
-          const isSales = lowerName.includes("sales") || lowerName.includes("sizing");
-          const isEscalation = lowerName.includes("angry") || lowerName.includes("escalation");
-          const workflow = isEscalation
-            ? "Escalation Workflow"
-            : isSales
-              ? "Lead Qualification Workflow"
-              : "Support Resolution Workflow";
-          const graph = isSales ? "Sales Qualification Graph" : "Default Support Graph v0.1.4";
+          const requiredTools = listFrom(row, ["requiredTools", "required_tools", "allowedTools", "tools"]);
 
           return (
             <Panel
@@ -341,29 +385,45 @@ export function SkillsConsole({ skills }: { skills: unknown }) {
                 <p className="text-sm leading-6 text-muted-foreground">{textOf(row, ["description"], "")}</p>
                 <div className="grid gap-3 text-xs md:grid-cols-2">
                   <div>
-                    <div className="mb-1 font-mono uppercase text-muted-foreground">Triggered by</div>
-                    <InlineList values={listOf(row, "drivers")} />
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Category</div>
+                    <span className="font-semibold text-foreground">{textOf(row, ["category"], "Workflow")}</span>
                   </div>
                   <div>
-                    <div className="mb-1 font-mono uppercase text-muted-foreground">Workflow</div>
-                    <span className="font-semibold text-foreground">{workflow}</span>
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Risk</div>
+                    <span className="font-semibold text-foreground">{textOf(row, ["riskLevel", "risk"], "Low")}</span>
                   </div>
                   <div>
-                    <div className="mb-1 font-mono uppercase text-muted-foreground">Used by</div>
-                    <InlineList values={listOf(row, "agents")} />
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed agents</div>
+                    <InlineList values={listFrom(row, ["allowedAgents", "allowed_agents", "agents"])} />
                   </div>
                   <div>
-                    <div className="mb-1 font-mono uppercase text-muted-foreground">Graph</div>
-                    <span className="font-semibold text-foreground">{graph}</span>
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Mode</div>
+                    <span className="font-semibold text-foreground">{textOf(row, ["mode"], "Skill")}</span>
                   </div>
                   <div>
-                    <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed tools</div>
-                    <InlineList values={listOf(row, "allowedTools")} />
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Model</div>
+                    <span className="font-semibold text-foreground">
+                      {boolText(row, ["requiresModel", "requires_model"], "Required", "Not required")}
+                    </span>
                   </div>
                   <div>
-                    <div className="mb-1 font-mono uppercase text-muted-foreground">Approval rules</div>
-                    <InlineList values={listOf(row, "approvalRules")} />
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Tools</div>
+                    <span className="font-semibold text-foreground">
+                      {boolText(row, ["requiresTools", "requires_tools"], "Required", "Not required")}
+                    </span>
                   </div>
+                  <div>
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Required tools</div>
+                    <InlineList values={requiredTools} />
+                  </div>
+                  <div>
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Dry-run/live</div>
+                    <span className="font-semibold text-foreground">{textOf(row, ["liveMode"], "No provider execution")}</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 font-mono text-xs uppercase text-muted-foreground">Policy reasons</div>
+                  <InlineList values={policyReasons(row)} />
                 </div>
               </div>
             </Panel>
@@ -437,15 +497,27 @@ export function GraphsConsole({ graphs }: { graphs: unknown }) {
 
 export function ToolsConsole({ tools }: { tools: unknown }) {
   const rows = asArray(tools).map(asRecord);
+  const approvalRequired = rows.filter((row) =>
+    boolText(row, ["requiresApproval", "requires_approval"], "yes", "no") === "yes",
+  ).length;
+  const dryRunDefault = rows.filter((row) =>
+    boolText(row, ["dryRun", "dry_run", "dryRunDefault"], "yes", "no") === "yes",
+  ).length;
 
   return (
     <div className="space-y-3">
       <CatalogIntro
         title="Tools"
-        description="Approved callable actions agents can use. Write, send, delete, payment, refund, legal, and customer-facing tools are approval-gated by default."
+        description="Agent Studio tool manifests. The browser reads capability metadata only; execution, credentials, dry-run policy, and provider calls stay server-side."
       />
       <AgentStudioRelationshipStrip active="tools" />
-      <Panel title="Tool Registry" eyebrow="Callable actions" action={<StatusPill tone="warning">Approval-gated writes</StatusPill>}>
+      <section className="grid gap-3 md:grid-cols-4">
+        <MetricCard detail="Loaded from Agent Studio or preview fallback" icon={Wrench} label="Manifests" value={rows.length} />
+        <MetricCard detail="Policy must approve before execution" icon={ShieldCheck} label="Approval required" value={approvalRequired} />
+        <MetricCard detail="Default provider-safe mode" icon={Route} label="Dry-run default" value={dryRunDefault} />
+        <MetricCard detail="Browser never calls providers" icon={Network} label="Boundary" value="Server" />
+      </section>
+      <Panel title="Tool Manifests" eyebrow="Agent Studio policy" action={<StatusPill tone="warning">No browser execution</StatusPill>}>
         <DataTable
           columns={[
             {
@@ -453,17 +525,60 @@ export function ToolsConsole({ tools }: { tools: unknown }) {
               label: "Tool",
               render: (row) => (
                 <div>
-                  <div>{textOf(row, ["tool", "name"], "tool")}</div>
-                  <div className="mt-1 text-xs font-normal text-muted-foreground">{textOf(row, ["description"], "")}</div>
+                  <div>{textOf(row, ["toolName", "tool", "name"], "tool")}</div>
+                  <div className="mt-1 text-xs font-normal text-muted-foreground">
+                    {textOf(row, ["description"], "")}
+                  </div>
                 </div>
               ),
             },
-            { key: "provider", label: "Provider", render: (row) => textOf(row, ["system", "provider"], "Agent Studio") },
-            { key: "relationship", label: "Relationship", render: (row) => toolRelationship(row) },
-            { key: "type", label: "Type", render: (row) => textOf(row, ["mode"], "Server-side read") },
-            { key: "status", label: "Status", render: (row) => <StatusPill status={textOf(row, ["health", "status"], "Preview")}>{textOf(row, ["health", "status"], "Preview")}</StatusPill> },
-            { key: "risk", label: "Risk", render: (row) => Boolean(row.requiresApproval) ? "High" : "Low" },
-            { key: "approval", label: "Approval", render: (row) => Boolean(row.requiresApproval) ? "Required" : "Not required" },
+            {
+              key: "provider",
+              label: "Provider / skill",
+              render: (row) => (
+                <div className="grid gap-1">
+                  <span>{textOf(row, ["provider", "system"], "Agent Studio")}</span>
+                  <span className="text-muted-foreground">
+                    {textOf(row, ["skillName", "skill_name"], toolRelationship(row))}
+                  </span>
+                </div>
+              ),
+            },
+            {
+              key: "mode",
+              label: "Mode",
+              render: (row) => (
+                <div className="grid gap-1">
+                  <StatusPill status={textOf(row, ["mode"], "Read")}>
+                    {textOf(row, ["mode"], "Read")}
+                  </StatusPill>
+                  <span className="text-muted-foreground">
+                    {textOf(row, ["liveMode"], "Policy decides dry-run/live")}
+                  </span>
+                </div>
+              ),
+            },
+            {
+              key: "risk",
+              label: "Risk",
+              render: (row) => textOf(row, ["riskLevel", "risk"], "Low"),
+            },
+            {
+              key: "approval",
+              label: "Approval",
+              render: (row) =>
+                boolText(row, ["requiresApproval", "requires_approval"], "Required", "Not required"),
+            },
+            {
+              key: "policy",
+              label: "Policy reasons",
+              render: (row) => <InlineList values={policyReasons(row).slice(0, 2)} />,
+            },
+            {
+              key: "schema",
+              label: "Input",
+              render: (row) => <InlineList values={schemaKeys(row)} />,
+            },
           ]}
           rows={rows}
         />
@@ -474,44 +589,78 @@ export function ToolsConsole({ tools }: { tools: unknown }) {
 
 export function McpServersConsole({ servers }: { servers: unknown }) {
   const rows = asArray(servers).map(asRecord);
+  const approvalRequired = rows.filter((row) =>
+    boolText(row, ["requiresApproval", "requires_approval"], "yes", "no") === "yes",
+  ).length;
 
   return (
     <div className="space-y-3">
       <CatalogIntro
-        title="MCP Servers"
-        description="External capability servers connected to Sagad. In public preview these are visible as permissioned roadmap records, not browser-direct providers."
+        title="MCP Descriptors"
+        description="Descriptor-only MCP boundary exposed by Agent Studio. Descriptors advertise policy-wrapped capabilities; the browser never calls MCP servers or provider APIs directly."
       />
       <AgentStudioRelationshipStrip active="tools" />
+      <section className="grid gap-3 md:grid-cols-4">
+        <MetricCard detail="Policy-wrapped capability records" icon={Network} label="Descriptors" value={rows.length} />
+        <MetricCard detail="Write or customer-facing tools" icon={ShieldCheck} label="Approval required" value={approvalRequired} />
+        <MetricCard detail="No raw provider credentials" icon={Wrench} label="Boundary" value="Agent Studio" />
+        <MetricCard detail="Descriptor metadata only" icon={GitBranch} label="Execution" value="Server" />
+      </section>
       <div className="grid gap-3 xl:grid-cols-3">
         {rows.map((row) => (
           <Panel
             action={<StatusPill status={textOf(row, ["status"], "Planned")}>{textOf(row, ["status"], "Planned")}</StatusPill>}
             key={textOf(row, ["id"], textOf(row, ["name"], "mcp"))}
-            title={textOf(row, ["name"], "MCP Server")}
+            title={textOf(row, ["name"], "MCP Descriptor")}
             eyebrow={textOf(row, ["transport"], "planned")}
           >
             <div className="space-y-3 p-3">
               <p className="text-sm leading-6 text-muted-foreground">{textOf(row, ["detail"], "")}</p>
-              <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                <div className="border border-border bg-surface-2 p-2"><b>{numberOf(row, ["toolsCount"])}</b><br />Tools</div>
-                <div className="border border-border bg-surface-2 p-2"><b>{numberOf(row, ["resourcesCount"])}</b><br />Resources</div>
-                <div className="border border-border bg-surface-2 p-2"><b>{numberOf(row, ["promptsCount"])}</b><br />Prompts</div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="border border-border bg-surface-2 p-2">
+                  <span className="text-muted-foreground">Mode</span>
+                  <br />
+                  <b>{textOf(row, ["mode"], "Read")}</b>
+                </div>
+                <div className="border border-border bg-surface-2 p-2">
+                  <span className="text-muted-foreground">Risk</span>
+                  <br />
+                  <b>{textOf(row, ["riskLevel", "risk"], "Low")}</b>
+                </div>
+                <div className="border border-border bg-surface-2 p-2">
+                  <span className="text-muted-foreground">Approval</span>
+                  <br />
+                  <b>{boolText(row, ["requiresApproval", "requires_approval"], "Required", "Not required")}</b>
+                </div>
+                <div className="border border-border bg-surface-2 p-2">
+                  <span className="text-muted-foreground">Run mode</span>
+                  <br />
+                  <b>{textOf(row, ["liveMode"], "Policy decides")}</b>
+                </div>
               </div>
               <div className="grid gap-3 text-xs">
                 <div>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Descriptor boundary</div>
+                  <span className="font-semibold text-foreground">{textOf(row, ["boundary"], "Agent Studio policy boundary")}</span>
+                </div>
+                <div>
                   <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed agents</div>
-                  <InlineList values={listOf(row, "allowedAgents")} />
+                  <InlineList values={listFrom(row, ["allowedAgents", "allowed_agents"])} />
                 </div>
                 <div>
                   <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed skills</div>
-                  <InlineList values={listOf(row, "allowedSkills")} />
+                  <InlineList values={listFrom(row, ["allowedSkills", "allowed_skills"])} />
                 </div>
                 <div>
-                  <div className="mb-1 font-mono uppercase text-muted-foreground">Trust boundary</div>
-                  <span className="font-semibold text-foreground">{textOf(row, ["trustLevel"], "Sandbox")}</span>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Input schema</div>
+                  <InlineList values={schemaKeys(row)} />
+                </div>
+                <div>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Policy reasons</div>
+                  <InlineList values={policyReasons(row)} />
                 </div>
               </div>
-              <InlineList values={listOf(row, "tools")} />
+              <InlineList values={listFrom(row, ["tools", "name"])} />
             </div>
           </Panel>
         ))}

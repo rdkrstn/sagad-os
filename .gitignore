@@ -40,6 +40,7 @@ SAGADOS_DESIGN_SYSTEM.md
 SAGAD_OS_PUBLIC_SHIP_REFERENCE.md
 agent-studio/.langgraph_api/
 .agents
+sagad-os-sprints-2-4-files/
 
 # Local screenshots and app state
 .playwright-mcp/

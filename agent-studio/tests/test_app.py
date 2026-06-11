@@ -11,6 +11,16 @@ from agent_studio.store import store
 
 
 client = TestClient(app)
+SECRET_MARKERS = (
+    "api_key",
+    "access_token",
+    "webhook_token",
+    "authorization",
+    "bearer ",
+    "secret-token",
+    "twenty-secret",
+    "runtime-token",
+)
 
 
 def setup_function() -> None:
@@ -58,6 +68,37 @@ def assert_sprint2_retrieval_fields(
     assert isinstance(reasons, list)
     assert reasons
 
+    skill_diagnostic = diagnostic.get("skill_diagnostic")
+    assert isinstance(skill_diagnostic, dict)
+    selected_skills = skill_diagnostic.get("selected_skills")
+    assert isinstance(selected_skills, list)
+    assert "retrieve_knowledge" in selected_skills
+    assert "draft_reply" in selected_skills
+
+
+def assert_no_secret_material(rendered_payload: str) -> None:
+    lowered = rendered_payload.lower()
+    for marker in SECRET_MARKERS:
+        assert marker not in lowered
+
+
+def assert_policy_metadata(
+    tool_result: dict[str, object],
+    *,
+    supervisor_id: str,
+    risk_level: str,
+    approved: bool = True,
+) -> None:
+    data = tool_result["data"]
+    assert isinstance(data, dict)
+    policy_metadata = data.get("policy_metadata")
+    assert isinstance(policy_metadata, dict)
+    assert policy_metadata["approval_gate"] == "supervisor_approval"
+    assert policy_metadata["requires_approval"] is True
+    assert policy_metadata["approved"] is approved
+    assert policy_metadata["supervisor_id"] == supervisor_id
+    assert policy_metadata["risk_level"] == risk_level
+
 
 def test_health() -> None:
     response = client.get("/health")
@@ -66,6 +107,105 @@ def test_health() -> None:
     assert payload["status"] == "healthy"
     assert payload["knowledge_records"] >= 1
     assert payload["twenty_status"]["status"] == "disabled"
+
+
+def test_skills_endpoint_returns_registry_without_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-token")
+    monkeypatch.setenv("TWENTY_API_KEY", "twenty-secret")
+    get_settings.cache_clear()
+
+    response = client.get("/skills")
+
+    assert response.status_code == 200
+    payload = response.json()
+    skills = payload["skills"]
+    assert isinstance(skills, list)
+    assert {
+        "classify_message",
+        "route_agent",
+        "retrieve_knowledge",
+        "draft_reply",
+        "plan_tools",
+    }.issubset({skill["name"] for skill in skills})
+    for skill in skills:
+        assert skill["description"]
+        assert skill["category"]
+        assert skill["risk_level"] in {"low", "medium", "high"}
+        assert "tools" not in skill
+    assert_no_secret_material(response.text)
+
+
+def test_tools_manifests_endpoint_returns_current_manifests_without_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHATWOOT_API_ACCESS_TOKEN", "secret-token")
+    monkeypatch.setenv("TWENTY_API_KEY", "twenty-secret")
+    get_settings.cache_clear()
+
+    response = client.get("/tools/manifests")
+
+    assert response.status_code == 200
+    payload = response.json()
+    manifests = payload["manifests"]
+    assert isinstance(manifests, list)
+    assert {manifest["tool_name"] for manifest in manifests} == {
+        "knowledge.search",
+        "crm.lookup_contact",
+        "crm.create_note",
+        "crm.create_task",
+        "crm.update_lead_stage",
+        "chatwoot.messages.send_approved",
+        "chatwoot.conversations.resolve",
+    }
+    for manifest in manifests:
+        assert manifest["provider"]
+        assert manifest["skill_name"]
+        assert manifest["mode"] in {"read", "write", "dry_run"}
+        assert manifest["risk_level"] in {"low", "medium", "high"}
+        assert isinstance(manifest["input_schema"], dict)
+    assert_no_secret_material(response.text)
+
+
+def test_mcp_descriptors_endpoint_is_descriptor_only_and_does_not_call_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_network(
+        self: httpx.AsyncClient,
+        url: str,
+        **kwargs: object,
+    ) -> httpx.Response:
+        raise AssertionError(f"MCP descriptor endpoint should not call network: {url}")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fail_network)
+    monkeypatch.setattr(httpx.AsyncClient, "post", fail_network)
+
+    response = client.get("/mcp/descriptors")
+
+    assert response.status_code == 200
+    payload = response.json()
+    descriptors = payload["descriptors"]
+    assert isinstance(descriptors, list)
+    assert {descriptor["name"] for descriptor in descriptors} == {
+        "knowledge.search",
+        "crm.lookup_contact",
+        "crm.create_note",
+        "crm.create_task",
+        "crm.update_lead_stage",
+        "chatwoot.messages.send_approved",
+        "chatwoot.conversations.resolve",
+    }
+    for descriptor in descriptors:
+        assert descriptor["enabled"] is True
+        assert descriptor["policy_wrapped"] is True
+        assert isinstance(descriptor["input_schema"], dict)
+        assert "execute" not in descriptor
+        assert "handler" not in descriptor
+    rendered = response.text.lower()
+    assert "base_url" not in rendered
+    assert "target_url" not in rendered
+    assert_no_secret_material(response.text)
 
 
 def test_chatwoot_webhook_creates_approval_conversation() -> None:
@@ -386,6 +526,36 @@ def test_approve_send_uses_dry_run_without_chatwoot_credentials() -> None:
     payload = response.json()
     assert payload["approval_status"] == "sent"
     assert payload["send_status"] == "dry_run"
+
+
+def test_approve_send_records_policy_metadata_in_chatwoot_tool_result() -> None:
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "id": 3901,
+            "content": "I need to cancel and get a refund.",
+            "message_type": "incoming",
+            "conversation": {"id": 390},
+        },
+    ).json()
+
+    response = client.post(
+        f"/conversations/{created['id']}/approve-send",
+        json={"approved": True, "supervisor_id": "qa-lead"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    tool_result = next(
+        result
+        for result in payload["tool_results"]
+        if result["tool_name"] == "chatwoot.messages.send_approved"
+    )
+    assert_policy_metadata(
+        tool_result,
+        supervisor_id="qa-lead",
+        risk_level=created["risk_level"],
+    )
 
 
 def test_approve_send_records_outbound_message_in_same_thread() -> None:
@@ -734,6 +904,63 @@ def test_resolve_conversation_records_successful_chatwoot_result(
     )
 
 
+def test_resolve_conversation_records_policy_metadata_in_chatwoot_tool_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client.put(
+        "/integration-configs/chatwoot",
+        headers={"X-Sagad-Role": "owner"},
+        json={
+            "base_url": "https://chat.example.test",
+            "account_id": "1",
+            "inbox_id": "public-inbox",
+            "api_access_token": "secret-token",
+            "enabled": True,
+            "dry_run": False,
+        },
+    )
+
+    async def mock_post(
+        self: httpx.AsyncClient,
+        url: str,
+        **kwargs: object,
+    ) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"id": 661, "status": "resolved"},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "id": 6611,
+            "content": "You can close this now.",
+            "conversation": {"id": 661, "source_id": "source-661", "status": "open"},
+        },
+    ).json()
+
+    response = client.post(
+        f"/conversations/{created['id']}/resolve",
+        headers={"X-Sagad-Role": "supervisor", "X-Sagad-User-Id": "qa-lead"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    tool_result = next(
+        result
+        for result in payload["tool_results"]
+        if result["tool_name"] == "chatwoot.conversations.resolve"
+    )
+    assert_policy_metadata(
+        tool_result,
+        supervisor_id="qa-lead",
+        risk_level="medium",
+    )
+
+
 def test_resolve_conversation_records_failed_chatwoot_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1071,6 +1298,11 @@ def test_twenty_dry_run_write_does_not_call_network(
     payload = response.json()
     assert payload["result"]["status"] == "dry_run"
     assert payload["plan"]["provider"] == "Twenty CRM"
+    assert_policy_metadata(
+        payload["result"],
+        supervisor_id="demo-supervisor",
+        risk_level="medium",
+    )
 
 
 def test_twenty_write_rejects_without_approval(

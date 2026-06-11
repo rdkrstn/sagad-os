@@ -7,6 +7,7 @@ from agent_studio.agents import AgentRegistry
 from agent_studio.memory_workflow import build_memory_pack
 from agent_studio.retrieval import retriever
 from agent_studio.schemas import ConversationMessageRecord, KnowledgeHit, MemoryHit, QaFinding
+from agent_studio.skill_registry import skill_registry
 from agent_studio.state import AgentStudioState
 
 try:
@@ -510,10 +511,25 @@ def run_qa_compliance(state: AgentStudioState) -> dict[str, object]:
             ),
         )
 
+    diagnostic = dict(state.get("retrieval_diagnostic", {}) or {})
+    diagnostic["skill_diagnostic"] = skill_registry.graph_diagnostic(
+        selected_agent=state.get("selected_agent") or "general_support",
+        completed_stages=[
+            "normalize",
+            "retrieve_memory",
+            "classify",
+            "select_agent",
+            "retrieve",
+            "draft",
+            "qa_compliance",
+        ],
+    )
+
     return {
         "qa_findings": findings,
         "compliance_status": "blocked" if has_draft_error or has_empty_draft else "needs_review",
         "approval_status": "needs_approval",
+        "retrieval_diagnostic": diagnostic,
     }
 
 

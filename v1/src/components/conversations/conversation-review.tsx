@@ -43,7 +43,14 @@ import {
 } from "@/components/ui/data-access";
 import { cn } from "@/lib/utils";
 
-type RailTab = "context" | "memory" | "knowledge" | "policy" | "audit" | "trace";
+type RailTab =
+  | "context"
+  | "memory"
+  | "knowledge"
+  | "policy"
+  | "qa"
+  | "audit"
+  | "trace";
 type RailTabConfig = {
   id: RailTab;
   label: string;
@@ -142,6 +149,147 @@ function readableDate(value: string) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function optionalBoolean(record: LooseRecord, keys: string[]): boolean | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (["true", "yes", "1", "required", "enabled"].includes(normalized)) {
+        return true;
+      }
+      if (["false", "no", "0", "not required", "disabled"].includes(normalized)) {
+        return false;
+      }
+    }
+  }
+
+  return null;
+}
+
+function stringList(record: LooseRecord, keys: string[]): string[] {
+  for (const key of keys) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      return value.map(String).filter((item) => item.trim().length > 0);
+    }
+    if (typeof value === "string" && value.trim()) {
+      return value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+  }
+
+  return [];
+}
+
+function policyStatus(row: LooseRecord): string {
+  const decision = asRecord(row.policyDecision ?? row.policy_decision);
+  const allowed =
+    optionalBoolean(row, ["allowed", "allowedValue"]) ??
+    optionalBoolean(decision, ["allowed"]);
+
+  if (allowed !== null) return allowed ? "Allowed" : "Blocked";
+  return textOf(row, ["status", "planStatus"], "Policy recorded");
+}
+
+function approvalLabel(row: LooseRecord): string {
+  const decision = asRecord(row.policyDecision ?? row.policy_decision);
+  const required =
+    optionalBoolean(row, ["requiresApproval", "requires_approval"]) ??
+    optionalBoolean(decision, ["requiresApproval", "requires_approval"]);
+
+  if (required === null) return "Unknown";
+  return required ? "Required" : "Not required";
+}
+
+function runModeLabel(row: LooseRecord): string {
+  const decision = asRecord(row.policyDecision ?? row.policy_decision);
+  const dryRun =
+    optionalBoolean(row, ["dryRun", "dry_run"]) ??
+    optionalBoolean(decision, ["dryRun", "dry_run"]);
+
+  if (dryRun !== null) return dryRun ? "Dry-run" : "Live";
+  return textOf(row, ["liveMode", "mode"], "Policy decides");
+}
+
+function reasonsFor(row: LooseRecord): string[] {
+  const decision = asRecord(row.policyDecision ?? row.policy_decision);
+  const reasons = [
+    ...stringList(row, ["policyReasons", "policy_reasons", "reasons"]),
+    ...stringList(decision, ["policyReasons", "policy_reasons", "reasons"]),
+    textOf(row, ["blockedReason", "blocked_reason"], ""),
+    textOf(decision, ["blockedReason", "blocked_reason"], ""),
+  ].filter(Boolean);
+
+  return [...new Set(reasons)];
+}
+
+function correlateToolEvidence(
+  plans: LooseRecord[],
+  results: LooseRecord[],
+): LooseRecord[] {
+  const resultByPlanId = new Map(
+    results.map((result) => [textOf(result, ["planId", "plan_id"], ""), result]),
+  );
+  const rows = plans.map((plan) => {
+    const planId = textOf(plan, ["id", "planId", "plan_id"], "");
+    const result = resultByPlanId.get(planId) ?? {};
+    const resultId = textOf(result, ["id", "resultId", "result_id"], "");
+    return {
+      id: `${planId || "plan"}-${resultId || "pending"}`,
+      planId,
+      resultId,
+      provider: textOf(plan, ["provider"], textOf(result, ["provider"], "Agent Studio")),
+      toolName: textOf(plan, ["toolName", "tool_name", "name"], textOf(result, ["toolName", "tool_name", "name"], "Provider action")),
+      action: textOf(plan, ["action"], textOf(result, ["detail"], "")),
+      planStatus: policyStatus(plan),
+      resultStatus: textOf(result, ["status", "result"], resultId ? "Logged" : "No result"),
+      detail: textOf(result, ["detail", "description"], textOf(plan, ["action"], "Tool plan recorded.")),
+      riskLevel: textOf(plan, ["riskLevel", "risk_level", "risk"], textOf(result, ["riskLevel", "risk_level", "risk"], "Unknown")),
+      requiresApproval:
+        optionalBoolean(plan, ["requiresApproval", "requires_approval"]) ??
+        optionalBoolean(result, ["requiresApproval", "requires_approval"]),
+      dryRun:
+        optionalBoolean(plan, ["dryRun", "dry_run"]) ??
+        optionalBoolean(result, ["dryRun", "dry_run"]),
+      liveMode: textOf(plan, ["liveMode"], textOf(result, ["liveMode"], "")),
+      policyDecision: plan.policyDecision ?? plan.policy_decision ?? result.policyDecision ?? result.policy_decision,
+      policyReasons: [
+        ...reasonsFor(plan),
+        ...reasonsFor(result),
+      ],
+      blockedReason:
+        textOf(plan, ["blockedReason", "blocked_reason"], "") ||
+        textOf(result, ["blockedReason", "blocked_reason"], ""),
+    };
+  });
+  const correlatedResultIds = new Set(rows.map((row) => textOf(row, ["resultId"], "")));
+  const orphanResults = results
+    .filter((result) => !correlatedResultIds.has(textOf(result, ["id"], "")))
+    .map((result) => ({
+      id: textOf(result, ["id"], "tool-result"),
+      planId: textOf(result, ["planId", "plan_id"], ""),
+      resultId: textOf(result, ["id"], ""),
+      provider: textOf(result, ["provider"], "Agent Studio"),
+      toolName: textOf(result, ["toolName", "tool_name", "name"], "Provider action"),
+      action: textOf(result, ["action"], ""),
+      planStatus: policyStatus(result),
+      resultStatus: textOf(result, ["status", "result"], "Logged"),
+      detail: textOf(result, ["detail", "description"], "Tool result recorded."),
+      riskLevel: textOf(result, ["riskLevel", "risk_level", "risk"], "Unknown"),
+      requiresApproval: optionalBoolean(result, ["requiresApproval", "requires_approval"]),
+      dryRun: optionalBoolean(result, ["dryRun", "dry_run"]),
+      liveMode: textOf(result, ["liveMode"], ""),
+      policyDecision: result.policyDecision ?? result.policy_decision,
+      policyReasons: reasonsFor(result),
+      blockedReason: textOf(result, ["blockedReason", "blocked_reason"], ""),
+    }));
+
+  return [...rows, ...orphanResults];
 }
 
 function deliveryState(
@@ -255,15 +403,39 @@ export function ConversationReview({
   ];
   const knowledge = nestedArray(primary, ["knowledgeContext", "retrievedKnowledge"]).map(asRecord);
   const memory = nestedArray(primary, ["memoryContext", "memory_context"]).map(asRecord);
+  const toolPlans = nestedArray(primary, ["toolPlans", "tool_plans"]).map(asRecord);
   const toolResults = nestedArray(primary, [
     "toolResults",
     "tool_results",
     "deliveryResults",
   ]).map(asRecord);
-  const policyChecks = nestedArray(primary, [
+  const providedToolEvidence = nestedArray(primary, [
+    "toolEvidence",
+    "tool_evidence",
+  ]).map(asRecord);
+  const toolEvidence = providedToolEvidence.length > 0
+    ? providedToolEvidence
+    : correlateToolEvidence(toolPlans, toolResults);
+  const policyDecisions = nestedArray(primary, [
+    "policyDecisions",
+    "toolPolicyDecisions",
+    "tool_policy_decisions",
     "policyChecks",
+  ]).map(asRecord);
+  const policyChecks =
+    policyDecisions.length > 0
+      ? policyDecisions
+      : toolEvidence.map((item) =>
+          asRecord({
+            ...item,
+            status: policyStatus(item),
+            policyReasons: reasonsFor(item),
+          }),
+        );
+  const qaFindings = nestedArray(primary, [
     "qaFindings",
     "qa_findings",
+    "qaCompliance",
   ]).map(asRecord);
   const confidence = confidenceNumber(primary);
   const currentWorkflowState =
@@ -291,7 +463,7 @@ export function ConversationReview({
     ["traceId", "langSmithTraceId"],
     primaryId ? `preview-${primaryId}` : "Preview trace",
   );
-  const mcpServersUsed = toolResults.some((result) =>
+  const mcpServersUsed = toolEvidence.some((result) =>
     textOf(result, ["toolName", "tool_name", "name"], "").toLowerCase().includes("mcp"),
   )
     ? ["MCP tool layer"]
@@ -301,8 +473,9 @@ export function ConversationReview({
     { id: "memory", label: "Memory", count: memory.length, icon: Brain },
     { id: "knowledge", label: "Knowledge", count: knowledge.length, icon: FileText },
     { id: "policy", label: "Policy", count: policyChecks.length, icon: ShieldCheck },
+    { id: "qa", label: "QA", count: qaFindings.length, icon: ListChecks },
     { id: "audit", label: "Audit", count: trail.length, icon: Clock3 },
-    { id: "trace", label: "Trace", count: toolResults.length, icon: Network },
+    { id: "trace", label: "Trace", count: toolEvidence.length, icon: Network },
   ];
   const activeRail = railTabs.find((tab) => tab.id === activeRailTab) ?? railTabs[0];
   const ActiveRailIcon = activeRail.icon;
@@ -964,25 +1137,76 @@ export function ConversationReview({
                 <EvidenceCard>
                   <div className="flex items-center gap-2 font-semibold text-foreground">
                     <ShieldCheck aria-hidden="true" className="size-4 text-[var(--accent-text)]" />
-                    Approval gate active
+                    No tool policy decisions
                   </div>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                    No policy findings were returned. Keep approval gating active for risky sends.
+                    Tool plans will show allowed or blocked decisions after Agent Studio evaluates policy.
                   </p>
                 </EvidenceCard>
               ) : null}
               {policyChecks.map((check, index) => {
-                const status = textOf(check, ["status", "rating", "result"], "Needs Review");
+                const status = policyStatus(check);
+                const reasons = reasonsFor(check);
                 return (
                   <EvidenceCard key={textOf(check, ["id", "name"], String(index))}>
                     <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 font-semibold text-foreground">
+                        {textOf(check, ["toolName", "tool_name", "name", "label"], "Tool policy")}
+                      </div>
+                      <StatusPill status={status}>{status}</StatusPill>
+                    </div>
+                    <div className="mt-2 grid gap-2 text-xs">
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="rounded-sm border border-border bg-background p-2">
+                          <div className="font-mono text-[10px] uppercase text-muted-foreground">Risk</div>
+                          <div className="mt-1 font-semibold text-foreground">{textOf(check, ["riskLevel", "risk_level", "risk"], "Unknown")}</div>
+                        </div>
+                        <div className="rounded-sm border border-border bg-background p-2">
+                          <div className="font-mono text-[10px] uppercase text-muted-foreground">Approval</div>
+                          <div className="mt-1 font-semibold text-foreground">{approvalLabel(check)}</div>
+                        </div>
+                        <div className="rounded-sm border border-border bg-background p-2">
+                          <div className="font-mono text-[10px] uppercase text-muted-foreground">Mode</div>
+                          <div className="mt-1 font-semibold text-foreground">{runModeLabel(check)}</div>
+                        </div>
+                      </div>
+                      <p className="line-clamp-3 leading-5 text-muted-foreground">
+                        {reasons.length > 0
+                          ? reasons.join(" ")
+                          : textOf(check, ["description", "notes", "detail"], "Tool policy decision recorded for this run.")}
+                      </p>
+                    </div>
+                  </EvidenceCard>
+                );
+              })}
+            </>
+          ) : null}
+
+          {activeRailTab === "qa" ? (
+            <>
+              {qaFindings.length === 0 ? (
+                <EvidenceCard>
+                  <div className="flex items-center gap-2 font-semibold text-foreground">
+                    <ListChecks aria-hidden="true" className="size-4 text-[var(--accent-text)]" />
+                    No QA findings
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    QA findings remain separate from tool policy and will appear after draft evaluation.
+                  </p>
+                </EvidenceCard>
+              ) : null}
+              {qaFindings.map((finding, index) => {
+                const status = textOf(finding, ["status", "rating", "result"], "Needs Review");
+                return (
+                  <EvidenceCard key={textOf(finding, ["id", "name", "label"], String(index))}>
+                    <div className="flex items-center justify-between gap-3">
                       <div className="font-semibold text-foreground">
-                        {textOf(check, ["name", "label", "criterion"], "Policy check")}
+                        {textOf(finding, ["name", "label", "criterion"], "QA finding")}
                       </div>
                       <StatusPill status={status}>{status}</StatusPill>
                     </div>
                     <p className="mt-2 line-clamp-3 text-xs leading-5 text-muted-foreground">
-                      {textOf(check, ["description", "notes", "detail"], "Policy check recorded for this run.")}
+                      {textOf(finding, ["description", "notes", "detail"], "QA finding recorded for this run.")}
                     </p>
                   </EvidenceCard>
                 );
@@ -1039,19 +1263,19 @@ export function ConversationReview({
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2 font-semibold text-foreground">
                     <Wrench aria-hidden="true" className="size-4 text-[var(--accent-text)]" />
-                    Tool / delivery
+                    Tool plan / result
                   </div>
-                  <StatusPill tone={toolResults.length > 0 ? "info" : "neutral"}>
-                    {toolResults.length} results
+                  <StatusPill tone={toolEvidence.length > 0 ? "info" : "neutral"}>
+                    {toolEvidence.length} rows
                   </StatusPill>
                 </div>
                 <div className="grid gap-2">
-                  {toolResults.length === 0 ? (
+                  {toolEvidence.length === 0 ? (
                     <div className="text-sm leading-6 text-muted-foreground">
-                      No provider delivery result has been recorded for this conversation.
+                      No tool plan or result has been recorded for this conversation.
                     </div>
                   ) : null}
-                  {toolResults.slice(0, 2).map((result, index) => (
+                  {toolEvidence.slice(0, 3).map((result, index) => (
                     <div
                       className="min-w-0 rounded-sm border border-border bg-background p-2"
                       key={textOf(result, ["id"], String(index))}
@@ -1060,18 +1284,32 @@ export function ConversationReview({
                         <div className="min-w-0 truncate font-semibold text-foreground">
                           {textOf(result, ["toolName", "tool_name", "name"], "Provider action")}
                         </div>
-                        <StatusPill status={textOf(result, ["status", "result"], "Logged")}>
-                          {textOf(result, ["status", "result"], "Logged")}
+                        <StatusPill status={textOf(result, ["resultStatus", "status", "result"], "Logged")}>
+                          {textOf(result, ["resultStatus", "status", "result"], "Logged")}
                         </StatusPill>
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 font-mono text-[10px] uppercase text-muted-foreground">
+                        <div className="min-w-0 truncate">Plan {textOf(result, ["planId", "plan_id"], "n/a")}</div>
+                        <div className="min-w-0 truncate">Result {textOf(result, ["resultId", "result_id"], "pending")}</div>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <SourcePill>{policyStatus(result)}</SourcePill>
+                        <SourcePill>{approvalLabel(result)}</SourcePill>
+                        <SourcePill>{runModeLabel(result)}</SourcePill>
                       </div>
                       <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
                         {textOf(result, ["detail", "description"], "No detail recorded.")}
                       </p>
+                      {reasonsFor(result).length > 0 ? (
+                        <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-muted-foreground">
+                          {reasonsFor(result).join(" ")}
+                        </p>
+                      ) : null}
                     </div>
                   ))}
-                  {toolResults.length > 2 ? (
+                  {toolEvidence.length > 3 ? (
                     <div className="rounded-md border border-dashed border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-                      {toolResults.length - 2} more tool results recorded.
+                      {toolEvidence.length - 3} more tool plan/result rows recorded.
                     </div>
                   ) : null}
                 </div>
