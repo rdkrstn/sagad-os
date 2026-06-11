@@ -666,7 +666,9 @@ def test_resolve_conversation_requires_source_id_and_inbox_identifier() -> None:
         headers={"X-Sagad-Role": "supervisor"},
     )
     assert missing_inbox.status_code == 409
-    assert "inbox" in missing_inbox.json()["detail"].lower()
+    missing_inbox_detail = missing_inbox.json()["detail"]
+    assert "CHATWOOT_INBOX_IDENTIFIER" in missing_inbox_detail
+    assert "not the numeric inbox_id" in missing_inbox_detail
 
 
 def test_resolve_conversation_records_successful_chatwoot_result(

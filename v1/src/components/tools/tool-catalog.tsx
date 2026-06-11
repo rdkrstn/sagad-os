@@ -817,7 +817,7 @@ export function ToolCatalog({
                             onChange={(event: ChangeEvent<HTMLInputElement>) =>
                               updateForm("chatwoot", "inbox_id", event.target.value)
                             }
-                            placeholder="Required for resolve"
+                            placeholder="API channel identifier, not numeric inbox_id"
                             value={form.inbox_id}
                           />
                         </div>
