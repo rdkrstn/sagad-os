@@ -74,6 +74,8 @@ class McpToolDescriptor(BaseModel):
     description: str
     provider: str
     skill_name: str
+    allowed_agents: list[str] = Field(default_factory=list)
+    allowed_skills: list[str] = Field(default_factory=list)
     mode: ToolMode
     risk_level: ToolRiskLevel
     requires_approval: bool
@@ -125,6 +127,8 @@ def build_mcp_descriptors(
                 description=_redact_text(str(_field(manifest, "description", ""))),
                 provider=str(_field(manifest, "provider", "")),
                 skill_name=str(_field(manifest, "skill_name", "")),
+                allowed_agents=[str(agent) for agent in _field_list(manifest, "allowed_agents")],
+                allowed_skills=[str(_field(manifest, "skill_name", ""))],
                 mode=str(_field(manifest, "mode", "dry_run")),  # type: ignore[arg-type]
                 risk_level=str(_field(manifest, "risk_level", "medium")),  # type: ignore[arg-type]
                 requires_approval=policy_metadata["requires_approval"],

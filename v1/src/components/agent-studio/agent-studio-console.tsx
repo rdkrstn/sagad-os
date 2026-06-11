@@ -202,7 +202,11 @@ function policyReasons(row: LooseRecord): string[] {
 
 function schemaKeys(row: LooseRecord): string[] {
   const schema = asRecord(row.inputSchema ?? row.input_schema ?? row.schema);
-  return Object.keys(schema).slice(0, 4);
+  const properties = asRecord(schema.properties);
+  const keys = Object.keys(properties).length > 0
+    ? Object.keys(properties)
+    : Object.keys(schema);
+  return keys.slice(0, 4);
 }
 
 function InlineList({ values }: { values: string[] }) {

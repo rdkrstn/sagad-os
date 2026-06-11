@@ -148,8 +148,9 @@ def test_tools_manifests_endpoint_returns_current_manifests_without_secrets(
 
     assert response.status_code == 200
     payload = response.json()
-    manifests = payload["manifests"]
+    manifests = payload["tools"]
     assert isinstance(manifests, list)
+    assert payload["manifests"] == manifests
     assert {manifest["tool_name"] for manifest in manifests} == {
         "knowledge.search",
         "crm.lookup_contact",

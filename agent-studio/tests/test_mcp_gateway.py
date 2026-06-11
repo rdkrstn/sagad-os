@@ -88,6 +88,8 @@ def test_mcp_descriptors_remove_sensitive_fields_and_execution_surfaces() -> Non
         "description",
         "provider",
         "skill_name",
+        "allowed_agents",
+        "allowed_skills",
         "mode",
         "risk_level",
         "requires_approval",
@@ -96,6 +98,8 @@ def test_mcp_descriptors_remove_sensitive_fields_and_execution_surfaces() -> Non
         "input_schema",
         "policy_reasons",
     }
+    assert dumped["allowed_agents"] == ["Support Agent"]
+    assert dumped["allowed_skills"] == ["plan_tools"]
     assert set(dumped["input_schema"]["properties"]) == {"query"}
     assert dumped["input_schema"]["required"] == ["query"]
 

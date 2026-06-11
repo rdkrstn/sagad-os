@@ -743,11 +743,13 @@ def tool_manifests(
     x_sagad_internal_secret: Annotated[str | None, Header()] = None,
 ) -> dict[str, list[dict[str, object]]]:
     _verify_internal_secret(x_sagad_internal_secret)
+    manifests = [
+        manifest.model_dump(mode="json")
+        for manifest in tool_manifest_registry.list_manifests()
+    ]
     return {
-        "manifests": [
-            manifest.model_dump(mode="json")
-            for manifest in tool_manifest_registry.list_manifests()
-        ],
+        "tools": manifests,
+        "manifests": manifests,
     }
 
 
