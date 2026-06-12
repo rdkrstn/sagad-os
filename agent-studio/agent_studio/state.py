@@ -38,3 +38,14 @@ class AgentStudioState(TypedDict, total=False):
     compliance_status: Literal["pass", "needs_review", "blocked"]
     approval_status: str
     trace_url: str | None
+    eval_tags: list[str]
+    trace_attributes: dict[str, object]
+    diagnostic_payload: dict[str, object]
+    decision_reason: str | None
+    guardrail_findings: list[QaFinding]
+    confidence_breakdown: dict[str, object]
+    final_confidence_score: float | None
+    quality_score: float | None
+    quality_label: str | None
+    quality_signals: dict[str, object]
+    quality_notes: str | None

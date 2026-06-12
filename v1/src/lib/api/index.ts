@@ -266,6 +266,39 @@ function viewText(
   return fallback;
 }
 
+function viewNumber(
+  row: ViewRecord,
+  keys: string[],
+  fallback = 0,
+): number {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const parsed = Number(value.replace("%", ""));
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+
+  return fallback;
+}
+
+function viewScoreLabel(
+  row: ViewRecord,
+  keys: string[],
+  fallback = "n/a",
+): string {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) return value;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value <= 1 ? percent(value) : `${Math.round(value)}%`;
+    }
+  }
+
+  return fallback;
+}
+
 function viewRecordArray(row: ViewRecord, keys: string[]): ViewRecord[] {
   for (const key of keys) {
     const value = row[key];
@@ -609,6 +642,56 @@ async function fetchAgentStudioMcpDescriptors(): Promise<
       "items",
     ]),
   );
+}
+
+async function fetchAgentStudioEvalRows(
+  path: "/evals/runs" | "/evals/cases",
+): Promise<AgentStudioFetchResult<ViewRecord[]>> {
+  return fetchAgentStudioJson(path, (payload) =>
+    viewPayloadArray(payload, [
+      "runs",
+      "eval_runs",
+      "evalRuns",
+      "cases",
+      "eval_cases",
+      "evalCases",
+      "results",
+      "evaluations",
+      "items",
+    ]),
+  );
+}
+
+async function fetchAgentStudioEvaluations(): Promise<
+  AgentStudioFetchResult<ViewRecord[]>
+> {
+  const runs = await fetchAgentStudioEvalRows("/evals/runs");
+  if (runs.status === "connected" && runs.data && runs.data.length > 0) {
+    return runs;
+  }
+
+  const cases = await fetchAgentStudioEvalRows("/evals/cases");
+  if (cases.status === "connected") {
+    return cases;
+  }
+
+  return runs;
+}
+
+async function fetchAgentStudioScorecard(): Promise<
+  AgentStudioFetchResult<ViewRecord>
+> {
+  return fetchAgentStudioJson("/ai-ops/scorecard", (payload) => {
+    const record = viewRecord(payload);
+    const nested = viewNestedRecord(record, [
+      "scorecard",
+      "dashboard",
+      "data",
+      "result",
+    ]);
+    const scorecard = Object.keys(nested).length > 0 ? nested : record;
+    return Object.keys(scorecard).length > 0 ? scorecard : null;
+  });
 }
 
 function summarizeAgentStudioStatus(
@@ -2590,13 +2673,278 @@ function isSentStatus(value: unknown): boolean {
   return normalized === "sent" || normalized === "delivered";
 }
 
-// TODO: Replace with real fetch from Agent Studio once API is available, and remove mockConversations from the dashboard data.
+function scorecardMetricSource(scorecard: ViewRecord): ViewRecord {
+  const metrics = viewNestedRecord(scorecard, ["metrics", "summary", "totals"]);
+  return {
+    ...scorecard,
+    ...metrics,
+  };
+}
+
+function toScorecardConversationRow(row: ViewRecord, index: number): ViewRecord {
+  const status = viewText(
+    row,
+    ["queueStatus", "queue_status", "status", "outcome"],
+    "Review",
+  );
+  const confidence = viewScoreLabel(
+    row,
+    [
+      "confidence",
+      "aiConfidence",
+      "ai_confidence",
+      "finalConfidenceScore",
+      "final_confidence_score",
+      "score",
+    ],
+    "n/a",
+  );
+
+  return {
+    ...row,
+    id: viewText(row, ["id", "conversationId", "conversation_id"], `scorecard-${index + 1}`),
+    customerName: viewText(row, ["customerName", "customer_name", "contact", "name"], "Scorecard sample"),
+    driver: viewText(row, ["driver", "intent", "caseId", "case_id"], "AI Ops case"),
+    confidence,
+    aiConfidence: confidence,
+    hitlStatus: viewText(row, ["hitlStatus", "hitl_status", "approvalStatus", "approval_status"], "n/a"),
+    queueStatus: status,
+    status,
+    sendStatus: viewText(row, ["sendStatus", "send_status", "deliveryStatus", "delivery_status"], "n/a"),
+  };
+}
+
+function scorecardProviderFailureLabels(
+  scorecard: ViewRecord,
+  metrics: ViewRecord,
+): string[] {
+  const rowLabels = viewRecordArray(scorecard, [
+    "providerFailureCategories",
+    "provider_failure_categories",
+    "failureCategories",
+    "failure_categories",
+  ]).map((row) =>
+    viewText(
+      row,
+      ["category", "failureCategory", "failure_category", "errorType", "error_type", "name"],
+      "",
+    ),
+  );
+
+  return uniqueStrings([
+    ...rowLabels,
+    ...viewStringArray(metrics, [
+      "providerFailureCategories",
+      "provider_failure_categories",
+      "failureCategories",
+      "failure_categories",
+    ]),
+  ]);
+}
+
+function scorecardAttentionRows(
+  scorecard: ViewRecord,
+  metrics: ViewRecord,
+  conversations: ConversationView[],
+): ViewRecord[] {
+  const provided = viewRecordArray(scorecard, [
+    "attentionSummary",
+    "attention_summary",
+    "attentionItems",
+    "attention_items",
+    "signals",
+    "exceptions",
+  ]);
+  if (provided.length > 0) {
+    return provided.map((row, index) => ({
+      ...row,
+      id: viewText(row, ["id"], `scorecard-signal-${index + 1}`),
+      type: viewText(row, ["type", "category", "reason", "name"], "Signal"),
+      category: viewText(row, ["category", "type", "reason", "name"], "Signal"),
+      reason: viewText(row, ["reason", "detail", "category", "type"], "Scorecard signal"),
+      count: viewNumber(row, ["count", "total", "items"], 0),
+      owner: viewText(row, ["owner", "team", "pod"], "AI Ops"),
+      severity: viewText(row, ["severity", "status"], "Review"),
+      status: viewText(row, ["status", "severity"], "Review"),
+    }));
+  }
+
+  const providerFailures = scorecardProviderFailureLabels(scorecard, metrics);
+  const derived = [
+    {
+      type: "Tool policy blocked",
+      count: viewNumber(metrics, ["toolCallsBlocked", "tool_calls_blocked", "blockedTools", "blocked_tools"], 0),
+      severity: "High risk",
+    },
+    {
+      type: "Tool dry-runs",
+      count: viewNumber(metrics, ["toolDryRuns", "tool_dry_runs", "dryRuns", "dry_runs"], 0),
+      severity: "Review",
+    },
+    {
+      type: "Provider failures",
+      count: viewNumber(metrics, ["providerFailures", "provider_failures", "providerFailureCount", "provider_failure_count"], providerFailures.length),
+      severity: "High risk",
+    },
+    {
+      type: "Guardrail findings",
+      count: viewNumber(metrics, ["guardrailFindings", "guardrail_findings", "guardrailFailureCount", "guardrail_failure_count"], 0),
+      severity: "Review",
+    },
+  ].filter((row) => row.count > 0);
+
+  if (derived.length > 0) {
+    return derived.map((row) => ({
+      ...row,
+      category: row.type,
+      reason: row.type,
+      total: row.count,
+      items: row.count,
+      owner: "Agent Studio",
+      team: "AI Ops",
+      pod: "AI Ops",
+      status: row.severity,
+    }));
+  }
+
+  return attentionSummary(conversations);
+}
+
+function toScorecardDashboardData(
+  scorecard: ViewRecord,
+  conversations: ConversationView[],
+  result: AgentStudioFetchResult<ViewRecord>,
+): DashboardViewData {
+  const metrics = scorecardMetricSource(scorecard);
+  const scorecardConversations = viewRecordArray(scorecard, [
+    "conversations",
+    "conversation_outcomes",
+    "conversationOutcomes",
+    "samples",
+    "cases",
+    "items",
+  ]).map(toScorecardConversationRow);
+  const dashboardConversations =
+    scorecardConversations.length > 0 ? scorecardConversations : conversations;
+  const highRiskFallback = dashboardConversations.filter((conversation) =>
+    String(conversation.priority ?? conversation.severity ?? conversation.riskLevel ?? "")
+      .toLowerCase()
+      .includes("high"),
+  ).length;
+  const approvalFallback = dashboardConversations.filter((conversation) =>
+    String(conversation.hitlStatus ?? conversation.approvalStatus ?? conversation.queueStatus ?? "")
+      .toLowerCase()
+      .includes("approval"),
+  ).length;
+  const providerFailures = scorecardProviderFailureLabels(scorecard, metrics);
+  const attentionRows = scorecardAttentionRows(scorecard, metrics, conversations);
+  const finalConfidence = viewScoreLabel(
+    metrics,
+    [
+      "averageConfidence",
+      "average_confidence",
+      "averageFinalConfidence",
+      "average_final_confidence",
+      "finalConfidenceScore",
+      "final_confidence_score",
+    ],
+    "n/a",
+  );
+
+  return {
+    ...homeServicesDashboardData,
+    conversations: dashboardConversations,
+    agents: toAgentViews(),
+    supervisorPods: supervisorPodViews(),
+    contactDrivers: mockContactDrivers.map(toDriverView),
+    sopReferences: mockSopReferences.map(toSopView),
+    mcpTools: mockMcpTools.map(toToolView),
+    accountName: homeServicesDashboardData.account.name,
+    lastUpdated: viewText(
+      scorecard,
+      ["lastUpdated", "last_updated", "asOf", "as_of", "createdAt", "created_at"],
+      "Live scorecard",
+    ),
+    asOf: viewText(
+      scorecard,
+      ["asOf", "as_of", "lastUpdated", "last_updated", "createdAt", "created_at"],
+      "Live scorecard",
+    ),
+    metrics: {
+      messagesReceived: viewNumber(metrics, ["messagesReceived", "messages_received", "totalConversations", "total_conversations", "caseCount", "case_count"], dashboardConversations.length),
+      totalConversations: viewNumber(metrics, ["totalConversations", "total_conversations", "messagesReceived", "messages_received", "caseCount", "case_count"], dashboardConversations.length),
+      aiDraftedResponses: viewNumber(metrics, ["aiDraftedResponses", "ai_drafted_responses", "aiDraftsGenerated", "ai_drafts_generated"], dashboardConversations.length),
+      aiDrafted: viewNumber(metrics, ["aiDrafted", "ai_drafted", "aiDraftsGenerated", "ai_drafts_generated"], dashboardConversations.length),
+      autoSentResponses: viewNumber(metrics, ["autoSentResponses", "auto_sent_responses", "actualAutoSendCount", "actual_auto_send_count", "autoSent", "auto_sent"], 0),
+      autoSent: viewNumber(metrics, ["autoSent", "auto_sent", "actualAutoSendCount", "actual_auto_send_count"], 0),
+      approvalRequired: viewNumber(metrics, ["approvalRequired", "approval_required", "approvalRequiredCount", "approval_required_count"], approvalFallback),
+      needsApproval: viewNumber(metrics, ["needsApproval", "needs_approval", "approvalRequiredCount", "approval_required_count"], approvalFallback),
+      approved: viewNumber(metrics, ["approved", "approved_count"], 0),
+      edited: viewNumber(metrics, ["edited", "edited_count"], 0),
+      rejected: viewNumber(metrics, ["rejected", "rejected_count"], 0),
+      escalated: viewNumber(metrics, ["escalated", "escalated_count", "escalationCount", "escalation_count"], 0),
+      averageConfidence: finalConfidence,
+      averageFinalConfidence: finalConfidence,
+      averageRetrievalConfidence: viewScoreLabel(metrics, ["averageRetrievalConfidence", "average_retrieval_confidence"], "n/a"),
+      retrievalMissingKnowledgeRate: viewScoreLabel(metrics, ["retrievalMissingKnowledgeRate", "retrieval_missing_knowledge_rate"], "n/a"),
+      autoSendCandidateRate: viewScoreLabel(metrics, ["autoSendCandidateRate", "auto_send_candidate_rate"], "n/a"),
+      actualAutoSendRate: viewScoreLabel(metrics, ["actualAutoSendRate", "actual_auto_send_rate"], "n/a"),
+      approvalRequiredRate: viewScoreLabel(metrics, ["approvalRequiredRate", "approval_required_rate"], "n/a"),
+      highRiskCaseCount: viewNumber(metrics, ["highRiskCaseCount", "high_risk_case_count"], highRiskFallback),
+      toolCallsPlanned: viewNumber(metrics, ["toolCallsPlanned", "tool_calls_planned", "toolPlans", "tool_plans"], 0),
+      toolCallsBlocked: viewNumber(metrics, ["toolCallsBlocked", "tool_calls_blocked", "blockedTools", "blocked_tools"], 0),
+      toolDryRuns: viewNumber(metrics, ["toolDryRuns", "tool_dry_runs", "dryRuns", "dry_runs"], 0),
+      toolFailures: viewNumber(metrics, ["toolFailures", "tool_failures"], 0),
+      sendFailures: viewNumber(metrics, ["sendFailures", "send_failures"], 0),
+      providerFailures: viewNumber(metrics, ["providerFailures", "provider_failures", "providerFailureCount", "provider_failure_count"], providerFailures.length),
+      providerFailureCategories: providerFailures,
+      guardrailFindings: viewNumber(metrics, ["guardrailFindings", "guardrail_findings", "guardrailFailureCount", "guardrail_failure_count"], 0),
+      topMissingKnowledgeTopics: viewStringArray(metrics, ["topMissingKnowledgeTopics", "top_missing_knowledge_topics"]),
+      topIssue: viewText(metrics, ["topIssue", "top_issue"], "No missing knowledge trend detected"),
+      recommendedAction: viewText(metrics, ["recommendedAction", "recommended_action", "nextAction", "next_action"], "Keep monitoring approval and QA signals."),
+      openQueue: dashboardConversations.length,
+      openItems: dashboardConversations.length,
+      queueCount: dashboardConversations.length,
+      slaRisk: highRiskFallback,
+      slaBreaches: highRiskFallback,
+      atRisk: highRiskFallback,
+      approvalLoad: approvalFallback,
+      pendingApprovals: approvalFallback,
+      podsStaffed: mockSupervisorPods.length,
+      activePods: mockSupervisorPods.length,
+    },
+    attentionSummary: attentionRows,
+    attentionItems: attentionRows,
+    queueHealth: viewRecordArray(scorecard, ["queueHealth", "queue_health", "activeQueues", "active_queues"]).length > 0
+      ? viewRecordArray(scorecard, ["queueHealth", "queue_health", "activeQueues", "active_queues"])
+      : queueHealth(conversations),
+    activeQueues: viewRecordArray(scorecard, ["activeQueues", "active_queues", "queueHealth", "queue_health"]).length > 0
+      ? viewRecordArray(scorecard, ["activeQueues", "active_queues", "queueHealth", "queue_health"])
+      : queueHealth(conversations),
+    channelHealth: viewRecordArray(scorecard, ["channelHealth", "channel_health"]).length > 0
+      ? viewRecordArray(scorecard, ["channelHealth", "channel_health"])
+      : channelHealth(conversations, "agent-studio"),
+    integrationSource: "agent-studio",
+    scorecard,
+    scorecardSource: "agent-studio",
+    scorecardStatus: result.status,
+    scorecardDetail: result.detail ?? null,
+  };
+}
+
 export async function getDashboardData(): Promise<DashboardViewData> {
-  const liveConversations = await fetchAgentStudioConversations();
+  const [liveConversations, scorecardResult] = await Promise.all([
+    fetchAgentStudioConversations(),
+    fetchAgentStudioScorecard(),
+  ]);
   const source = liveConversations ? "agent-studio" : "mock";
   const conversations =
     liveConversations?.map(toAgentStudioConversationView) ??
     mockConversations.map(toConversationView);
+  if (scorecardResult.data) {
+    return clone(toScorecardDashboardData(scorecardResult.data, conversations, scorecardResult));
+  }
+
   const approvalConversations = conversations.filter((conversation) =>
     ["Approval", "Escalated", "Failed tool/send", "Low confidence"].includes(
       String(conversation.lane),
@@ -2665,6 +3013,9 @@ export async function getDashboardData(): Promise<DashboardViewData> {
     activeQueues: queueHealth(conversations),
     channelHealth: channelHealth(conversations, source),
     integrationSource: source,
+    scorecardSource: "preview",
+    scorecardStatus: scorecardResult.status,
+    scorecardDetail: scorecardResult.detail ?? null,
   });
 }
 
@@ -3131,44 +3482,294 @@ export async function getMcpServers(): Promise<ViewRecord[]> {
   );
 }
 
+function traceEvidenceRows(conversation: ConversationView): ViewRecord[] {
+  return viewRecordArray(conversation, ["toolEvidence", "tool_evidence"]);
+}
+
+function tracePolicyRows(conversation: ConversationView): ViewRecord[] {
+  return viewRecordArray(conversation, [
+    "policyDecisions",
+    "policy_decisions",
+    "policyChecks",
+    "policy_checks",
+    "toolPolicyDecisions",
+    "tool_policy_decisions",
+  ]);
+}
+
+function traceGuardrailRows(conversation: ConversationView): ViewRecord[] {
+  return [
+    ...viewRecordArray(conversation, ["qaFindings", "qa_findings", "qaCompliance"]),
+    ...tracePolicyRows(conversation).filter((row) => {
+      const status = viewText(row, ["status", "planStatus", "resultStatus"], "").toLowerCase();
+      return (
+        status.includes("block") ||
+        status.includes("fail") ||
+        status.includes("watch") ||
+        viewText(row, ["blockedReason", "blocked_reason"], "").length > 0
+      );
+    }),
+  ];
+}
+
+function isBlockedEvidence(row: ViewRecord): boolean {
+  const status = [
+    viewText(row, ["planStatus", "plan_status"], ""),
+    viewText(row, ["resultStatus", "result_status", "status"], ""),
+    viewText(viewRecord(row.policyDecision ?? row.policy_decision), ["status"], ""),
+  ].join(" ").toLowerCase();
+
+  return (
+    status.includes("block") ||
+    viewText(row, ["blockedReason", "blocked_reason"], "").length > 0 ||
+    viewOptionalBoolean(row, ["allowed"]) === false
+  );
+}
+
+function isDryRunEvidence(row: ViewRecord): boolean {
+  const status = [
+    viewText(row, ["liveMode", "live_mode"], ""),
+    viewText(row, ["resultStatus", "result_status", "status"], ""),
+  ].join(" ").toLowerCase();
+
+  return viewOptionalBoolean(row, ["dryRun", "dry_run"]) === true || status.includes("dry");
+}
+
+function evidenceToolLabel(row: ViewRecord): string {
+  return viewText(
+    row,
+    ["toolName", "tool_name", "name", "provider", "id"],
+    "Provider action",
+  );
+}
+
+function traceBlockedTools(conversation: ConversationView): ViewRecord[] {
+  return traceEvidenceRows(conversation)
+    .filter(isBlockedEvidence)
+    .map((row) => ({
+      ...row,
+      label: evidenceToolLabel(row),
+      reason: viewText(row, ["blockedReason", "blocked_reason", "detail"], "Blocked by tool policy"),
+    }));
+}
+
+function traceDryRuns(conversation: ConversationView): ViewRecord[] {
+  return traceEvidenceRows(conversation)
+    .filter(isDryRunEvidence)
+    .map((row) => ({
+      ...row,
+      label: evidenceToolLabel(row),
+      reason: viewText(row, ["detail", "action"], "Dry-run recorded"),
+    }));
+}
+
+function traceProviderFailureCategories(conversation: ConversationView): string[] {
+  const evidence = traceEvidenceRows(conversation);
+  const labels = evidence.flatMap((row) => {
+    const status = viewText(row, ["resultStatus", "result_status", "status"], "").toLowerCase();
+    const explicit = viewText(
+      row,
+      ["failureCategory", "failure_category", "errorType", "error_type"],
+      "",
+    );
+    const httpStatus = viewText(row, ["httpStatus", "http_status"], "");
+    if (explicit) return [explicit];
+    if (httpStatus) return [`HTTP ${httpStatus}`];
+    if (status.includes("fail") || status.includes("error")) {
+      return [viewText(row, ["provider"], "Provider failure")];
+    }
+    return [];
+  });
+
+  if (String(conversation.sendStatus ?? "").toLowerCase().includes("fail")) {
+    labels.push("Delivery failure");
+  }
+
+  return uniqueStrings(labels);
+}
+
+function traceAttributesForConversation(conversation: ConversationView): ViewRecord {
+  const existing = viewNestedRecord(conversation, ["traceAttributes", "trace_attributes"]);
+  return {
+    ...existing,
+    conversation_id: viewText(conversation, ["id"], ""),
+    driver: viewText(conversation, ["driver", "intent"], ""),
+    risk: viewText(conversation, ["priority", "severity"], ""),
+    approval_status: viewText(conversation, ["hitlStatus", "approvalStatus"], ""),
+    send_status: viewText(conversation, ["sendStatus"], ""),
+    compliance_status: viewText(conversation, ["complianceStatus"], ""),
+    trace_url: viewText(conversation, ["traceUrl"], ""),
+  };
+}
+
+function traceAttributeSummary(attributes: ViewRecord): string[] {
+  return Object.entries(attributes)
+    .filter(([, value]) => value !== null && value !== undefined && String(value).trim().length > 0)
+    .slice(0, 6)
+    .map(([key, value]) => `${titleCase(key)}: ${String(value)}`);
+}
+
+function traceConfidenceBreakdown(conversation: ConversationView): ViewRecord[] {
+  const classifier = viewRecord(conversation.classifier);
+  const knowledge = viewRecordArray(conversation, ["knowledgeContext", "retrievedKnowledge"]);
+  const retrievalConfidence =
+    knowledge.reduce((sum, row) => sum + viewNumber(row, ["score"], 0), 0) /
+    Math.max(1, knowledge.length);
+  const rows = [
+    {
+      label: "Classifier",
+      value: viewScoreLabel(classifier, ["confidence"], viewText(conversation, ["confidence", "aiConfidence"], "n/a")),
+      detail: viewText(classifier, ["summary"], "Intent confidence"),
+    },
+    {
+      label: "Retrieval",
+      value: knowledge.length > 0 ? viewScoreLabel({ score: retrievalConfidence }, ["score"]) : "n/a",
+      detail: `${knowledge.length} knowledge hits`,
+    },
+    {
+      label: "Final",
+      value: viewScoreLabel(
+        conversation,
+        ["finalConfidenceScore", "final_confidence_score", "confidence", "aiConfidence"],
+        "n/a",
+      ),
+      detail: "Final confidence available to the operator",
+    },
+  ];
+
+  return rows;
+}
+
+function traceRowSummary(rows: ViewRecord[], labelKeys: string[]): string[] {
+  return rows.slice(0, 5).map((row) =>
+    viewText(row, labelKeys, viewText(row, ["label", "name", "id"], "Recorded")),
+  );
+}
+
 export async function getAgentRunTraces(): Promise<ViewRecord[]> {
   const conversations = await getConversations();
 
   return clone(
-    conversations.map((conversation, index) => ({
-      id: `run-${String(conversation.id)}`,
-      conversationId: conversation.id,
-      customerName: conversation.customerName,
-      agent: conversation.assignedTo ?? "Support Agent",
-      skill: String(conversation.driver ?? "").toLowerCase().includes("refund")
-        ? "Refund Resolver"
-        : String(conversation.driver ?? "").toLowerCase().includes("sales")
-          ? "Sales Sizing Assistant"
-          : "Order Status Lookup",
-      graph: "Default Support Graph v0.1.4",
-      driver: conversation.driver,
-      status: conversation.queueStatus ?? "Needs Approval",
-      trust: conversation.confidence ?? conversation.aiConfidence ?? "72%",
-      risk: conversation.priority ?? "Medium",
-      langSmithTraceId: conversation.traceUrl ? `ls-${String(conversation.id).slice(-8)}` : "Preview trace",
-      traceUrl: conversation.traceUrl ?? "",
-      latency: `${(6.8 + index * 0.7).toFixed(1)}s`,
-      tokens: 1800 + index * 230,
-      estimatedCost: `$${(0.04 + index * 0.01).toFixed(2)}`,
-      toolsCalled: ["crm.lookup_contact", "knowledge.search", "chatwoot.draft_reply"],
-      mcpServersUsed: index % 2 === 0 ? [] : ["Google Drive MCP"],
-      errorSummary: String(conversation.queueStatus ?? "").toLowerCase().includes("failed")
-        ? "Provider delivery failed after approval."
-        : "",
-      startedAt: conversation.openedAt,
-    })),
+    conversations.map((conversation, index) => {
+      const evidence = traceEvidenceRows(conversation);
+      const blockedTools = traceBlockedTools(conversation);
+      const dryRuns = traceDryRuns(conversation);
+      const guardrailFindings = traceGuardrailRows(conversation);
+      const confidenceBreakdown = traceConfidenceBreakdown(conversation);
+      const traceAttributes = traceAttributesForConversation(conversation);
+      const providerFailureCategories = traceProviderFailureCategories(conversation);
+
+      return {
+        id: `run-${String(conversation.id)}`,
+        conversationId: conversation.id,
+        customerName: conversation.customerName,
+        agent: conversation.assignedTo ?? "Support Agent",
+        skill: String(conversation.driver ?? "").toLowerCase().includes("refund")
+          ? "Refund Resolver"
+          : String(conversation.driver ?? "").toLowerCase().includes("sales")
+            ? "Sales Sizing Assistant"
+            : "Order Status Lookup",
+        graph: "Default Support Graph v0.1.4",
+        driver: conversation.driver,
+        status: conversation.queueStatus ?? "Needs Approval",
+        trust: conversation.confidence ?? conversation.aiConfidence ?? "72%",
+        risk: conversation.priority ?? "Medium",
+        langSmithTraceId: conversation.traceUrl ? `ls-${String(conversation.id).slice(-8)}` : "Preview trace",
+        traceUrl: conversation.traceUrl ?? "",
+        latency: `${(6.8 + index * 0.7).toFixed(1)}s`,
+        tokens: 1800 + index * 230,
+        estimatedCost: `$${(0.04 + index * 0.01).toFixed(2)}`,
+        toolsCalled: evidence.length > 0
+          ? traceRowSummary(evidence, ["toolName", "tool_name", "name"])
+          : ["crm.lookup_contact", "knowledge.search", "chatwoot.draft_reply"],
+        mcpServersUsed: index % 2 === 0 ? [] : ["Google Drive MCP"],
+        errorSummary: providerFailureCategories.length > 0
+          ? providerFailureCategories.join(", ")
+          : String(conversation.queueStatus ?? "").toLowerCase().includes("failed")
+            ? "Provider delivery failed after approval."
+            : "",
+        startedAt: conversation.openedAt,
+        traceAttributes,
+        traceAttributeSummary: traceAttributeSummary(traceAttributes),
+        confidenceBreakdown,
+        confidenceBreakdownSummary: confidenceBreakdown.map((row) =>
+          `${viewText(row, ["label"], "Confidence")}: ${viewText(row, ["value"], "n/a")}`,
+        ),
+        guardrailFindings,
+        guardrailFindingSummary: traceRowSummary(guardrailFindings, ["label", "toolName", "tool_name", "status"]),
+        blockedTools,
+        blockedToolSummary: traceRowSummary(blockedTools, ["label", "toolName", "tool_name"]),
+        dryRuns,
+        dryRunSummary: traceRowSummary(dryRuns, ["label", "toolName", "tool_name"]),
+        providerFailureCategories,
+        providerFailureSummary: providerFailureCategories,
+        toolEvidence: evidence,
+        policyDecisions: tracePolicyRows(conversation),
+        qaFindings: viewRecordArray(conversation, ["qaFindings", "qa_findings", "qaCompliance"]),
+      };
+    }),
   );
 }
 
-export async function getEvaluations(): Promise<ViewRecord[]> {
-  const conversations = await getConversations();
+function toEvaluationView(
+  row: ViewRecord,
+  index: number,
+  result: AgentStudioFetchResult<ViewRecord[]>,
+): ViewRecord {
+  const dimensions = viewStringArray(row, ["dimensions", "dimension"]);
+  const failures = viewRecordArray(row, ["failures", "failedCases", "failed_cases"]);
+  const failedCaseIds = viewStringArray(row, ["failedCaseIds", "failed_case_ids"]);
+  const passed = viewOptionalBoolean(row, ["passed", "ok", "success"]);
+  const status =
+    passed === null
+      ? viewText(row, ["status", "result", "outcome"], "Live")
+      : passed
+        ? "Passed"
+        : "Failed";
+  const id = viewText(
+    row,
+    ["id", "runId", "run_id", "caseId", "case_id", "name"],
+    `eval-${index + 1}`,
+  );
 
-  return clone([
+  return {
+    ...row,
+    id,
+    name: viewText(row, ["name", "title", "caseName", "case_name"], titleCase(id)),
+    status,
+    score: viewScoreLabel(row, ["score", "overallScore", "overall_score"], "n/a"),
+    sampleSize: viewNumber(
+      row,
+      ["sampleSize", "sample_size", "caseCount", "case_count", "observationCount", "observation_count"],
+      1,
+    ),
+    failures: viewNumber(
+      row,
+      ["failures", "failureCount", "failure_count", "failedCaseCount", "failed_case_count"],
+      Math.max(failures.length, failedCaseIds.length),
+    ),
+    focus: viewText(
+      row,
+      ["focus", "description", "detail", "dimension"],
+      dimensions.length > 0 ? dimensions.join(", ") : "Agent Studio eval result",
+    ),
+    recommendation: viewText(
+      row,
+      ["recommendation", "recommendedAction", "recommended_action", "nextAction", "next_action"],
+      failedCaseIds.length > 0
+        ? `Review failed cases: ${failedCaseIds.join(", ")}.`
+        : "Keep this eval in the pre-change quality gate.",
+    ),
+    dimensions,
+    failedCaseIds,
+    connectionStatus: result.status,
+    connectionDetail: result.detail ?? null,
+    source: "agent-studio",
+  };
+}
+
+function previewEvaluationViews(conversations: ConversationView[]): ViewRecord[] {
+  return [
     {
       id: "eval-policy-gates",
       name: "Policy Gate Coverage",
@@ -3180,6 +3781,7 @@ export async function getEvaluations(): Promise<ViewRecord[]> {
         String(row.queueStatus).toLowerCase().includes("approval"),
       ).length,
       recommendation: "Add sale-item refund exception tests and require QA approval before auto-send.",
+      source: "preview",
     },
     {
       id: "eval-tool-reliability",
@@ -3192,6 +3794,7 @@ export async function getEvaluations(): Promise<ViewRecord[]> {
         String(row.queueStatus).toLowerCase().includes("failed"),
       ).length,
       recommendation: "Keep write/send tools approval-gated and retry read tools once before escalation.",
+      source: "preview",
     },
     {
       id: "eval-tone-safety",
@@ -3202,8 +3805,21 @@ export async function getEvaluations(): Promise<ViewRecord[]> {
       focus: "Empathy, no over-promising, no policy hallucination.",
       failures: 0,
       recommendation: "Maintain supervisor review for angry-customer escalation skill.",
+      source: "preview",
     },
+  ];
+}
+
+export async function getEvaluations(): Promise<ViewRecord[]> {
+  const [result, conversations] = await Promise.all([
+    fetchAgentStudioEvaluations(),
+    getConversations(),
   ]);
+  const rows = result.data?.map((row, index) =>
+    toEvaluationView(row, index, result),
+  );
+
+  return clone(rows ?? previewEvaluationViews(conversations));
 }
 
 export async function getIntegrationHealth(): Promise<ViewRecord[]> {

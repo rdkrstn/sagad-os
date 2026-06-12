@@ -7,6 +7,7 @@ from agent_studio.config import get_settings
 from agent_studio.integration_config import integration_config_store
 from agent_studio.main import app
 from agent_studio.realtime import create_realtime_token
+from agent_studio.schemas import ConversationRecord
 from agent_studio.store import store
 
 
@@ -206,6 +207,59 @@ def test_mcp_descriptors_endpoint_is_descriptor_only_and_does_not_call_network(
     rendered = response.text.lower()
     assert "base_url" not in rendered
     assert "target_url" not in rendered
+    assert_no_secret_material(response.text)
+
+
+def test_evals_endpoints_persist_fixture_runs() -> None:
+    cases_response = client.get("/evals/cases")
+    assert cases_response.status_code == 200
+    cases_payload = cases_response.json()
+    assert len(cases_payload["cases"]) == 5
+    assert cases_payload["items"] == cases_payload["cases"]
+
+    run_response = client.post("/evals/run")
+    assert run_response.status_code == 200
+    run_payload = run_response.json()
+    assert run_payload["run"]["suite_name"] == "ai_ops_quality"
+    assert run_payload["summary"]["case_count"] == 5
+    assert run_payload["summary"]["failed_case_count"] == 0
+    assert len(run_payload["results"]) == 5
+
+    runs_response = client.get("/evals/runs")
+    assert runs_response.status_code == 200
+    runs_payload = runs_response.json()
+    assert runs_payload["runs"][0]["id"] == run_payload["run"]["id"]
+    assert len(runs_payload["runs"][0]["results"]) == 5
+
+
+def test_ai_ops_scorecard_returns_live_quality_metrics_without_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHATWOOT_API_ACCESS_TOKEN", "secret-token")
+    get_settings.cache_clear()
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={
+            "event": "message_created",
+            "id": 9801,
+            "content": "I need help with a refund.",
+            "conversation": {"id": 980},
+            "sender": {"name": "Scorecard Customer"},
+        },
+    )
+    assert created.status_code == 200
+
+    response = client.get("/ai-ops/scorecard")
+
+    assert response.status_code == 200
+    payload = response.json()
+    scorecard = payload["scorecard"]
+    metrics = scorecard["metrics"]
+    assert scorecard["status"] == "connected"
+    assert metrics["totalConversations"] == 1
+    assert metrics["aiDraftedResponses"] == 1
+    assert metrics["approvalRequired"] >= 1
+    assert scorecard["conversations"][0]["customer_name"] == "Scorecard Customer"
     assert_no_secret_material(response.text)
 
 
@@ -1326,6 +1380,90 @@ def test_twenty_write_rejects_without_approval(
 
     assert response.status_code == 403
     assert "approval" in response.json()["detail"].lower()
+
+
+def test_update_lead_stage_uses_conversation_agent_and_blocks_support_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TWENTY_ENABLED", "true")
+    monkeypatch.setenv("TWENTY_BASE_URL", "https://twenty.example.test")
+    monkeypatch.setenv("TWENTY_API_KEY", "test-key")
+    monkeypatch.setenv("TWENTY_DRY_RUN", "true")
+    get_settings.cache_clear()
+    record = store.save(
+        ConversationRecord(
+            id="conv_support_policy",
+            incoming_message="I need help with my service.",
+            selected_agent="Support Agent",
+            risk_level="low",
+        )
+    )
+
+    response = client.post(
+        "/tools/crm/update-lead-stage",
+        json={
+            "contact_id": "person_123",
+            "lead_stage": "qualified",
+            "conversation_id": record.id,
+            "selected_agent": "Sales Agent",
+            "approved": True,
+            "supervisor_id": "qa-lead",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["result"]["status"] == "blocked"
+    assert "Support Agent is not allowed" in payload["result"]["detail"]
+    policy_metadata = payload["result"]["data"]["policy_metadata"]
+    assert policy_metadata["allowed"] is False
+    assert policy_metadata["approved"] is True
+    assert policy_metadata["supervisor_id"] == "qa-lead"
+    assert policy_metadata["risk_level"] == "high"
+
+
+def test_update_lead_stage_sales_agent_requires_and_accepts_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TWENTY_ENABLED", "true")
+    monkeypatch.setenv("TWENTY_BASE_URL", "https://twenty.example.test")
+    monkeypatch.setenv("TWENTY_API_KEY", "test-key")
+    monkeypatch.setenv("TWENTY_DRY_RUN", "true")
+    get_settings.cache_clear()
+
+    without_approval = client.post(
+        "/tools/crm/update-lead-stage",
+        json={
+            "contact_id": "person_123",
+            "lead_stage": "qualified",
+            "selected_agent": "Sales Agent",
+            "approved": False,
+        },
+    )
+    assert without_approval.status_code == 403
+    assert "approval" in without_approval.json()["detail"].lower()
+
+    with_approval = client.post(
+        "/tools/crm/update-lead-stage",
+        json={
+            "contact_id": "person_123",
+            "lead_stage": "qualified",
+            "selected_agent": "Sales Agent",
+            "approved": True,
+            "supervisor_id": "qa-lead",
+        },
+    )
+
+    assert with_approval.status_code == 200
+    payload = with_approval.json()
+    assert payload["result"]["status"] == "dry_run"
+    assert payload["plan"]["approved"] is True
+    assert payload["result"]["data"]["policy_metadata"]["allowed"] is True
+    assert_policy_metadata(
+        payload["result"],
+        supervisor_id="qa-lead",
+        risk_level="high",
+    )
 
 
 def test_twenty_live_read_maps_contact_context(

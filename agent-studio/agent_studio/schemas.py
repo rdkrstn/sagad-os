@@ -339,6 +339,18 @@ class ConversationRecord(BaseModel):
     approval_status: ConversationStatus = "needs_approval"
     send_status: str = "not_sent"
     trace_url: str | None = None
+    eval_tags: list[str] = Field(default_factory=list)
+    trace_attributes: dict[str, object] = Field(default_factory=dict)
+    diagnostic_payload: dict[str, object] = Field(default_factory=dict)
+    decision_reason: str | None = None
+    guardrail_findings: list[QaFinding] = Field(default_factory=list)
+    confidence_breakdown: dict[str, object] = Field(default_factory=dict)
+    final_confidence_score: float | None = None
+    quality_score: float | None = None
+    quality_label: str | None = None
+    quality_signals: dict[str, object] = Field(default_factory=dict)
+    quality_notes: str | None = None
+    quality_evaluated_at: datetime | None = None
     messages: list[ConversationMessageRecord] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -411,6 +423,7 @@ class ApprovalRequest(BaseModel):
 class CrmLookupContactRequest(BaseModel):
     query: str
     conversation_id: str | None = None
+    selected_agent: str | None = None
     approved: bool = True
     supervisor_id: str | None = None
 
@@ -419,6 +432,7 @@ class CrmCreateNoteRequest(BaseModel):
     contact_id: str
     note: str
     conversation_id: str | None = None
+    selected_agent: str | None = None
     approved: bool = False
     supervisor_id: str | None = None
 
@@ -429,6 +443,7 @@ class CrmCreateTaskRequest(BaseModel):
     due_at: datetime | None = None
     owner_id: str | None = None
     conversation_id: str | None = None
+    selected_agent: str | None = None
     approved: bool = False
     supervisor_id: str | None = None
 
@@ -437,6 +452,7 @@ class CrmUpdateLeadStageRequest(BaseModel):
     contact_id: str
     lead_stage: str
     conversation_id: str | None = None
+    selected_agent: str | None = None
     approved: bool = False
     supervisor_id: str | None = None
 

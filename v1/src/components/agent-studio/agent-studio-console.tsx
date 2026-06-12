@@ -675,6 +675,22 @@ export function McpServersConsole({ servers }: { servers: unknown }) {
 
 export function TracesConsole({ traces }: { traces: unknown }) {
   const rows = asArray(traces).map(asRecord);
+  const traceAttributeCount = rows.reduce(
+    (sum, row) => sum + listOf(row, "traceAttributeSummary").length,
+    0,
+  );
+  const blockedToolCount = rows.reduce(
+    (sum, row) => sum + listOf(row, "blockedToolSummary").length,
+    0,
+  );
+  const dryRunCount = rows.reduce(
+    (sum, row) => sum + listOf(row, "dryRunSummary").length,
+    0,
+  );
+  const providerFailureCount = rows.reduce(
+    (sum, row) => sum + listOf(row, "providerFailureSummary").length,
+    0,
+  );
 
   return (
     <div className="space-y-3">
@@ -682,6 +698,12 @@ export function TracesConsole({ traces }: { traces: unknown }) {
         title="Traces"
         description="Sagad Audit is the operator record. LangSmith traces are developer observability for graph runs, tool calls, latency, errors, and cost."
       />
+      <section className="grid gap-3 md:grid-cols-4">
+        <MetricCard detail="Rendered from conversation trace metadata" icon={Network} label="Trace attrs" value={traceAttributeCount} />
+        <MetricCard detail="Tool policy blocks in evidence" icon={ShieldCheck} label="Blocked tools" value={blockedToolCount} />
+        <MetricCard detail="Provider-safe execution records" icon={Wrench} label="Dry-runs" value={dryRunCount} />
+        <MetricCard detail="Failure categories available to ops" icon={Route} label="Provider failures" value={providerFailureCount} />
+      </section>
       <Panel title="Agent Run Traces" eyebrow="LangGraph / LangSmith" action={<StatusPill tone="info">{rows.length} runs</StatusPill>}>
         <DataTable
           columns={[
@@ -692,10 +714,62 @@ export function TracesConsole({ traces }: { traces: unknown }) {
             { key: "graph", label: "Graph", render: (row) => textOf(row, ["graph"], "Graph") },
             { key: "status", label: "Status", render: (row) => <StatusPill status={textOf(row, ["status"], "Logged")}>{textOf(row, ["status"], "Logged")}</StatusPill> },
             { key: "latency", label: "Latency", render: (row) => textOf(row, ["latency"], "n/a") },
+            { key: "confidence", label: "Confidence", render: (row) => <InlineList values={listOf(row, "confidenceBreakdownSummary")} /> },
             { key: "tools", label: "Tools", render: (row) => <InlineList values={listOf(row, "toolsCalled")} /> },
           ]}
           rows={rows}
         />
+      </Panel>
+      <Panel
+        title="Evidence Panels"
+        eyebrow="Trace attributes / guardrails / providers"
+        action={<StatusPill tone="neutral">{rows.length} conversations</StatusPill>}
+      >
+        <div className="grid gap-3 p-3 xl:grid-cols-2">
+          {rows.map((row, index) => (
+            <div className="border border-border bg-surface-2 p-3" key={textOf(row, ["id"], String(index))}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate font-semibold text-foreground">
+                    {textOf(row, ["customerName"], "Conversation")}
+                  </div>
+                  <div className="mt-1 break-all font-mono text-[10px] text-muted-foreground">
+                    {textOf(row, ["langSmithTraceId", "traceUrl"], "Preview trace")}
+                  </div>
+                </div>
+                <StatusPill status={textOf(row, ["status"], "Logged")}>
+                  {textOf(row, ["status"], "Logged")}
+                </StatusPill>
+              </div>
+              <div className="mt-3 grid gap-3 text-xs md:grid-cols-2">
+                <div>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Trace attributes</div>
+                  <InlineList values={listOf(row, "traceAttributeSummary")} />
+                </div>
+                <div>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Confidence</div>
+                  <InlineList values={listOf(row, "confidenceBreakdownSummary")} />
+                </div>
+                <div>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Guardrails</div>
+                  <InlineList values={listOf(row, "guardrailFindingSummary")} />
+                </div>
+                <div>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Blocked tools</div>
+                  <InlineList values={listOf(row, "blockedToolSummary")} />
+                </div>
+                <div>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Dry-runs</div>
+                  <InlineList values={listOf(row, "dryRunSummary")} />
+                </div>
+                <div>
+                  <div className="mb-1 font-mono uppercase text-muted-foreground">Provider failures</div>
+                  <InlineList values={listOf(row, "providerFailureSummary")} />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </Panel>
     </div>
   );
@@ -725,6 +799,10 @@ export function EvaluationsConsole({ evaluations }: { evaluations: unknown }) {
                 <div className="border border-border bg-surface-2 p-2">Samples<br /><b>{textOf(row, ["sampleSize"], "0")}</b></div>
                 <div className="border border-border bg-surface-2 p-2">Failures<br /><b>{textOf(row, ["failures"], "0")}</b></div>
               </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="border border-border bg-surface-2 p-2">Source<br /><b>{textOf(row, ["source"], "preview")}</b></div>
+                <div className="border border-border bg-surface-2 p-2">Adapter<br /><b>{textOf(row, ["connectionStatus"], "fallback")}</b></div>
+              </div>
               <p className="text-xs leading-5 text-muted-foreground">{textOf(row, ["recommendation"], "")}</p>
             </div>
           </Panel>
@@ -732,8 +810,8 @@ export function EvaluationsConsole({ evaluations }: { evaluations: unknown }) {
       </div>
       <TerminalBlock
         lines={[
-          { label: "$ ", text: "sagados eval run --preview" },
-          { label: "OK ", text: "policy gates checked against review queue samples" },
+          { label: "$ ", text: "GET /evals/runs -> GET /evals/cases" },
+          { label: "OK ", text: "falls back to preview scorecards when Agent Studio evals are unavailable" },
           { label: "OK ", text: "tool reliability scored from audit and trace events" },
           { label: "HITL ", text: "failed or risky outputs remain supervisor-gated" },
         ]}

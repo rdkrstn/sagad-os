@@ -83,10 +83,7 @@ class McpToolDescriptor(BaseModel):
     enabled: bool
     input_schema: dict[str, object] = Field(default_factory=dict)
     policy_reasons: list[str] = Field(default_factory=list)
-
-    @property
-    def policy_wrapped(self) -> bool:
-        return True
+    policy_wrapped: bool = True
 
 
 def build_mcp_descriptors(
