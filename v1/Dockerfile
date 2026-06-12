@@ -1,12 +1,14 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
+RUN apk update && apk upgrade
 COPY package.json package-lock.json ./
 RUN npm ci
 
 FROM node:22-alpine AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
+RUN apk update && apk upgrade
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
@@ -17,7 +19,8 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 
-RUN addgroup --system --gid 1001 nodejs \
+RUN apk update && apk upgrade && \
+  addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 nextjs \
   && rm -rf /usr/local/lib/node_modules/npm \
     /usr/local/bin/npm \
