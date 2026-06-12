@@ -63,6 +63,7 @@ class Settings(BaseModel):
     litellm_base_url: str | None = None
     litellm_master_key: str | None = None
     deepseek_api_key: str | None = None
+    openrouter_api_key: str | None = None
     sagad_ocr_enabled: bool = False
     sagad_ocr_lang: str = "eng"
     sagad_ocr_max_pages: int = 10
@@ -149,6 +150,7 @@ def get_settings() -> Settings:
         litellm_base_url=os.getenv("LITELLM_BASE_URL"),
         litellm_master_key=os.getenv("LITELLM_MASTER_KEY"),
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
         sagad_ocr_enabled=_bool_env("SAGAD_OCR_ENABLED", False),
         sagad_ocr_lang=os.getenv("SAGAD_OCR_LANG", "eng"),
         sagad_ocr_max_pages=_int_env("SAGAD_OCR_MAX_PAGES", 10),

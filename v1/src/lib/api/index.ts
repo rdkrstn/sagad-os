@@ -3061,6 +3061,12 @@ export async function getPrimaryConversation(): Promise<ConversationView> {
 }
 
 export async function getAgents(): Promise<AgentView[]> {
+  const result = await fetchAgentStudioJson("/agents", (payload) => {
+    return Array.isArray(payload) ? payload : null;
+  });
+  if (result.status === "connected" && result.data) {
+    return result.data as AgentView[];
+  }
   return clone(toAgentViews());
 }
 

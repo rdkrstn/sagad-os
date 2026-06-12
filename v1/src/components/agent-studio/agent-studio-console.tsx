@@ -1,14 +1,33 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Bot,
   BrainCircuit,
   GitBranch,
   Network,
+  Pencil,
+  Plus,
   Route,
   ShieldCheck,
+  Trash2,
   Workflow,
   Wrench,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import {
   MetricCard,
   Panel,
@@ -260,6 +279,90 @@ function CatalogIntro({
 
 export function AgentsConsole({ agents }: { agents: unknown }) {
   const rows = asArray(agents).map(asRecord);
+  const router = useRouter();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<{
+    id: string;
+    name: string;
+    intents: string;
+    allowed_tools: string;
+    system_prompt: string;
+    original_id: string | null;
+  } | null>(null);
+  const [deletingAgent, setDeletingAgent] = useState<{ id: string; name: string } | null>(null);
+
+  function openCreate() {
+    setEditingAgent({
+      id: "",
+      name: "",
+      intents: "",
+      allowed_tools: "",
+      system_prompt: "",
+      original_id: null,
+    });
+    setDialogOpen(true);
+  }
+
+  function openEdit(row: Record<string, unknown>) {
+    const id = String(row.id ?? row.name ?? "");
+    setEditingAgent({
+      id,
+      name: String(row.name ?? ""),
+      intents: listFrom(row, ["intents"]).join(", "),
+      allowed_tools: listFrom(row, ["allowed_tools", "allowedTools"]).join(", "),
+      system_prompt: String(row.system_prompt ?? row.systemPrompt ?? ""),
+      original_id: id,
+    });
+    setDialogOpen(true);
+  }
+
+  function openDelete(row: Record<string, unknown>) {
+    const id = String(row.id ?? row.name ?? "");
+    setDeletingAgent({ id, name: String(row.name ?? id) });
+    setDeleteDialogOpen(true);
+  }
+
+  async function handleSave() {
+    if (!editingAgent) return;
+    setSaving(true);
+    try {
+      const payload = {
+        id: editingAgent.id.toLowerCase().replace(/[^a-z0-9_]/g, "_"),
+        name: editingAgent.name,
+        intents: editingAgent.intents.split(",").map((s: string) => s.trim()).filter(Boolean),
+        allowed_tools: editingAgent.allowed_tools.split(",").map((s: string) => s.trim()).filter(Boolean),
+        system_prompt: editingAgent.system_prompt,
+        original_id: editingAgent.original_id,
+      };
+      await fetch("/api/agents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      setDialogOpen(false);
+      setEditingAgent(null);
+      router.refresh();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!deletingAgent) return;
+    setSaving(true);
+    try {
+      await fetch(`/api/agents/${encodeURIComponent(deletingAgent.id)}`, {
+        method: "DELETE",
+      });
+      setDeleteDialogOpen(false);
+      setDeletingAgent(null);
+      router.refresh();
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="space-y-3">
@@ -274,72 +377,55 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
         <MetricCard detail="Server-side actions" icon={Wrench} label="Tools allowed" value="8" />
         <MetricCard detail="Writes held by policy" icon={ShieldCheck} label="Approval policy" value="On" />
       </section>
-      <Panel title="Agent Configuration" eyebrow="Workers">
+      <Panel title="Agent Configuration" eyebrow="Workers" action={
+        <Button size="sm" variant="outline" onClick={openCreate}>
+          <Plus className="mr-1.5 size-3.5" /> Create Agent
+        </Button>
+      }>
         <div className="grid gap-3 p-3 xl:grid-cols-2">
           {rows.map((row) => {
             const name = textOf(row, ["name"], "Agent");
-            const isSales = name.toLowerCase().includes("sales");
-            const isSupervisor = name.toLowerCase().includes("harper") || textOf(row, ["role"], "").toLowerCase().includes("supervisor");
-            const skills = isSupervisor
-              ? ["Policy Review", "Human Takeover"]
-              : isSales
-                ? ["Sales Sizing Assistant", "Objection Response"]
-                : ["Refund Resolver", "Order Status Lookup", "Account Verification"];
-            const tools = isSupervisor
-              ? ["chatwoot.send_message", "crm.create_note"]
-              : ["crm.lookup_contact", "knowledge.search", "chatwoot.draft_reply"];
-            const driverLanes = isSupervisor
-              ? ["Angry customer escalation", "Failed tool/send", "Manager request"]
-              : isSales
-                ? ["Sales sizing questions", "Pricing question", "Lead qualification"]
-                : ["Refund policy", "Order status", "Account verification"];
-            const workflow = isSupervisor
-              ? "Escalation Workflow"
-              : isSales
-                ? "Lead Qualification Workflow"
-                : "Support Resolution Workflow";
+            const intents = listFrom(row, ["intents"]);
+            const tools = listFrom(row, ["allowed_tools", "allowedTools"]);
+            const systemPromptPreview = textOf(row, ["system_prompt", "systemPrompt"], "").slice(0, 150) + "...";
 
             return (
-              <div className="border border-border bg-surface-2 p-3" key={textOf(row, ["id"], name)}>
+              <div className="border border-border bg-surface-2 p-3" key={name}>
                 <div className="flex items-start justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <h3 className="font-semibold text-foreground">{name}</h3>
                     <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                      {isSupervisor
-                        ? "Human supervisor for approval, escalation, and policy override decisions."
-                        : isSales
-                          ? "Qualifies sales and sizing questions using approved product and CRM context."
-                          : "Resolves support, order, refund, and account questions using approved SOPs."}
+                      {systemPromptPreview}
                     </p>
                   </div>
-                  <StatusPill status={textOf(row, ["status", "health"], "Active")}>
-                    {textOf(row, ["status", "health"], "Active")}
-                  </StatusPill>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <Button size="icon-sm" variant="ghost" onClick={() => openEdit(row)} title="Edit agent">
+                      <Pencil className="size-3.5" />
+                    </Button>
+                    <Button size="icon-sm" variant="ghost" onClick={() => openDelete(row)} title="Delete agent">
+                      <Trash2 className="size-3.5 text-destructive" />
+                    </Button>
+                    <StatusPill status={textOf(row, ["status", "health"], "Active")}>
+                      {textOf(row, ["status", "health"], "Active")}
+                    </StatusPill>
+                  </div>
                 </div>
                 <div className="mt-3 grid gap-3 text-xs md:grid-cols-2">
                   <div>
-                    <div className="mb-1 font-mono uppercase text-muted-foreground">Contact drivers</div>
-                    <InlineList values={driverLanes} />
-                  </div>
-                  <div>
-                    <div className="mb-1 font-mono uppercase text-muted-foreground">Workflow</div>
-                    <span className="font-semibold text-foreground">{workflow}</span>
-                  </div>
-                  <div>
-                    <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed skills</div>
-                    <InlineList values={skills} />
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Supported Intents</div>
+                    <InlineList values={intents} />
                   </div>
                   <div>
                     <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed tools</div>
                     <InlineList values={tools} />
                   </div>
                   <div>
-                    <div className="mb-1 font-mono uppercase text-muted-foreground">Graph</div>
-                    <span className="font-semibold text-foreground">Default Support Graph v0.1.4</span>
+                    <div className="mb-1 font-mono uppercase text-muted-foreground">Workflow</div>
+                    <span className="font-semibold text-foreground">Default Support Graph</span>
                   </div>
                   <div>
                     <div className="mb-1 font-mono uppercase text-muted-foreground">Risk tolerance</div>
-                    <span className="font-semibold text-foreground">{isSupervisor ? "High" : "Medium"}</span>
+                    <span className="font-semibold text-foreground">Managed by intent</span>
                   </div>
                 </div>
               </div>
@@ -347,6 +433,108 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
           })}
         </div>
       </Panel>
+
+      {/* Create / Edit Dialog */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {editingAgent?.original_id ? "Edit Agent" : "Create Agent"}
+            </DialogTitle>
+            <DialogDescription>
+              Configure the agent identity, routing intents, tool permissions, and system prompt.
+            </DialogDescription>
+          </DialogHeader>
+          {editingAgent && (
+            <div className="grid gap-4 py-2">
+              <div className="grid gap-2">
+                <Label htmlFor="agent-id">Agent ID (slug)</Label>
+                <Input
+                  id="agent-id"
+                  placeholder="e.g. billing_agent"
+                  value={editingAgent.id}
+                  onChange={(e) =>
+                    setEditingAgent({ ...editingAgent, id: e.target.value })
+                  }
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="agent-name">Display Name</Label>
+                <Input
+                  id="agent-name"
+                  placeholder="e.g. Billing Agent"
+                  value={editingAgent.name}
+                  onChange={(e) =>
+                    setEditingAgent({ ...editingAgent, name: e.target.value })
+                  }
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="agent-intents">Intents (comma-separated)</Label>
+                <Input
+                  id="agent-intents"
+                  placeholder="e.g. billing_inquiry, payment_issue"
+                  value={editingAgent.intents}
+                  onChange={(e) =>
+                    setEditingAgent({ ...editingAgent, intents: e.target.value })
+                  }
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="agent-tools">Allowed Tools (comma-separated)</Label>
+                <Input
+                  id="agent-tools"
+                  placeholder="e.g. crm.lookup_contact"
+                  value={editingAgent.allowed_tools}
+                  onChange={(e) =>
+                    setEditingAgent({ ...editingAgent, allowed_tools: e.target.value })
+                  }
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="agent-prompt">System Prompt</Label>
+                <Textarea
+                  id="agent-prompt"
+                  className="min-h-32 resize-y"
+                  placeholder="You are a helpful agent that..."
+                  value={editingAgent.system_prompt}
+                  onChange={(e) =>
+                    setEditingAgent({ ...editingAgent, system_prompt: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={() => void handleSave()} disabled={saving}>
+              {saving ? "Saving..." : "Save Agent"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Agent</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete <strong>{deletingAgent?.name}</strong>? This will remove the agent configuration file and cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => void handleDelete()} disabled={saving}>
+              {saving ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

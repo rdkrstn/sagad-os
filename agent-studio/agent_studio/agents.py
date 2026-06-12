@@ -1,10 +1,12 @@
 import os
+import re
 import yaml
 from pathlib import Path
 from pydantic import BaseModel
 from typing import List, Optional
 
 class AgentConfig(BaseModel):
+    id: str
     name: str
     intents: List[str]
     allowed_tools: List[str]
@@ -32,6 +34,7 @@ class AgentRegistry:
                         body = parts[2].strip()
                         
                         config = AgentConfig(
+                            id=file_path.stem,
                             name=frontmatter.get("name", file_path.stem),
                             intents=frontmatter.get("intents", []),
                             allowed_tools=frontmatter.get("allowed_tools", []),
@@ -44,3 +47,56 @@ class AgentRegistry:
 
     def get_agent(self, intent: str) -> Optional[AgentConfig]:
         return self.agents.get(intent)
+
+    def get_all_agents(self) -> List[AgentConfig]:
+        unique_agents = {id(config): config for config in self.agents.values()}
+        return list(unique_agents.values())
+
+    def reload_agents(self) -> None:
+        self.agents.clear()
+        self.load_agents()
+
+    def save_agent(
+        self,
+        agent_id: str,
+        name: str,
+        intents: List[str],
+        allowed_tools: List[str],
+        system_prompt: str,
+        original_id: Optional[str] = None,
+    ) -> AgentConfig:
+        safe_id = re.sub(r"[^a-z0-9_]", "_", agent_id.lower().strip())
+        if not safe_id:
+            raise ValueError("Agent ID cannot be empty.")
+
+        # Delete old file if renaming
+        if original_id and original_id != safe_id:
+            old_path = self.agents_dir / f"{original_id}.md"
+            if old_path.exists():
+                old_path.unlink()
+
+        frontmatter_data = yaml.dump(
+            {"name": name, "intents": intents, "allowed_tools": allowed_tools},
+            default_flow_style=True,
+        ).strip()
+        content = f"---\n{frontmatter_data}\n---\n{system_prompt.strip()}\n"
+        file_path = self.agents_dir / f"{safe_id}.md"
+        file_path.write_text(content, encoding="utf-8")
+        self.reload_agents()
+
+        config = AgentConfig(
+            id=safe_id,
+            name=name,
+            intents=intents,
+            allowed_tools=allowed_tools,
+            system_prompt=system_prompt.strip(),
+        )
+        return config
+
+    def delete_agent(self, agent_id: str) -> bool:
+        file_path = self.agents_dir / f"{agent_id}.md"
+        if file_path.exists():
+            file_path.unlink()
+            self.reload_agents()
+            return True
+        return False

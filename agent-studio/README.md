@@ -9,6 +9,8 @@ Agent Studio is also the adapter boundary. External tools such as Twenty CRM, Ch
 - Input: Chatwoot webhook payloads at `POST /webhooks/chatwoot`.
 - Output: conversations, drafts, QA/compliance results, and HITL approval state.
 - Output: approved Chatwoot send attempt from `POST /conversations/{id}/approve-send`.
+- Output: draft reply streaming from `GET /conversations/{id}/draft/stream`.
+- Output: dynamic agent save/delete from `POST /agents` and `DELETE /agents/{id}`.
 - Output: integration readiness from `GET /integrations`.
 - Output: Twenty CRM status from `GET /integrations/twenty/health`.
 - Output: LiteLLM gateway status from `GET /integrations/litellm/health`.
@@ -48,10 +50,12 @@ Chatwoot threading rule: one Chatwoot `conversation.id` maps to one Sagad conver
 - `LITELLM_BASE_URL`
 - `LITELLM_MASTER_KEY`
 - `DEEPSEEK_API_KEY`
+- `OPENROUTER_API_KEY`
 
-OpenAI and LangSmith variables are optional in this deterministic dev preview. Chatwoot send runs as `dry_run` when Chatwoot credentials are not set. Twenty CRM is disabled and dry-run by default; live writes require `TWENTY_ENABLED=true`, `TWENTY_DRY_RUN=false`, `TWENTY_ALLOW_WRITES=true`, and an explicit supervisor approval payload.
+OpenAI, OpenRouter, and LangSmith variables are optional in this deterministic dev preview. Chatwoot send runs as `dry_run` when Chatwoot credentials are not set. Twenty CRM is disabled and dry-run by default; live writes require `TWENTY_ENABLED=true`, `TWENTY_DRY_RUN=false`, `TWENTY_ALLOW_WRITES=true`, and an explicit supervisor approval payload.
 
-LiteLLM is optional. When enabled, `OPENAI_BASE_URL` can point model calls to `http://litellm:4000/v1` or `http://sagad-litellm:4000/v1` so OpenAI and DeepSeek traffic uses one OpenAI-compatible gateway.
+LiteLLM and OpenRouter are optional. When enabled, model calls can be routed to `http://litellm:4000/v1` or OpenRouter directly by prefixing the model with `openrouter/` and specifying `OPENROUTER_API_KEY`.
+
 
 `DATABASE_URL` is optional. When unset, Agent Studio uses the in-memory development store. When set to a Postgres-compatible URL, Agent Studio runs SQL migrations from `migrations/`, enables the Sagad schema foundation, and stores conversations, inbound messages, approvals, CRM tool plans, CRM tool results, and audit events through `psycopg`. `AGENT_STUDIO_INTERNAL_SECRET` protects privileged console-to-Agent-Studio routes when configured. `SAGAD_REALTIME_SECRET` verifies short-lived WebSocket tokens minted by the console.
 

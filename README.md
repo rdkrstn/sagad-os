@@ -98,9 +98,13 @@ The supervisor UI for Command Center, Review Queue, Conversations, Contact Drive
 
 The console direction follows the SagadOS High-Contrast Infra OS design system: black/white identity, warm paper light mode, graphite dark mode, compact operator density, and green only for active, healthy, connected, ready, selected, or primary action states.
 
-Adapters is for operator health monitoring. Tools is the callable action registry. MCP Servers is the external capability server registry. Developer payloads, DTO contracts, webhook samples, and low-level setup details belong under `Settings -> Advanced`.
+Key operations include:
+- **Agent CRUD Management**: Supervisors can Create, Edit, and Delete agent definitions from the Agents screen, modifying intents, tool permissions, and prompts.
+- **Draft Regeneration**: An integrated **Regenerate** streaming handler is available in the Conversation Review panel. Operators can clear a low-trust draft and watch the LLM stream new responses in real-time.
+- **Monitoring**: Adapters shows operator health monitoring. Tools displays the callable action registry. MCP Servers lists the capability registry.
 
 Location: `v1/`
+
 
 The profile menu also includes a SuperAdmin Console for instance-level visibility: workspaces, users, platform apps, LangGraph app setup, LiteLLM model gateway readiness, and runtime health. This is for self-host operators and maintainers, not daily queue review.
 
@@ -108,14 +112,19 @@ The profile menu also includes a SuperAdmin Console for instance-level visibilit
 
 The backend orchestration layer. It owns typed LangGraph state, LangChain tools, adapter policy, approval gates, knowledge retrieval, draft generation, trace metadata, and approved external actions.
 
+Core additions:
+- **Dynamic File-Based Agent Registry**: Configurations are parsed from markdown files containing YAML frontmatter in `agents/*.md`. Saving/updating configs via the API writes back to disk and triggers an automatic in-memory registry reload.
+- **LangChain `ChatOpenAI` Model Calling**: Invocation is handled via LangChain, utilizing tool binding (`.bind_tools(...)` with `tool_choice="none"`) to prevent agent tool syntax from leaking into customer-facing drafts.
+- **LiteLLM & OpenRouter Routing**: Supports three-tier priority routing (LiteLLM Proxy > OpenRouter > direct OpenAI). OpenRouter models are selected via `openrouter/` prefixes in `LITELLM_MODEL`.
+- **Server-Sent Events (SSE) Streaming**: A native SSE endpoint streams draft generation token-by-token using `astream()`, saving the completed draft to the conversation store.
+
 Agent Studio also owns governed knowledge ingestion. Local files and transcripts are parsed server-side, normalized into reviewable documents, approved by operators, embedded with OpenAI `text-embedding-3-small`, stored in Sagad Postgres/pgvector, and exposed to Sales/Support agents only as approved answer sources.
 
 Agent Studio also owns provider connection configuration. Chatwoot and Twenty CRM credentials are saved through Agent Studio and stored as encrypted Sagad Postgres secret versions when `DATABASE_URL` is configured. Browser code only receives redacted status fields such as configured flags, health, missing fields, and dry-run/write-gate state.
 
 It also includes `langgraph.json` for official LangSmith Studio visual debugging of the local `sagad_conversation` graph. Studio is for graph design and inspection; the Sagad Console is for supervisor operations.
 
-LiteLLM is supported as an optional OpenAI-compatible model gateway so Agent Studio can test OpenAI and DeepSeek credits through one server-side endpoint.
-The current conversation graph remains deterministic; LiteLLM readiness is adapter infrastructure for the next agent-drafting PR, not full autonomous model drafting yet.
+
 
 Location: `agent-studio/`
 
@@ -224,8 +233,12 @@ Useful local endpoints:
 - `POST /integration-configs/{provider}/disable`
 - `POST /integration-configs/{provider}/test`
 - `POST /webhooks/chatwoot`
+- `GET /agents`
+- `POST /agents`
+- `DELETE /agents/{agent_id}`
 - `GET /conversations`
 - `GET /conversations/{id}`
+- `GET /conversations/{id}/draft/stream`
 - `POST /conversations/{id}/approve-send`
 - `POST /knowledge/ingestion-jobs`
 - `GET /knowledge/ingestion-jobs`
@@ -238,6 +251,7 @@ Useful local endpoints:
 - `POST /knowledge/documents/{id}/resync`
 - `POST /knowledge/search-test`
 - `WS /ws/conversations`
+
 
 ### Docker Preview
 
@@ -354,6 +368,9 @@ Current:
 - Sagad Postgres/pgvector schema foundation.
 - Optional Agent Studio Postgres persistence for conversations, approvals, tool rows, and audit events.
 - Accepted Agent Studio encrypted connection config contract for Chatwoot and Twenty.
+- Dynamic Agent CRUD (Create, Edit, Delete) configurations from the Supervisor Console `/agents` page.
+- Refactored LLM calls to use LangChain's `ChatOpenAI` wrapper with LiteLLM/OpenRouter/OpenAI routing and tool binding.
+- Real-time token streaming for draft reply generation (Server-Sent Events) with a "Regenerate" button in the conversation review console.
 
 Next:
 

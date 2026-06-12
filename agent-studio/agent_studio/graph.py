@@ -1,6 +1,7 @@
 import os
 
-import litellm
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 
 from agent_studio.agents import AgentRegistry
@@ -21,6 +22,38 @@ else:
 
 
 registry = AgentRegistry()
+
+
+def _build_chat_model() -> ChatOpenAI:
+    """Build a ChatOpenAI instance routed through LiteLLM or OpenRouter."""
+    model_name = os.getenv("LITELLM_MODEL", "gpt-4o-mini")
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    litellm_base = os.getenv("LITELLM_BASE_URL")
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    openai_base = os.getenv("OPENAI_BASE_URL")
+
+    # Priority: LiteLLM proxy > OpenRouter > direct OpenAI
+    if litellm_base and os.getenv("LITELLM_ENABLED", "false").lower() in ("true", "1", "yes"):
+        return ChatOpenAI(
+            model=model_name,
+            api_key=os.getenv("LITELLM_MASTER_KEY") or "sk-not-needed",
+            base_url=litellm_base,
+            streaming=True,
+        )
+    if openrouter_key and model_name.startswith("openrouter/"):
+        return ChatOpenAI(
+            model=model_name.removeprefix("openrouter/"),
+            api_key=openrouter_key,
+            base_url="https://openrouter.ai/api/v1",
+            streaming=True,
+        )
+    return ChatOpenAI(
+        model=model_name,
+        api_key=openai_key or "sk-not-needed",
+        base_url=openai_base,
+        streaming=True,
+    )
+
 
 TOOL_SCHEMAS = {
     "crm.lookup_contact": {
@@ -398,22 +431,27 @@ def draft_reply(state: AgentStudioState) -> dict[str, object]:
             if tool_name in TOOL_SCHEMAS:
                 tools.append(TOOL_SCHEMAS[tool_name])
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": state["normalized_message"]},
-    ]
+    system_prompt += (
+        "\n\nCRITICAL: Respond directly with the message content you want to send to the customer. "
+        "Do NOT output internal tool call logs or 'I am checking my tools'. Produce the final conversational response."
+    )
 
     try:
-        response = litellm.completion(
-            model=os.getenv("LITELLM_MODEL", "gpt-4o-mini"),
-            messages=messages,
-            tools=tools if tools else None,
-        )
-        response_message = response.choices[0].message
-        body = response_message.content
+        llm = _build_chat_model()
+        lc_messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=state["normalized_message"]),
+        ]
+        if tools:
+            # Bind tools but force tool_choice="none" to prevent tool calls leaking into drafts
+            llm_with_tools = llm.bind_tools(tools, tool_choice="none")
+            response_message = llm_with_tools.invoke(lc_messages)
+        else:
+            response_message = llm.invoke(lc_messages)
+        body = response_message.content or ""
         tool_calls = getattr(response_message, "tool_calls", None)
         if not body and tool_calls:
-            body = f"I am checking my tools to assist you: {tool_calls[0].function.name}"
+            body = f"I am checking my tools to assist you: {tool_calls[0]['name']}"
     except Exception as exc:
         body = f"An error occurred: {str(exc)}"
         diagnostic = dict(state.get("retrieval_diagnostic", {}) or {})

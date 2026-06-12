@@ -7,6 +7,8 @@ from uuid import uuid4
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from agent_studio.chatwoot import (
     chatwoot_context_from_payload,
@@ -72,6 +74,7 @@ from agent_studio.store import StoreContext, store
 from agent_studio.tool_manifests import ToolManifestRegistry
 from agent_studio.tool_policy import ToolPolicyContext, ToolPolicyDecision, evaluate_tool_policy
 from agent_studio.twenty import TwentyAdapter, twenty_status
+from agent_studio.agents import AgentRegistry
 
 
 @asynccontextmanager
@@ -89,6 +92,7 @@ knowledge_ingestion_service = KnowledgeIngestionService(
     runtime_retriever=retriever,
 )
 tool_manifest_registry = ToolManifestRegistry()
+agent_registry = AgentRegistry()
 
 # Populated by the Sprint 2 graph/retrieval workflow when those state fields exist.
 _SPRINT2_CONVERSATION_STATE_FIELDS = (
@@ -1071,6 +1075,125 @@ def health_ready() -> dict[str, object]:
         "database_detail": database_detail,
         "knowledge_records": len(retriever.records),
     }
+
+
+@app.get("/agents")
+def get_agents():
+    return [agent.model_dump() for agent in agent_registry.get_all_agents()]
+
+
+class AgentSavePayload(BaseModel):
+    id: str
+    name: str
+    intents: list[str]
+    allowed_tools: list[str]
+    system_prompt: str
+    original_id: str | None = None
+
+
+@app.post("/agents")
+def save_agent(
+    payload: AgentSavePayload,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> list[dict[str, object]]:
+    _verify_internal_secret(x_sagad_internal_secret)
+    agent_registry.save_agent(
+        agent_id=payload.id,
+        name=payload.name,
+        intents=payload.intents,
+        allowed_tools=payload.allowed_tools,
+        system_prompt=payload.system_prompt,
+        original_id=payload.original_id,
+    )
+    return [agent.model_dump() for agent in agent_registry.get_all_agents()]
+
+
+@app.delete("/agents/{agent_id}")
+def delete_agent(
+    agent_id: str,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    _verify_internal_secret(x_sagad_internal_secret)
+    deleted = agent_registry.delete_agent(agent_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    return {"deleted": agent_id, "agents": [agent.model_dump() for agent in agent_registry.get_all_agents()]}
+
+
+@app.get("/conversations/{conversation_id}/draft/stream")
+async def stream_draft(
+    conversation_id: str,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+) -> StreamingResponse:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    record = store.get(conversation_id, context=context)
+    if not record:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    # Build the same prompt context as draft_reply
+    intent = record.intent or "general_support"
+    incoming = record.normalized_message or record.incoming_message or ""
+    knowledge = record.retrieved_knowledge or []
+    memory = record.memory_context if hasattr(record, "memory_context") else []
+    citation_titles = ", ".join(
+        getattr(hit, "title", str(hit)) for hit in knowledge[:4]
+    )
+
+    from agent_studio.graph import _resolve_markdown_agent, _build_chat_model, TOOL_SCHEMAS
+
+    agent = _resolve_markdown_agent(intent, getattr(record, "selected_agent", None))
+    system_prompt = agent.system_prompt if agent else "You are a helpful assistant."
+    if knowledge:
+        knowledge_context = "\n".join(
+            f"- {getattr(hit, 'title', 'Source')} ({getattr(hit, 'category', 'general')}, score {getattr(hit, 'score', 0.0):.2f}): {getattr(hit, 'excerpt', '')}"
+            for hit in knowledge
+        )
+        system_prompt += f"\n\nSelected Source Pack:\n{knowledge_context}"
+    system_prompt += (
+        "\n\nCRITICAL: Respond directly with the message content you want to send to the customer. "
+        "Do NOT output internal tool call logs or 'I am checking my tools'. Produce the final conversational response."
+    )
+
+    tools: list[dict[str, object]] = []
+    if agent:
+        for tool_name in agent.allowed_tools:
+            if tool_name in TOOL_SCHEMAS:
+                tools.append(TOOL_SCHEMAS[tool_name])
+
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    llm = _build_chat_model()
+    lc_messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=incoming),
+    ]
+    if tools:
+        llm = llm.bind_tools(tools, tool_choice="none")
+
+    async def generate():
+        collected = []
+        try:
+            async for chunk in llm.astream(lc_messages):
+                token = chunk.content or ""
+                if token:
+                    collected.append(token)
+                    yield f"data: {token}\n\n"
+        except Exception as exc:
+            yield f"data: [ERROR] {exc}\n\n"
+
+        # Save the final draft
+        final_body = "".join(collected)
+        if citation_titles:
+            final_body = f"{final_body}\n\nBasis: {citation_titles}."
+        record.draft_reply = final_body
+        store.save(record, context=context)
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.get("/skills")
