@@ -1,7 +1,7 @@
 import os
-
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+import json
+import litellm
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, AIMessageChunk
 from langgraph.graph import END, START, StateGraph
 
 from agent_studio.agents import AgentRegistry
@@ -24,34 +24,106 @@ else:
 registry = AgentRegistry()
 
 
-def _build_chat_model() -> ChatOpenAI:
-    """Build a ChatOpenAI instance routed through LiteLLM or OpenRouter."""
+class LiteLLMLangChainWrapper:
+    def __init__(self, model: str, api_base: str | None = None, api_key: str | None = None):
+        self.model = model
+        self.api_base = api_base
+        self.api_key = api_key
+        self.tools = None
+
+    def bind_tools(self, tools, tool_choice=None):
+        self.tools = tools
+        return self
+
+    def _convert_messages(self, messages):
+        litellm_messages = []
+        for m in messages:
+            if isinstance(m, SystemMessage):
+                litellm_messages.append({"role": "system", "content": m.content})
+            elif isinstance(m, HumanMessage):
+                litellm_messages.append({"role": "user", "content": m.content})
+            elif isinstance(m, AIMessage):
+                litellm_messages.append({"role": "assistant", "content": m.content})
+            elif hasattr(m, "content"):
+                litellm_messages.append({"role": "user", "content": m.content})
+            elif isinstance(m, dict):
+                litellm_messages.append(m)
+        return litellm_messages
+
+    def invoke(self, messages):
+        litellm_messages = self._convert_messages(messages)
+        kwargs = {
+            "model": self.model,
+            "messages": litellm_messages,
+        }
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.tools:
+            kwargs["tools"] = self.tools
+            kwargs["tool_choice"] = "none"
+
+        response = litellm.completion(**kwargs)
+        response_message = response.choices[0].message
+        content = response_message.content or ""
+        
+        tool_calls = []
+        if getattr(response_message, "tool_calls", None):
+            for tc in response_message.tool_calls:
+                tool_calls.append({
+                    "name": tc.function.name,
+                    "args": json.loads(tc.function.arguments) if tc.function.arguments else {},
+                    "id": tc.id,
+                })
+        
+        return AIMessage(content=content, tool_calls=tool_calls)
+
+    async def astream(self, messages):
+        litellm_messages = self._convert_messages(messages)
+        kwargs = {
+            "model": self.model,
+            "messages": litellm_messages,
+            "stream": True,
+        }
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.tools:
+            kwargs["tools"] = self.tools
+            kwargs["tool_choice"] = "none"
+
+        response = await litellm.acompletion(**kwargs)
+        async for chunk in response:
+            content = chunk.choices[0].delta.content or ""
+            if content:
+                yield AIMessageChunk(content=content)
+
+
+def _build_chat_model() -> LiteLLMLangChainWrapper:
+    """Build a LiteLLM wrapper routed through LiteLLM proxy, OpenRouter, or direct library call."""
     model_name = os.getenv("LITELLM_MODEL", "gpt-4o-mini")
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
     litellm_base = os.getenv("LITELLM_BASE_URL")
-    openai_key = os.getenv("OPENAI_API_KEY", "")
-    openai_base = os.getenv("OPENAI_BASE_URL")
 
-    # Priority: LiteLLM proxy > OpenRouter > direct OpenAI
+    # Priority 1: LiteLLM proxy server
     if litellm_base and os.getenv("LITELLM_ENABLED", "false").lower() in ("true", "1", "yes"):
-        return ChatOpenAI(
+        return LiteLLMLangChainWrapper(
             model=model_name,
             api_key=os.getenv("LITELLM_MASTER_KEY") or "sk-not-needed",
-            base_url=litellm_base,
-            streaming=True,
+            api_base=litellm_base,
         )
+    # Priority 2: OpenRouter directly
     if openrouter_key and model_name.startswith("openrouter/"):
-        return ChatOpenAI(
+        return LiteLLMLangChainWrapper(
             model=model_name.removeprefix("openrouter/"),
             api_key=openrouter_key,
-            base_url="https://openrouter.ai/api/v1",
-            streaming=True,
+            api_base="https://openrouter.ai/api/v1",
         )
-    return ChatOpenAI(
+    # Priority 3: Direct python library call (reads provider env keys automatically, e.g. GEMINI_API_KEY, OPENAI_API_KEY)
+    return LiteLLMLangChainWrapper(
         model=model_name,
-        api_key=openai_key or "sk-not-needed",
-        base_url=openai_base,
-        streaming=True,
     )
 
 
