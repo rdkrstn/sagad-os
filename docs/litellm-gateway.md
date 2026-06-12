@@ -1,12 +1,16 @@
 # LiteLLM Gateway
 
-LiteLLM is an optional model gateway for Agent Studio. It gives Sagad OS one OpenAI-compatible endpoint while still letting operators test multiple providers such as OpenAI and DeepSeek.
+LiteLLM is an optional model gateway for Agent Studio. It gives Sagad OS one OpenAI-compatible endpoint while still letting operators test multiple providers such as OpenAI, DeepSeek, and OpenRouter.
 
 ## Why It Exists
 
-Agent Studio should not hard-code every model provider directly into graph nodes. A gateway lets the backend switch models, test credits, and keep browser code away from model-provider credentials.
+Agent Studio uses LangChain's `ChatOpenAI` wrapper to perform model calling. Instead of hard-coding every provider, the wrapper automatically routes through one of three prioritized targets depending on the environment variables:
 
-The current Sagad conversation graph is still deterministic. LiteLLM readiness does not enable full LLM-powered Sales or Support drafting yet; that comes after adapter correctness is stable.
+1. **LiteLLM Proxy** (if `LITELLM_ENABLED=true` and `LITELLM_BASE_URL` is set)
+2. **OpenRouter** (if `OPENROUTER_API_KEY` is set and `LITELLM_MODEL` starts with `openrouter/`)
+3. **Direct OpenAI** (fallback using `OPENAI_API_KEY` and optionally `OPENAI_BASE_URL`)
+
+This allows the backend to easily switch models, test credits, and support streaming while keeping provider credentials securely stored in the environment.
 
 ## Local Preview
 
@@ -14,16 +18,21 @@ The current Sagad conversation graph is still deterministic. LiteLLM readiness d
 docker compose -f compose.preview.yaml --profile litellm up -d --build
 ```
 
-Agent Studio can point at the gateway with:
+Agent Studio can point at the gateway, OpenRouter, or OpenAI with:
 
 ```env
+# LiteLLM Proxy Option
 LITELLM_ENABLED=true
 LITELLM_BASE_URL=http://litellm:4000/v1
-OPENAI_BASE_URL=http://litellm:4000/v1
 LITELLM_MASTER_KEY=replace-with-strong-litellm-key
+
+# OpenRouter Option
+OPENROUTER_API_KEY=replace-with-openrouter-key
+LITELLM_MODEL=openrouter/google/gemini-2.5-flash
+
+# OpenAI Direct Option (Fallback)
 OPENAI_API_KEY=replace-with-openai-key
-DEEPSEEK_API_KEY=replace-with-deepseek-key
-OPENAI_MODEL=sagad-openai-fast
+LITELLM_MODEL=gpt-4o-mini
 ```
 
 ## VPS Preview

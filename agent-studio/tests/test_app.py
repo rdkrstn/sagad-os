@@ -138,6 +138,17 @@ def test_skills_endpoint_returns_registry_without_secrets(
     assert_no_secret_material(response.text)
 
 
+def test_agents_endpoint_returns_agents() -> None:
+    response = client.get("/agents")
+    assert response.status_code == 200
+    agents = response.json()
+    assert isinstance(agents, list)
+    assert len(agents) > 0
+    assert "name" in agents[0]
+    assert "intents" in agents[0]
+    assert "allowed_tools" in agents[0]
+    assert "system_prompt" in agents[0]
+
 def test_tools_manifests_endpoint_returns_current_manifests_without_secrets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -352,7 +363,7 @@ def test_chatwoot_webhook_threads_same_conversation_messages() -> None:
 
 
 def test_chatwoot_followup_uses_memory_context_separate_from_knowledge(
-    mock_litellm_completion: object,
+    mock_chat_model: object,
 ) -> None:
     client.post(
         "/webhooks/chatwoot",
@@ -385,7 +396,11 @@ def test_chatwoot_followup_uses_memory_context_separate_from_knowledge(
     assert payload["memory_diagnostic"]["memory_available"] is True
     assert any("pricing" in item["content"].lower() for item in payload["memory_context"])
 
-    system_prompt = mock_litellm_completion.call_args.kwargs["messages"][0]["content"]  # type: ignore[attr-defined]
+    # With ChatOpenAI, the mock_llm.invoke is called with LangChain messages
+    mock_llm = mock_chat_model.return_value  # type: ignore[attr-defined]
+    call_args = mock_llm.invoke.call_args
+    lc_messages = call_args[0][0]  # first positional arg is the message list
+    system_prompt = lc_messages[0].content  # SystemMessage content
     assert "Conversation Memory" in system_prompt
     assert "Selected Source Pack" in system_prompt
     assert "hmmm pricing" in system_prompt

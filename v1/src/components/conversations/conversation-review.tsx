@@ -20,6 +20,7 @@ import {
   Send,
   ShieldCheck,
   Siren,
+  RefreshCw,
   Sparkles,
   UserRound,
   Wrench,
@@ -390,6 +391,7 @@ export function ConversationReview({
   const [actionByConversation, setActionByConversation] = useState<Record<string, string>>({});
   const [stateByConversation, setStateByConversation] = useState<Record<string, string>>({});
   const [activeRailTab, setActiveRailTab] = useState<RailTab>("context");
+  const [isStreaming, setIsStreaming] = useState(false);
   const [localTrailByConversation, setLocalTrailByConversation] = useState<
     Record<string, LooseRecord[]>
   >({});
@@ -507,6 +509,50 @@ export function ConversationReview({
         },
       ],
     }));
+  }
+
+  async function regenerateDraft() {
+    if (!primaryId || isStreaming) return;
+    setIsStreaming(true);
+    setDraftReply("");
+
+    try {
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(primaryId)}/draft/stream`,
+      );
+      if (!response.ok || !response.body) {
+        setDraftReply("Error: Failed to connect to streaming endpoint.");
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const text = decoder.decode(value, { stream: true });
+        const lines = text.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const token = line.slice(6);
+            if (token === "[DONE]") break;
+            if (token.startsWith("[ERROR]")) {
+              accumulated += ` ${token}`;
+              break;
+            }
+            accumulated += token;
+            setDraftReply(accumulated);
+          }
+        }
+      }
+    } catch {
+      setDraftReply("Error: Streaming connection failed.");
+    } finally {
+      setIsStreaming(false);
+    }
   }
 
   async function submitDecision(approved: boolean): Promise<void> {
@@ -845,6 +891,18 @@ export function ConversationReview({
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
               <Sparkles aria-hidden="true" className="size-4 text-[var(--accent-text)]" />
               AI draft reply
+              {hasConversation && draftReply && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="ml-2 h-6 gap-1 px-2 text-xs"
+                  disabled={isStreaming || isPending}
+                  onClick={() => void regenerateDraft()}
+                >
+                  <RefreshCw className={cn("size-3", isStreaming && "animate-spin")} />
+                  {isStreaming ? "Streaming..." : "Regenerate"}
+                </Button>
+              )}
             </div>
             <StatusPill tone={confidence >= 88 ? "good" : "warning"}>
               {confidence}% trust
@@ -853,7 +911,7 @@ export function ConversationReview({
           <Textarea
             aria-label="AI draft reply"
             className="min-h-24 resize-y bg-background text-sm leading-6"
-            disabled={!hasConversation || isPending}
+            disabled={!hasConversation || isPending || isStreaming}
             onChange={(event) => setDraftReply(event.target.value)}
             placeholder="No draft yet. Agent Studio will generate a supervised draft after a conversation arrives."
             value={draftReply}

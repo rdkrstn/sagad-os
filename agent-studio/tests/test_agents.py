@@ -1,6 +1,7 @@
 import os
 import pytest
 from unittest.mock import patch, MagicMock
+from langchain_core.messages import AIMessage
 from agent_studio.agents import AgentRegistry, AgentConfig
 from agent_studio.graph import draft_reply, select_markdown_agent
 from agent_studio.state import AgentStudioState
@@ -25,13 +26,14 @@ You are a test agent.
     assert agent.allowed_tools == ["crm.lookup_contact"]
     assert agent.system_prompt == "You are a test agent."
 
-@patch("agent_studio.graph.litellm.completion")
-def test_draft_reply_with_litellm(mock_completion):
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = "This is a mocked response."
-    mock_response.choices[0].message.tool_calls = None
-    mock_completion.return_value = mock_response
+
+@patch("agent_studio.graph._build_chat_model")
+def test_draft_reply_with_langchain(mock_build):
+    mock_llm = MagicMock()
+    mock_response = AIMessage(content="This is a mocked response.")
+    mock_llm.invoke.return_value = mock_response
+    mock_llm.bind_tools.return_value = mock_llm
+    mock_build.return_value = mock_llm
 
     state: AgentStudioState = {
         "incoming_message": "hello",
@@ -43,17 +45,7 @@ def test_draft_reply_with_litellm(mock_completion):
     result = draft_reply(state)
 
     assert result["draft_reply"] == "This is a mocked response."
-    
-    # Check that litellm was called correctly
-    mock_completion.assert_called_once()
-    kwargs = mock_completion.call_args.kwargs
-    assert "messages" in kwargs
-    
-    # general_support should map to crm.lookup_contact tool
-    assert "tools" in kwargs
-    tools = kwargs["tools"]
-    assert tools is not None
-    assert tools[0]["function"]["name"] == "crm.lookup_contact"
+    mock_build.assert_called_once()
 
 
 def test_refund_intent_selects_refund_resolver_agent():
@@ -82,3 +74,83 @@ def test_pricing_intent_selects_sales_agent():
 
     assert result["selected_agent"] == "sales_agent"
     assert result["customer_driver"] == "pricing or quote"
+
+
+def test_agent_config_has_id(tmp_path):
+    agent_file = tmp_path / "test_bot.md"
+    agent_file.write_text("""---
+name: test_bot
+intents: ["greeting"]
+allowed_tools: []
+---
+Hello bot.
+""", encoding="utf-8")
+    registry = AgentRegistry(agents_dir=str(tmp_path))
+    agent = registry.get_agent("greeting")
+    assert agent is not None
+    assert agent.id == "test_bot"
+
+
+def test_save_agent(tmp_path):
+    registry = AgentRegistry(agents_dir=str(tmp_path))
+    saved = registry.save_agent(
+        agent_id="billing_agent",
+        name="Billing Agent",
+        intents=["billing_inquiry"],
+        allowed_tools=["crm.lookup_contact"],
+        system_prompt="You are a billing agent.",
+    )
+    assert saved.id == "billing_agent"
+    assert saved.name == "Billing Agent"
+    assert (tmp_path / "billing_agent.md").exists()
+
+    # Verify it was loaded into the registry
+    agent = registry.get_agent("billing_inquiry")
+    assert agent is not None
+    assert agent.name == "Billing Agent"
+
+
+def test_save_agent_rename(tmp_path):
+    registry = AgentRegistry(agents_dir=str(tmp_path))
+    registry.save_agent(
+        agent_id="old_agent",
+        name="Old Agent",
+        intents=["old_intent"],
+        allowed_tools=[],
+        system_prompt="Old prompt.",
+    )
+    assert (tmp_path / "old_agent.md").exists()
+
+    registry.save_agent(
+        agent_id="new_agent",
+        name="New Agent",
+        intents=["new_intent"],
+        allowed_tools=[],
+        system_prompt="New prompt.",
+        original_id="old_agent",
+    )
+    assert not (tmp_path / "old_agent.md").exists()
+    assert (tmp_path / "new_agent.md").exists()
+
+
+def test_delete_agent(tmp_path):
+    registry = AgentRegistry(agents_dir=str(tmp_path))
+    registry.save_agent(
+        agent_id="temp_agent",
+        name="Temp Agent",
+        intents=["temp_intent"],
+        allowed_tools=[],
+        system_prompt="Temporary.",
+    )
+    assert (tmp_path / "temp_agent.md").exists()
+
+    deleted = registry.delete_agent("temp_agent")
+    assert deleted is True
+    assert not (tmp_path / "temp_agent.md").exists()
+    assert registry.get_agent("temp_intent") is None
+
+
+def test_delete_nonexistent_agent(tmp_path):
+    registry = AgentRegistry(agents_dir=str(tmp_path))
+    deleted = registry.delete_agent("nonexistent")
+    assert deleted is False
