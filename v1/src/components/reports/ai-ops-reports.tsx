@@ -2,10 +2,12 @@ import {
   AlertTriangle,
   BarChart3,
   CheckCircle2,
+  Clock3,
   Gauge,
   MessageSquareText,
   Send,
   ShieldCheck,
+  Wrench,
   XCircle,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
@@ -35,7 +37,8 @@ export function AiOpsReports({ data }: { data: unknown }) {
   const attention = asArray(
     dashboard.attentionSummary ?? dashboard.attentionItems,
   ).map(asRecord);
-// TODO: This component is currently using mock data and does not have real API connections. Once the Agent Studio APIs are available, update the data fetching logic to retrieve real metrics, conversations, and attention summary data, and remove the default dashboard fallback. Also, consider breaking this into smaller components for each section of the report for better maintainability and readability.
+  const scorecardSource = textOf(dashboard, ["scorecardSource", "integrationSource"], "preview");
+  const scorecardStatus = textOf(dashboard, ["scorecardStatus"], scorecardSource);
   const topIssue = textOf(
     metrics,
     ["topIssue"],
@@ -49,10 +52,9 @@ export function AiOpsReports({ data }: { data: unknown }) {
 
   return (
     <>
-    {/* TODO: This component is currently using mock data and does not have real API connections. Once the Agent Studio APIs are available, update the data fetching logic to retrieve real metrics, conversations, and attention summary data, and remove the default dashboard fallback. Also, consider breaking this into smaller components for each section of the report for better maintainability and readability.  */}
       <PageHeader
         description="Basic AI Ops reporting for automation, approvals, rejections, escalations, trust score, and missing knowledge."
-        meta={textOf(dashboard, ["lastUpdated", "asOf"], "Demo data")}
+        meta={`${textOf(dashboard, ["lastUpdated", "asOf"], "Demo data")} - ${scorecardStatus}`}
         title="Reports"
       />
 
@@ -106,6 +108,24 @@ export function AiOpsReports({ data }: { data: unknown }) {
             detail: "Average across AI drafts",
             icon: Gauge,
           },
+          {
+            label: "Tool blocks",
+            value: numberOf(metrics, ["toolCallsBlocked", "blockedTools"]),
+            detail: "Policy-blocked tool calls",
+            icon: ShieldCheck,
+          },
+          {
+            label: "Dry-runs",
+            value: numberOf(metrics, ["toolDryRuns", "dryRuns"]),
+            detail: "Provider-safe executions",
+            icon: Clock3,
+          },
+          {
+            label: "Provider failures",
+            value: numberOf(metrics, ["providerFailures", "providerFailureCount"]),
+            detail: "Visible failure categories",
+            icon: Wrench,
+          },
         ].map((metric) => {
           const Icon = metric.icon;
 
@@ -127,10 +147,9 @@ export function AiOpsReports({ data }: { data: unknown }) {
           );
         })}
       </div>
-{/* TODO: This component is currently using mock data and does not have real API connections. Once the Agent Studio APIs are available, update the data fetching logic to retrieve real metrics, conversations, and attention summary data, and remove the default dashboard fallback. Also, consider breaking this into smaller components for each section of the report for better maintainability and readability.   */}
       <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
         <SectionPanel
-          action={<Badge variant="outline">{attention.length} signals</Badge>}
+          action={<Badge variant="outline">{scorecardSource}</Badge>}
           eyebrow="Exception mix"
           title="Supervisor Load"
         >
@@ -170,7 +189,6 @@ export function AiOpsReports({ data }: { data: unknown }) {
             rows={attention}
           />
         </SectionPanel>
-{/* TODO: This component is currently using mock data and does not have real API connections. Once the Agent Studio APIs are available, update the data fetching logic to retrieve real metrics, conversations, and attention summary data, and remove the default dashboard fallback. Also, consider breaking this into smaller components for each section of the report for better maintainability and readability.   */}
         <SectionPanel eyebrow="Knowledge gaps" title="Recommended Action">
           <div className="space-y-4 p-4">
             <div className="rounded-lg border bg-[#F8F6F1] p-4">

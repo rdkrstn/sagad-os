@@ -1,4 +1,4 @@
-import { AlertTriangle, BarChart3, CheckCircle2, Send, ShieldCheck, XCircle } from "lucide-react";
+import { AlertTriangle, BarChart3, CheckCircle2, Clock3, Send, ShieldCheck, Wrench, XCircle } from "lucide-react";
 import { MetricCard, Panel, StatusPill } from "@/components/product/product-ui";
 import { asArray, asRecord, nestedArray, numberOf, textOf } from "@/components/ui/data-access";
 
@@ -7,6 +7,8 @@ export function AnalyticsConsole({ data }: { data: unknown }) {
   const metrics = asRecord(dashboard.metrics);
   const conversations = asArray(dashboard.conversations).map(asRecord);
   const attention = nestedArray(dashboard, ["attentionSummary", "attentionItems"]).map(asRecord);
+  const scorecardSource = textOf(dashboard, ["scorecardSource", "integrationSource"], "preview");
+  const scorecardStatus = textOf(dashboard, ["scorecardStatus"], scorecardSource);
 
   const reportMetrics = [
     ["Messages received", numberOf(metrics, ["totalConversations", "messagesReceived"]), BarChart3],
@@ -15,18 +17,22 @@ export function AnalyticsConsole({ data }: { data: unknown }) {
     ["Pending approvals", numberOf(metrics, ["needsApproval", "approvalRequired"]), AlertTriangle],
     ["Rejected", numberOf(metrics, ["rejected"]), XCircle],
     ["Escalated", numberOf(metrics, ["escalated"]), ShieldCheck],
+    ["Tool blocks", numberOf(metrics, ["toolCallsBlocked", "blockedTools"]), ShieldCheck],
+    ["Dry-runs", numberOf(metrics, ["toolDryRuns", "dryRuns"]), Clock3],
+    ["Tool failures", numberOf(metrics, ["toolFailures", "sendFailures"]), Wrench],
+    ["Provider failures", numberOf(metrics, ["providerFailures", "providerFailureCount"]), AlertTriangle],
   ] as const;
 
   return (
     <div className="space-y-4">
-      <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+      <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
         {reportMetrics.map(([label, value, Icon]) => (
-          <MetricCard detail="Current reporting window" icon={Icon} key={label} label={label} value={value} />
+          <MetricCard detail={`Scorecard: ${scorecardStatus}`} icon={Icon} key={label} label={label} value={value} />
         ))}
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-        <Panel action={<StatusPill tone="info">{attention.length} signals</StatusPill>} title="Supervisor Load" eyebrow="Exception mix">
+        <Panel action={<StatusPill tone="info">{scorecardSource}</StatusPill>} title="Supervisor Load" eyebrow="Exception mix">
           <div className="divide-y divide-border">
             {attention.map((row, index) => (
               <div className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_80px_140px]" key={index}>

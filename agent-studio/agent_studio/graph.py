@@ -7,6 +7,7 @@ from agent_studio.agents import AgentRegistry
 from agent_studio.memory_workflow import build_memory_pack
 from agent_studio.retrieval import retriever
 from agent_studio.schemas import ConversationMessageRecord, KnowledgeHit, MemoryHit, QaFinding
+from agent_studio.skill_registry import skill_registry
 from agent_studio.state import AgentStudioState
 
 try:
@@ -510,10 +511,87 @@ def run_qa_compliance(state: AgentStudioState) -> dict[str, object]:
             ),
         )
 
+    diagnostic = dict(state.get("retrieval_diagnostic", {}) or {})
+    diagnostic["skill_diagnostic"] = skill_registry.graph_diagnostic(
+        selected_agent=state.get("selected_agent") or "general_support",
+        completed_stages=[
+            "normalize",
+            "retrieve_memory",
+            "classify",
+            "select_agent",
+            "retrieve",
+            "draft",
+            "qa_compliance",
+        ],
+    )
+
+    quality_score = 0.88
+    if retrieval_confidence is not None:
+        quality_score = min(quality_score, max(0.0, float(retrieval_confidence)))
+    if missing_knowledge:
+        quality_score = min(quality_score, 0.48)
+    if state["risk_level"] == "high":
+        quality_score = min(quality_score, 0.72)
+    if has_draft_error or has_empty_draft:
+        quality_score = 0.0
+    quality_score = round(quality_score, 4)
+    quality_label = (
+        "blocked"
+        if has_draft_error or has_empty_draft
+        else "needs_review"
+        if missing_knowledge or state["risk_level"] == "high"
+        else "review_ready"
+    )
+    decision_reason = (
+        "Provider draft generation failed or returned no sendable reply."
+        if has_draft_error or has_empty_draft
+        else "Missing or weak knowledge requires supervisor review."
+        if missing_knowledge
+        else "High-risk conversation remains supervisor-gated."
+        if state["risk_level"] == "high"
+        else "Draft is grounded enough for supervisor review."
+    )
+    trace_attributes = {
+        "sagad.graph": "Default Support Graph v0.1.4",
+        "sagad.intent": state.get("intent", "unknown"),
+        "sagad.risk_level": state.get("risk_level", "medium"),
+        "sagad.selected_agent": state.get("selected_agent") or "general_support",
+        "sagad.retrieval_confidence": retrieval_confidence,
+        "sagad.missing_knowledge": missing_knowledge,
+        "sagad.approval_status": "needs_approval",
+        "sagad.quality_label": quality_label,
+    }
+    confidence_breakdown = {
+        "retrieval_confidence": retrieval_confidence,
+        "knowledge_available": bool(knowledge),
+        "missing_knowledge": missing_knowledge,
+        "risk_level": state.get("risk_level", "medium"),
+        "draft_available": not has_empty_draft,
+        "provider_error": has_draft_error,
+        "final_score": quality_score,
+    }
+
     return {
         "qa_findings": findings,
         "compliance_status": "blocked" if has_draft_error or has_empty_draft else "needs_review",
         "approval_status": "needs_approval",
+        "retrieval_diagnostic": diagnostic,
+        "eval_tags": [
+            str(state.get("intent", "unknown")),
+            str(state.get("risk_level", "medium")),
+            "missing_knowledge" if missing_knowledge else "knowledge_supported",
+            quality_label,
+        ],
+        "trace_attributes": trace_attributes,
+        "diagnostic_payload": diagnostic,
+        "decision_reason": decision_reason,
+        "guardrail_findings": findings,
+        "confidence_breakdown": confidence_breakdown,
+        "final_confidence_score": quality_score,
+        "quality_score": quality_score,
+        "quality_label": quality_label,
+        "quality_signals": confidence_breakdown,
+        "quality_notes": decision_reason,
     }
 
 

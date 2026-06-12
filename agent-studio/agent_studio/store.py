@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from psycopg.rows import DictRow
 from psycopg.types.json import Jsonb
@@ -26,6 +26,7 @@ from agent_studio.schemas import (
     CrmContactContext,
     DiagnosticEvent,
     MemoryHit,
+    QaFinding,
     ToolPlan,
     ToolResult,
 )
@@ -39,6 +40,22 @@ class StoreContext:
 
 
 DEFAULT_CONTEXT = StoreContext()
+QUALITY_FIELD_NAMES = (
+    "eval_tags",
+    "trace_attributes",
+    "diagnostic_payload",
+    "decision_reason",
+    "guardrail_findings",
+    "confidence_breakdown",
+    "final_confidence_score",
+    "quality_score",
+    "quality_label",
+    "quality_signals",
+    "quality_notes",
+    "quality_evaluated_at",
+)
+EVAL_RUN_STATUSES = {"queued", "running", "completed", "failed", "cancelled"}
+EVAL_RESULT_STATUSES = {"passed", "failed", "errored", "skipped"}
 
 
 class ConversationStoreProtocol(Protocol):
@@ -88,6 +105,57 @@ class ConversationStoreProtocol(Protocol):
         event: DiagnosticEvent,
         context: StoreContext | None = None,
     ) -> DiagnosticEvent:
+        ...
+
+    def update_conversation_quality(
+        self,
+        conversation_id: str,
+        *,
+        eval_tags: list[str] | None = None,
+        trace_attributes: Mapping[str, object] | None = None,
+        diagnostic_payload: Mapping[str, object] | None = None,
+        decision_reason: str | None = None,
+        guardrail_findings: Sequence[object] | None = None,
+        confidence_breakdown: Mapping[str, object] | None = None,
+        final_confidence_score: float | None = None,
+        quality_score: float | None = None,
+        quality_label: str | None = None,
+        quality_signals: Mapping[str, object] | None = None,
+        quality_notes: str | None = None,
+        quality_evaluated_at: datetime | None = None,
+        context: StoreContext | None = None,
+    ) -> ConversationRecord | None:
+        ...
+
+    def record_eval_run(
+        self,
+        run: Mapping[str, object],
+        context: StoreContext | None = None,
+    ) -> dict[str, object]:
+        ...
+
+    def record_eval_result(
+        self,
+        result: Mapping[str, object],
+        context: StoreContext | None = None,
+    ) -> dict[str, object]:
+        ...
+
+    def list_eval_runs(
+        self,
+        *,
+        limit: int = 50,
+        context: StoreContext | None = None,
+    ) -> list[dict[str, object]]:
+        ...
+
+    def list_eval_results(
+        self,
+        eval_run_id: str,
+        *,
+        limit: int = 200,
+        context: StoreContext | None = None,
+    ) -> list[dict[str, object]]:
         ...
 
     def append_memory_items(
@@ -151,7 +219,232 @@ def _json_list(value: object) -> list[object]:
 
 
 def _json_dict(value: object) -> dict[str, object]:
-    return value if isinstance(value, dict) else {}
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_optional_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    return _coerce_datetime(value)
+
+
+def _coerce_status(value: object, allowed: set[str], default: str) -> str:
+    status = str(value) if value else default
+    return status if status in allowed else default
+
+
+def _set_model_field(model: BaseModel, field_name: str, value: object) -> None:
+    if field_name == "guardrail_findings":
+        value = [
+            item if isinstance(item, QaFinding) else QaFinding.model_validate(item)
+            for item in _json_list(value)
+        ]
+    if field_name in type(model).model_fields:
+        setattr(model, field_name, value)
+        return
+    object.__setattr__(model, field_name, value)
+
+
+def _attach_quality_fields(
+    record: ConversationRecord,
+    values: Mapping[str, object],
+) -> ConversationRecord:
+    for field_name in QUALITY_FIELD_NAMES:
+        if field_name in values:
+            _set_model_field(record, field_name, values[field_name])
+    return record
+
+
+def _quality_values(
+    *,
+    eval_tags: list[str] | None = None,
+    trace_attributes: Mapping[str, object] | None = None,
+    diagnostic_payload: Mapping[str, object] | None = None,
+    decision_reason: str | None = None,
+    guardrail_findings: Sequence[object] | None = None,
+    confidence_breakdown: Mapping[str, object] | None = None,
+    final_confidence_score: float | None = None,
+    quality_score: float | None = None,
+    quality_label: str | None = None,
+    quality_signals: Mapping[str, object] | None = None,
+    quality_notes: str | None = None,
+    quality_evaluated_at: datetime | None = None,
+) -> dict[str, object]:
+    return {
+        "eval_tags": list(eval_tags or []),
+        "trace_attributes": dict(trace_attributes or {}),
+        "diagnostic_payload": dict(diagnostic_payload or {}),
+        "decision_reason": decision_reason,
+        "guardrail_findings": _dump_mixed_models(list(guardrail_findings or [])),
+        "confidence_breakdown": dict(confidence_breakdown or {}),
+        "final_confidence_score": _coerce_optional_float(final_confidence_score),
+        "quality_score": _coerce_optional_float(quality_score),
+        "quality_label": quality_label,
+        "quality_signals": dict(quality_signals or {}),
+        "quality_notes": quality_notes,
+        "quality_evaluated_at": quality_evaluated_at or _now(),
+    }
+
+
+def _record_quality_values(record: ConversationRecord) -> dict[str, object]:
+    return {
+        "eval_tags": list(getattr(record, "eval_tags", [])),
+        "trace_attributes": _json_dict(getattr(record, "trace_attributes", None)),
+        "diagnostic_payload": _json_dict(getattr(record, "diagnostic_payload", None)),
+        "decision_reason": getattr(record, "decision_reason", None),
+        "guardrail_findings": _dump_mixed_models(
+            getattr(record, "guardrail_findings", []),
+        ),
+        "confidence_breakdown": _json_dict(getattr(record, "confidence_breakdown", None)),
+        "final_confidence_score": _coerce_optional_float(
+            getattr(record, "final_confidence_score", None),
+        ),
+        "quality_score": _coerce_optional_float(getattr(record, "quality_score", None)),
+        "quality_label": getattr(record, "quality_label", None),
+        "quality_signals": _json_dict(getattr(record, "quality_signals", None)),
+        "quality_notes": getattr(record, "quality_notes", None),
+        "quality_evaluated_at": getattr(record, "quality_evaluated_at", None),
+    }
+
+
+def _dump_mixed_models(values: Sequence[object]) -> list[dict[str, object]]:
+    dumped: list[dict[str, object]] = []
+    for value in values:
+        if isinstance(value, BaseModel):
+            dumped.append(_dump_model(value))
+        elif isinstance(value, Mapping):
+            dumped.append(dict(value))
+    return dumped
+
+
+def _normalize_eval_run(
+    run: Mapping[str, object],
+    *,
+    organization_id: str | None = None,
+    existing: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    existing = existing or {}
+    now = _now()
+    run_id = str(
+        run.get("id")
+        or run.get("run_id")
+        or existing.get("id")
+        or f"evalrun_{uuid4().hex[:12]}"
+    )
+    suite_name = str(run.get("suite_name") or existing.get("suite_name") or "default")
+    name = str(run.get("name") or existing.get("name") or suite_name)
+    default_status = "running"
+    if run.get("passed") is True:
+        default_status = "completed"
+    elif run.get("passed") is False:
+        default_status = "failed"
+    return {
+        "id": run_id,
+        "organization_id": organization_id or existing.get("organization_id"),
+        "name": name,
+        "suite_name": suite_name,
+        "status": _coerce_status(
+            run.get("status", existing.get("status")),
+            EVAL_RUN_STATUSES,
+            default_status,
+        ),
+        "started_at": _coerce_datetime(
+            run.get("started_at", existing.get("started_at", now)),
+        ),
+        "completed_at": _coerce_optional_datetime(
+            run.get("completed_at", existing.get("completed_at")),
+        ),
+        "total_cases": _coerce_int(
+            run.get("total_cases", run.get("case_count", existing.get("total_cases"))),
+            0,
+        ),
+        "passed_cases": _coerce_int(
+            run.get(
+                "passed_cases",
+                run.get("passed_case_count", existing.get("passed_cases")),
+            ),
+            0,
+        ),
+        "failed_cases": _coerce_int(
+            run.get(
+                "failed_cases",
+                run.get("failed_case_count", existing.get("failed_cases")),
+            ),
+            0,
+        ),
+        "average_score": _coerce_optional_float(
+            run.get("average_score", run.get("overall_score", existing.get("average_score"))),
+        ),
+        "metadata": _json_dict(run.get("metadata", existing.get("metadata"))),
+        "trace_url": run.get("trace_url", existing.get("trace_url")),
+        "created_at": _coerce_datetime(existing.get("created_at", now)),
+        "updated_at": now,
+    }
+
+
+def _normalize_eval_result(
+    result: Mapping[str, object],
+    *,
+    organization_id: str | None = None,
+    existing: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    existing = existing or {}
+    eval_run_id = result.get("eval_run_id") or existing.get("eval_run_id")
+    if not eval_run_id:
+        raise ValueError("eval_run_id is required to record an eval result.")
+    now = _now()
+    default_status = "passed"
+    if result.get("passed") is False:
+        default_status = "failed"
+    elif result.get("passed") is True:
+        default_status = "passed"
+    metrics = result.get("metrics", existing.get("metrics"))
+    if metrics is None and "scores" in result:
+        metrics = {"scores": result["scores"]}
+    return {
+        "id": str(result.get("id") or existing.get("id") or f"evalresult_{uuid4().hex[:12]}"),
+        "organization_id": organization_id or existing.get("organization_id"),
+        "eval_run_id": str(eval_run_id),
+        "conversation_id": result.get("conversation_id", existing.get("conversation_id")),
+        "case_name": str(
+            result.get("case_name")
+            or result.get("name")
+            or result.get("case_id")
+            or existing.get("case_name")
+            or "unnamed_case"
+        ),
+        "status": _coerce_status(
+            result.get("status", existing.get("status")),
+            EVAL_RESULT_STATUSES,
+            default_status,
+        ),
+        "score": _coerce_optional_float(result.get("score", existing.get("score"))),
+        "input": _json_dict(result.get("input", existing.get("input"))),
+        "expected": _json_dict(result.get("expected", existing.get("expected"))),
+        "actual": _json_dict(result.get("actual", existing.get("actual"))),
+        "metrics": _json_dict(metrics),
+        "failure_reason": result.get("failure_reason", existing.get("failure_reason")),
+        "trace_url": result.get("trace_url", existing.get("trace_url")),
+        "created_at": _coerce_datetime(existing.get("created_at", now)),
+    }
 
 
 def _diagnostic_event_from_row(row: Mapping[str, object]) -> DiagnosticEvent:
@@ -275,6 +568,8 @@ class InMemoryConversationStore:
         self._records: dict[str, ConversationRecord] = {}
         self._events: list[DiagnosticEvent] = []
         self._memory: dict[str, list[MemoryHit]] = {}
+        self._eval_runs: dict[str, dict[str, object]] = {}
+        self._eval_results: dict[str, dict[str, dict[str, object]]] = {}
 
     def list(self, context: StoreContext | None = None) -> list[ConversationRecord]:
         return sorted(
@@ -349,6 +644,120 @@ class InMemoryConversationStore:
             event.organization_id = scoped.organization_id
         self._events.append(event)
         return event
+
+    def update_conversation_quality(
+        self,
+        conversation_id: str,
+        *,
+        eval_tags: list[str] | None = None,
+        trace_attributes: Mapping[str, object] | None = None,
+        diagnostic_payload: Mapping[str, object] | None = None,
+        decision_reason: str | None = None,
+        guardrail_findings: Sequence[object] | None = None,
+        confidence_breakdown: Mapping[str, object] | None = None,
+        final_confidence_score: float | None = None,
+        quality_score: float | None = None,
+        quality_label: str | None = None,
+        quality_signals: Mapping[str, object] | None = None,
+        quality_notes: str | None = None,
+        quality_evaluated_at: datetime | None = None,
+        context: StoreContext | None = None,
+    ) -> ConversationRecord | None:
+        record = self._records.get(conversation_id)
+        if record is None:
+            return None
+        values = _quality_values(
+            eval_tags=eval_tags,
+            trace_attributes=trace_attributes,
+            diagnostic_payload=diagnostic_payload,
+            decision_reason=decision_reason,
+            guardrail_findings=guardrail_findings,
+            confidence_breakdown=confidence_breakdown,
+            final_confidence_score=final_confidence_score,
+            quality_score=quality_score,
+            quality_label=quality_label,
+            quality_signals=quality_signals,
+            quality_notes=quality_notes,
+            quality_evaluated_at=quality_evaluated_at,
+        )
+        _attach_quality_fields(record, values)
+        record.updated_at = _now()
+        self._records[conversation_id] = record
+        return record
+
+    def record_eval_run(
+        self,
+        run: Mapping[str, object],
+        context: StoreContext | None = None,
+    ) -> dict[str, object]:
+        scoped = context or DEFAULT_CONTEXT
+        run_id = str(run.get("id") or run.get("run_id") or f"evalrun_{uuid4().hex[:12]}")
+        saved = _normalize_eval_run(
+            {**run, "id": run_id},
+            organization_id=scoped.organization_id,
+            existing=self._eval_runs.get(run_id),
+        )
+        self._eval_runs[run_id] = saved
+        return dict(saved)
+
+    def record_eval_result(
+        self,
+        result: Mapping[str, object],
+        context: StoreContext | None = None,
+    ) -> dict[str, object]:
+        scoped = context or DEFAULT_CONTEXT
+        result_id = str(result.get("id") or f"evalresult_{uuid4().hex[:12]}")
+        existing = next(
+            (
+                bucket[result_id]
+                for bucket in self._eval_results.values()
+                if result_id in bucket
+            ),
+            None,
+        )
+        saved = _normalize_eval_result(
+            {**result, "id": result_id},
+            organization_id=scoped.organization_id,
+            existing=existing,
+        )
+        result_bucket = self._eval_results.setdefault(str(saved["eval_run_id"]), {})
+        result_bucket[result_id] = saved
+        return dict(saved)
+
+    def list_eval_runs(
+        self,
+        *,
+        limit: int = 50,
+        context: StoreContext | None = None,
+    ) -> list[dict[str, object]]:
+        scoped = context or DEFAULT_CONTEXT
+        runs = list(self._eval_runs.values())
+        if scoped.organization_id:
+            runs = [
+                run
+                for run in runs
+                if run.get("organization_id") in {None, scoped.organization_id}
+            ]
+        runs.sort(key=lambda run: _coerce_datetime(run["started_at"]), reverse=True)
+        return [dict(run) for run in runs[: max(limit, 0)]]
+
+    def list_eval_results(
+        self,
+        eval_run_id: str,
+        *,
+        limit: int = 200,
+        context: StoreContext | None = None,
+    ) -> list[dict[str, object]]:
+        scoped = context or DEFAULT_CONTEXT
+        results = list(self._eval_results.get(eval_run_id, {}).values())
+        if scoped.organization_id:
+            results = [
+                result
+                for result in results
+                if result.get("organization_id") in {None, scoped.organization_id}
+            ]
+        results.sort(key=lambda result: _coerce_datetime(result["created_at"]))
+        return [dict(result) for result in results[: max(limit, 0)]]
 
     def append_memory_items(
         self,
@@ -428,6 +837,8 @@ class InMemoryConversationStore:
         self._records.clear()
         self._events.clear()
         self._memory.clear()
+        self._eval_runs.clear()
+        self._eval_results.clear()
 
 
 class PostgresConversationStore:
@@ -559,6 +970,18 @@ class PostgresConversationStore:
                   approval_status,
                   send_status,
                   trace_url,
+                  eval_tags,
+                  trace_attributes,
+                  diagnostic_payload,
+                  decision_reason,
+                  guardrail_findings,
+                  confidence_breakdown,
+                  final_confidence_score,
+                  quality_score,
+                  quality_label,
+                  quality_signals,
+                  quality_notes,
+                  quality_evaluated_at,
                   created_at,
                   updated_at
                 )
@@ -589,6 +1012,18 @@ class PostgresConversationStore:
                   %(approval_status)s,
                   %(send_status)s,
                   %(trace_url)s,
+                  %(eval_tags)s,
+                  %(trace_attributes)s,
+                  %(diagnostic_payload)s,
+                  %(decision_reason)s,
+                  %(guardrail_findings)s,
+                  %(confidence_breakdown)s,
+                  %(final_confidence_score)s,
+                  %(quality_score)s,
+                  %(quality_label)s,
+                  %(quality_signals)s,
+                  %(quality_notes)s,
+                  %(quality_evaluated_at)s,
                   %(created_at)s,
                   %(updated_at)s
                 )
@@ -617,6 +1052,18 @@ class PostgresConversationStore:
                   approval_status = EXCLUDED.approval_status,
                   send_status = EXCLUDED.send_status,
                   trace_url = EXCLUDED.trace_url,
+                  eval_tags = EXCLUDED.eval_tags,
+                  trace_attributes = EXCLUDED.trace_attributes,
+                  diagnostic_payload = EXCLUDED.diagnostic_payload,
+                  decision_reason = EXCLUDED.decision_reason,
+                  guardrail_findings = EXCLUDED.guardrail_findings,
+                  confidence_breakdown = EXCLUDED.confidence_breakdown,
+                  final_confidence_score = EXCLUDED.final_confidence_score,
+                  quality_score = EXCLUDED.quality_score,
+                  quality_label = EXCLUDED.quality_label,
+                  quality_signals = EXCLUDED.quality_signals,
+                  quality_notes = EXCLUDED.quality_notes,
+                  quality_evaluated_at = EXCLUDED.quality_evaluated_at,
                   updated_at = EXCLUDED.updated_at
                 """,
                 self._conversation_values(record, scoped.organization_id),
@@ -770,6 +1217,285 @@ class PostgresConversationStore:
             event.organization_id = organization_id
         return event
 
+    def update_conversation_quality(
+        self,
+        conversation_id: str,
+        *,
+        eval_tags: list[str] | None = None,
+        trace_attributes: Mapping[str, object] | None = None,
+        diagnostic_payload: Mapping[str, object] | None = None,
+        decision_reason: str | None = None,
+        guardrail_findings: Sequence[object] | None = None,
+        confidence_breakdown: Mapping[str, object] | None = None,
+        final_confidence_score: float | None = None,
+        quality_score: float | None = None,
+        quality_label: str | None = None,
+        quality_signals: Mapping[str, object] | None = None,
+        quality_notes: str | None = None,
+        quality_evaluated_at: datetime | None = None,
+        context: StoreContext | None = None,
+    ) -> ConversationRecord | None:
+        values = _quality_values(
+            eval_tags=eval_tags,
+            trace_attributes=trace_attributes,
+            diagnostic_payload=diagnostic_payload,
+            decision_reason=decision_reason,
+            guardrail_findings=guardrail_findings,
+            confidence_breakdown=confidence_breakdown,
+            final_confidence_score=final_confidence_score,
+            quality_score=quality_score,
+            quality_label=quality_label,
+            quality_signals=quality_signals,
+            quality_notes=quality_notes,
+            quality_evaluated_at=quality_evaluated_at,
+        )
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            cursor = connection.execute(
+                """
+                UPDATE conversations
+                SET eval_tags = %s,
+                    trace_attributes = %s,
+                    diagnostic_payload = %s,
+                    decision_reason = %s,
+                    guardrail_findings = %s,
+                    confidence_breakdown = %s,
+                    final_confidence_score = %s,
+                    quality_score = %s,
+                    quality_label = %s,
+                    quality_signals = %s,
+                    quality_notes = %s,
+                    quality_evaluated_at = %s,
+                    updated_at = now()
+                WHERE organization_id = %s
+                  AND id = %s
+                """,
+                (
+                    Jsonb(values["eval_tags"]),
+                    Jsonb(values["trace_attributes"]),
+                    Jsonb(values["diagnostic_payload"]),
+                    values["decision_reason"],
+                    Jsonb(values["guardrail_findings"]),
+                    Jsonb(values["confidence_breakdown"]),
+                    values["final_confidence_score"],
+                    values["quality_score"],
+                    values["quality_label"],
+                    Jsonb(values["quality_signals"]),
+                    values["quality_notes"],
+                    values["quality_evaluated_at"],
+                    scoped.organization_id,
+                    conversation_id,
+                ),
+            )
+            if cursor.rowcount:
+                self._record_audit_event(
+                    connection,
+                    organization_id=scoped.organization_id,
+                    conversation_id=conversation_id,
+                    actor_type=_audit_actor_type(scoped.role),
+                    actor_id=scoped.user_id,
+                    event_type="conversation.quality_updated",
+                    payload={
+                        "final_confidence_score": values["final_confidence_score"],
+                        "quality_score": values["quality_score"],
+                        "quality_label": values["quality_label"],
+                    },
+                )
+            connection.commit()
+        return self.get(conversation_id, context=context)
+
+    def record_eval_run(
+        self,
+        run: Mapping[str, object],
+        context: StoreContext | None = None,
+    ) -> dict[str, object]:
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            run_id = str(run.get("id") or run.get("run_id") or f"evalrun_{uuid4().hex[:12]}")
+            existing = self._get_eval_run(connection, scoped.organization_id, run_id)
+            saved = _normalize_eval_run(
+                {**run, "id": run_id},
+                organization_id=scoped.organization_id,
+                existing=existing,
+            )
+            connection.execute(
+                """
+                INSERT INTO eval_runs (
+                  id,
+                  organization_id,
+                  name,
+                  suite_name,
+                  status,
+                  started_at,
+                  completed_at,
+                  total_cases,
+                  passed_cases,
+                  failed_cases,
+                  average_score,
+                  metadata,
+                  trace_url,
+                  created_at,
+                  updated_at
+                )
+                VALUES (
+                  %(id)s,
+                  %(organization_id)s,
+                  %(name)s,
+                  %(suite_name)s,
+                  %(status)s,
+                  %(started_at)s,
+                  %(completed_at)s,
+                  %(total_cases)s,
+                  %(passed_cases)s,
+                  %(failed_cases)s,
+                  %(average_score)s,
+                  %(metadata)s,
+                  %(trace_url)s,
+                  %(created_at)s,
+                  %(updated_at)s
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                  name = EXCLUDED.name,
+                  suite_name = EXCLUDED.suite_name,
+                  status = EXCLUDED.status,
+                  started_at = EXCLUDED.started_at,
+                  completed_at = EXCLUDED.completed_at,
+                  total_cases = EXCLUDED.total_cases,
+                  passed_cases = EXCLUDED.passed_cases,
+                  failed_cases = EXCLUDED.failed_cases,
+                  average_score = EXCLUDED.average_score,
+                  metadata = EXCLUDED.metadata,
+                  trace_url = EXCLUDED.trace_url,
+                  updated_at = EXCLUDED.updated_at
+                """,
+                {**saved, "metadata": Jsonb(saved["metadata"])},
+            )
+            loaded = self._get_eval_run(connection, scoped.organization_id, run_id)
+            connection.commit()
+        return loaded or saved
+
+    def record_eval_result(
+        self,
+        result: Mapping[str, object],
+        context: StoreContext | None = None,
+    ) -> dict[str, object]:
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            result_id = str(result.get("id") or f"evalresult_{uuid4().hex[:12]}")
+            existing = self._get_eval_result(connection, scoped.organization_id, result_id)
+            saved = _normalize_eval_result(
+                {**result, "id": result_id},
+                organization_id=scoped.organization_id,
+                existing=existing,
+            )
+            connection.execute(
+                """
+                INSERT INTO eval_results (
+                  id,
+                  organization_id,
+                  eval_run_id,
+                  conversation_id,
+                  case_name,
+                  status,
+                  score,
+                  input_payload,
+                  expected_payload,
+                  actual_payload,
+                  metrics,
+                  failure_reason,
+                  trace_url,
+                  created_at
+                )
+                VALUES (
+                  %(id)s,
+                  %(organization_id)s,
+                  %(eval_run_id)s,
+                  %(conversation_id)s,
+                  %(case_name)s,
+                  %(status)s,
+                  %(score)s,
+                  %(input)s,
+                  %(expected)s,
+                  %(actual)s,
+                  %(metrics)s,
+                  %(failure_reason)s,
+                  %(trace_url)s,
+                  %(created_at)s
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                  eval_run_id = EXCLUDED.eval_run_id,
+                  conversation_id = EXCLUDED.conversation_id,
+                  case_name = EXCLUDED.case_name,
+                  status = EXCLUDED.status,
+                  score = EXCLUDED.score,
+                  input_payload = EXCLUDED.input_payload,
+                  expected_payload = EXCLUDED.expected_payload,
+                  actual_payload = EXCLUDED.actual_payload,
+                  metrics = EXCLUDED.metrics,
+                  failure_reason = EXCLUDED.failure_reason,
+                  trace_url = EXCLUDED.trace_url
+                """,
+                {
+                    **saved,
+                    "input": Jsonb(saved["input"]),
+                    "expected": Jsonb(saved["expected"]),
+                    "actual": Jsonb(saved["actual"]),
+                    "metrics": Jsonb(saved["metrics"]),
+                },
+            )
+            loaded = self._get_eval_result(connection, scoped.organization_id, result_id)
+            connection.commit()
+        return loaded or saved
+
+    def list_eval_runs(
+        self,
+        *,
+        limit: int = 50,
+        context: StoreContext | None = None,
+    ) -> list[dict[str, object]]:
+        bounded_limit = max(1, min(limit, 200))
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM eval_runs
+                WHERE organization_id = %s
+                ORDER BY started_at DESC
+                LIMIT %s
+                """,
+                (scoped.organization_id, bounded_limit),
+            ).fetchall()
+        return [self._eval_run_from_row(row) for row in rows]
+
+    def list_eval_results(
+        self,
+        eval_run_id: str,
+        *,
+        limit: int = 200,
+        context: StoreContext | None = None,
+    ) -> list[dict[str, object]]:
+        bounded_limit = max(1, min(limit, 500))
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM eval_results
+                WHERE organization_id = %s
+                  AND eval_run_id = %s
+                ORDER BY created_at ASC
+                LIMIT %s
+                """,
+                (scoped.organization_id, eval_run_id, bounded_limit),
+            ).fetchall()
+        return [self._eval_result_from_row(row) for row in rows]
+
     def list_events(
         self,
         *,
@@ -825,6 +1551,8 @@ class PostgresConversationStore:
     def clear(self) -> None:
         with connect(self.settings) as connection:
             connection.execute("TRUNCATE conversation_summaries CASCADE")
+            connection.execute("TRUNCATE eval_results CASCADE")
+            connection.execute("TRUNCATE eval_runs CASCADE")
             connection.execute("TRUNCATE conversation_memory_items CASCADE")
             connection.execute("TRUNCATE retrieval_hits CASCADE")
             connection.execute("TRUNCATE retrieval_runs CASCADE")
@@ -841,6 +1569,77 @@ class PostgresConversationStore:
             connection.execute("TRUNCATE conversation_messages CASCADE")
             connection.execute("TRUNCATE conversations CASCADE")
             connection.commit()
+
+    def _get_eval_run(
+        self,
+        connection: object,
+        organization_id: str | None,
+        run_id: str,
+    ) -> dict[str, object] | None:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM eval_runs
+            WHERE organization_id = %s
+              AND id = %s
+            """,
+            (organization_id, run_id),
+        ).fetchone()
+        return self._eval_run_from_row(row) if row is not None else None
+
+    def _get_eval_result(
+        self,
+        connection: object,
+        organization_id: str | None,
+        result_id: str,
+    ) -> dict[str, object] | None:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM eval_results
+            WHERE organization_id = %s
+              AND id = %s
+            """,
+            (organization_id, result_id),
+        ).fetchone()
+        return self._eval_result_from_row(row) if row is not None else None
+
+    def _eval_run_from_row(self, row: Mapping[str, object]) -> dict[str, object]:
+        return {
+            "id": row["id"],
+            "organization_id": str(row["organization_id"]) if row["organization_id"] else None,
+            "name": row["name"],
+            "suite_name": row["suite_name"],
+            "status": row["status"],
+            "started_at": _coerce_datetime(row["started_at"]),
+            "completed_at": _coerce_optional_datetime(row.get("completed_at")),
+            "total_cases": _coerce_int(row["total_cases"]),
+            "passed_cases": _coerce_int(row["passed_cases"]),
+            "failed_cases": _coerce_int(row["failed_cases"]),
+            "average_score": _coerce_optional_float(row.get("average_score")),
+            "metadata": _json_dict(row.get("metadata")),
+            "trace_url": row.get("trace_url"),
+            "created_at": _coerce_datetime(row["created_at"]),
+            "updated_at": _coerce_datetime(row["updated_at"]),
+        }
+
+    def _eval_result_from_row(self, row: Mapping[str, object]) -> dict[str, object]:
+        return {
+            "id": row["id"],
+            "organization_id": str(row["organization_id"]) if row["organization_id"] else None,
+            "eval_run_id": row["eval_run_id"],
+            "conversation_id": row.get("conversation_id"),
+            "case_name": row["case_name"],
+            "status": row["status"],
+            "score": _coerce_optional_float(row.get("score")),
+            "input": _json_dict(row.get("input_payload")),
+            "expected": _json_dict(row.get("expected_payload")),
+            "actual": _json_dict(row.get("actual_payload")),
+            "metrics": _json_dict(row.get("metrics")),
+            "failure_reason": row.get("failure_reason"),
+            "trace_url": row.get("trace_url"),
+            "created_at": _coerce_datetime(row["created_at"]),
+        }
 
     def _record_from_row(self, row: Mapping[str, object]) -> ConversationRecord:
         payload = {
@@ -869,17 +1668,31 @@ class PostgresConversationStore:
             "approval_status": row["approval_status"],
             "send_status": row["send_status"],
             "trace_url": row["trace_url"],
+            "eval_tags": _json_list(row.get("eval_tags")),
+            "trace_attributes": _json_dict(row.get("trace_attributes")),
+            "diagnostic_payload": _json_dict(row.get("diagnostic_payload")),
+            "decision_reason": row.get("decision_reason"),
+            "guardrail_findings": _json_list(row.get("guardrail_findings")),
+            "confidence_breakdown": _json_dict(row.get("confidence_breakdown")),
+            "final_confidence_score": row.get("final_confidence_score"),
+            "quality_score": row.get("quality_score"),
+            "quality_label": row.get("quality_label"),
+            "quality_signals": _json_dict(row.get("quality_signals")),
+            "quality_notes": row.get("quality_notes"),
+            "quality_evaluated_at": row.get("quality_evaluated_at"),
             "messages": _json_list(row.get("messages")),
             "created_at": _coerce_datetime(row["created_at"]),
             "updated_at": _coerce_datetime(row["updated_at"]),
         }
-        return ConversationRecord.model_validate(payload)
+        record = ConversationRecord.model_validate(payload)
+        return _attach_quality_fields(record, payload)
 
     def _conversation_values(
         self,
         record: ConversationRecord,
         organization_id: str | None,
     ) -> dict[str, object]:
+        quality_values = _record_quality_values(record)
         return {
             "id": record.id,
             "organization_id": organization_id,
@@ -913,6 +1726,18 @@ class PostgresConversationStore:
             "approval_status": record.approval_status,
             "send_status": record.send_status,
             "trace_url": record.trace_url,
+            "eval_tags": Jsonb(quality_values["eval_tags"]),
+            "trace_attributes": Jsonb(quality_values["trace_attributes"]),
+            "diagnostic_payload": Jsonb(quality_values["diagnostic_payload"]),
+            "decision_reason": quality_values["decision_reason"],
+            "guardrail_findings": Jsonb(quality_values["guardrail_findings"]),
+            "confidence_breakdown": Jsonb(quality_values["confidence_breakdown"]),
+            "final_confidence_score": quality_values["final_confidence_score"],
+            "quality_score": quality_values["quality_score"],
+            "quality_label": quality_values["quality_label"],
+            "quality_signals": Jsonb(quality_values["quality_signals"]),
+            "quality_notes": quality_values["quality_notes"],
+            "quality_evaluated_at": quality_values["quality_evaluated_at"],
             "created_at": record.created_at,
             "updated_at": record.updated_at,
         }
@@ -1415,6 +2240,76 @@ class StoreProxy:
         context: StoreContext | None = None,
     ) -> DiagnosticEvent:
         return self._current().record_event(event, context=context)
+
+    def update_conversation_quality(
+        self,
+        conversation_id: str,
+        *,
+        eval_tags: list[str] | None = None,
+        trace_attributes: Mapping[str, object] | None = None,
+        diagnostic_payload: Mapping[str, object] | None = None,
+        decision_reason: str | None = None,
+        guardrail_findings: Sequence[object] | None = None,
+        confidence_breakdown: Mapping[str, object] | None = None,
+        final_confidence_score: float | None = None,
+        quality_score: float | None = None,
+        quality_label: str | None = None,
+        quality_signals: Mapping[str, object] | None = None,
+        quality_notes: str | None = None,
+        quality_evaluated_at: datetime | None = None,
+        context: StoreContext | None = None,
+    ) -> ConversationRecord | None:
+        return self._current().update_conversation_quality(
+            conversation_id,
+            eval_tags=eval_tags,
+            trace_attributes=trace_attributes,
+            diagnostic_payload=diagnostic_payload,
+            decision_reason=decision_reason,
+            guardrail_findings=guardrail_findings,
+            confidence_breakdown=confidence_breakdown,
+            final_confidence_score=final_confidence_score,
+            quality_score=quality_score,
+            quality_label=quality_label,
+            quality_signals=quality_signals,
+            quality_notes=quality_notes,
+            quality_evaluated_at=quality_evaluated_at,
+            context=context,
+        )
+
+    def record_eval_run(
+        self,
+        run: Mapping[str, object],
+        context: StoreContext | None = None,
+    ) -> dict[str, object]:
+        return self._current().record_eval_run(run, context=context)
+
+    def record_eval_result(
+        self,
+        result: Mapping[str, object],
+        context: StoreContext | None = None,
+    ) -> dict[str, object]:
+        return self._current().record_eval_result(result, context=context)
+
+    def list_eval_runs(
+        self,
+        *,
+        limit: int = 50,
+        context: StoreContext | None = None,
+    ) -> list[dict[str, object]]:
+        return self._current().list_eval_runs(limit=limit, context=context)
+
+    def list_eval_results(
+        self,
+        eval_run_id: str,
+        *,
+        limit: int = 200,
+        context: StoreContext | None = None,
+    ) -> list[dict[str, object]]:
+        return self._current().list_eval_results(
+            eval_run_id,
+            limit=limit,
+            context=context,
+        )
 
     def append_memory_items(
         self,

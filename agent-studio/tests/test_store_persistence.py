@@ -71,6 +71,31 @@ def test_memory_migration_defines_conversation_memory_items_and_rls() -> None:
     assert "conversation_memory_items_org_isolation" in migration
 
 
+def test_quality_migration_defines_eval_tables_quality_fields_and_rls() -> None:
+    migration_path = Path(__file__).resolve().parents[1] / "migrations" / "0006_ai_ops_quality_layer.sql"
+    migration = migration_path.read_text(encoding="utf-8")
+
+    assert "ADD COLUMN IF NOT EXISTS eval_tags" in migration
+    assert "ADD COLUMN IF NOT EXISTS trace_attributes" in migration
+    assert "ADD COLUMN IF NOT EXISTS diagnostic_payload" in migration
+    assert "ADD COLUMN IF NOT EXISTS decision_reason" in migration
+    assert "ADD COLUMN IF NOT EXISTS guardrail_findings" in migration
+    assert "ADD COLUMN IF NOT EXISTS confidence_breakdown" in migration
+    assert "ADD COLUMN IF NOT EXISTS final_confidence_score" in migration
+    assert "ADD COLUMN IF NOT EXISTS quality_score" in migration
+    assert "ADD COLUMN IF NOT EXISTS quality_label" in migration
+    assert "ADD COLUMN IF NOT EXISTS quality_signals" in migration
+    assert "ADD COLUMN IF NOT EXISTS quality_notes" in migration
+    assert "ADD COLUMN IF NOT EXISTS quality_evaluated_at" in migration
+    assert "CREATE TABLE IF NOT EXISTS eval_runs" in migration
+    assert "CREATE TABLE IF NOT EXISTS eval_results" in migration
+    assert "eval_runs_org_started_idx" in migration
+    assert "eval_results_run_case_idx" in migration
+    assert "ENABLE ROW LEVEL SECURITY" in migration
+    assert "eval_runs_org_isolation" in migration
+    assert "eval_results_org_isolation" in migration
+
+
 def test_in_memory_store_persists_and_ranks_memory_items() -> None:
     conversation_store = InMemoryConversationStore()
     conversation = conversation_store.save(
@@ -111,6 +136,121 @@ def test_in_memory_store_persists_and_ranks_memory_items() -> None:
     assert len(hits) == 2
     assert hits[0].score >= hits[1].score
     assert any("pricing" in hit.content.lower() for hit in hits)
+
+
+def test_in_memory_store_records_eval_runs_results_and_quality_fields() -> None:
+    conversation_store = InMemoryConversationStore()
+    saved = conversation_store.save(
+        ConversationRecord(
+            id="conv-quality",
+            incoming_message="Can you help with billing?",
+            normalized_message="Can you help with billing?",
+            intent="support",
+            draft_reply="I can help with billing.",
+        ),
+    )
+
+    updated = conversation_store.update_conversation_quality(
+        saved.id,
+        eval_tags=["sprint4", "fixture"],
+        trace_attributes={"span": "agent_studio.qa.review"},
+        diagnostic_payload={"latency_ms": 120},
+        decision_reason="Ready for supervisor approval.",
+        guardrail_findings=[
+            {
+                "label": "Knowledge basis",
+                "status": "pass",
+                "detail": "Draft cites approved source.",
+            },
+        ],
+        confidence_breakdown={"retrieval": 0.9, "guardrail": 0.84},
+        final_confidence_score=0.87,
+        quality_score=0.87,
+        quality_label="pass",
+        quality_signals={"grounded": True, "policy_risk": "low"},
+        quality_notes="Draft is grounded and ready for supervisor review.",
+    )
+    run = conversation_store.record_eval_run(
+        {
+            "id": "evalrun_quality_smoke",
+            "name": "Sprint 4 quality smoke",
+            "suite_name": "ai_ops_quality",
+            "status": "running",
+            "metadata": {"source": "pytest"},
+        },
+    )
+    result = conversation_store.record_eval_result(
+        {
+            "id": "evalresult_quality_smoke_1",
+            "eval_run_id": run["id"],
+            "conversation_id": saved.id,
+            "case_name": "billing_reply_grounding",
+            "status": "passed",
+            "score": 0.87,
+            "input": {"message": saved.incoming_message},
+            "expected": {"requires_grounded_reply": True},
+            "actual": {"draft_reply": saved.draft_reply},
+            "metrics": {"grounded": 1.0},
+        },
+    )
+    summary_run = conversation_store.record_eval_run(
+        {
+            "run_id": "evalrun_builtin_summary",
+            "case_count": 5,
+            "passed_case_count": 4,
+            "failed_case_count": 1,
+            "overall_score": 0.8,
+            "passed": False,
+        },
+    )
+    summary_result = conversation_store.record_eval_result(
+        {
+            "id": "evalresult_builtin_summary_1",
+            "eval_run_id": summary_run["id"],
+            "case_id": "missing_knowledge_escalates",
+            "name": "Unknown edge case escalates",
+            "passed": False,
+            "score": 0.5,
+            "scores": [{"dimension": "retrieval", "score": 0.0}],
+        },
+    )
+
+    loaded = conversation_store.get(saved.id)
+    runs = conversation_store.list_eval_runs()
+    runs_by_id = {item["id"]: item for item in runs}
+    results = conversation_store.list_eval_results(run["id"])
+
+    assert updated is not None
+    assert loaded is not None
+    assert getattr(loaded, "eval_tags") == ["sprint4", "fixture"]
+    assert getattr(loaded, "trace_attributes") == {"span": "agent_studio.qa.review"}
+    assert getattr(loaded, "diagnostic_payload") == {"latency_ms": 120}
+    assert getattr(loaded, "decision_reason") == "Ready for supervisor approval."
+    assert getattr(loaded, "guardrail_findings")[0].label == "Knowledge basis"
+    assert getattr(loaded, "confidence_breakdown") == {"retrieval": 0.9, "guardrail": 0.84}
+    assert getattr(loaded, "final_confidence_score") == 0.87
+    assert getattr(loaded, "quality_score") == 0.87
+    assert getattr(loaded, "quality_label") == "pass"
+    assert getattr(loaded, "quality_signals") == {
+        "grounded": True,
+        "policy_risk": "low",
+    }
+    assert getattr(loaded, "quality_notes") == "Draft is grounded and ready for supervisor review."
+    assert getattr(loaded, "quality_evaluated_at") is not None
+    assert runs_by_id[summary_run["id"]] == summary_run
+    assert runs_by_id[run["id"]] == run
+    assert results == [result]
+    assert summary_run["id"] == "evalrun_builtin_summary"
+    assert summary_run["status"] == "failed"
+    assert summary_run["total_cases"] == 5
+    assert summary_run["passed_cases"] == 4
+    assert summary_run["failed_cases"] == 1
+    assert summary_run["average_score"] == 0.8
+    assert summary_result["case_name"] == "Unknown edge case escalates"
+    assert summary_result["status"] == "failed"
+    assert summary_result["metrics"] == {
+        "scores": [{"dimension": "retrieval", "score": 0.0}],
+    }
 
 
 @pytest.mark.skipif(
