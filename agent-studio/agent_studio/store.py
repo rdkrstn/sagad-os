@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from typing import Protocol
 from uuid import UUID, uuid4
 
-from psycopg.rows import DictRow
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 

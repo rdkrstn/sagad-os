@@ -49,3 +49,9 @@ class AgentStudioState(TypedDict, total=False):
     quality_label: str | None
     quality_signals: dict[str, object]
     quality_notes: str | None
+    routed_agent: str | None
+    sub_agent_report: dict[str, object]
+    supervisor_decision: dict[str, object]
+    tool_requests: list[dict[str, object]]
+    tool_outputs: list[dict[str, object]]
+

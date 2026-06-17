@@ -1,3 +1,35 @@
+import fs from "fs";
+import path from "path";
+
+// Load root .env from repository root if it exists
+try {
+  // Try __dirname first, fallback to process.cwd()
+  let envPath = path.resolve(__dirname, "../.env");
+  if (!fs.existsSync(envPath)) {
+    envPath = path.resolve(process.cwd(), "../.env");
+  }
+  if (fs.existsSync(envPath)) {
+    const envConfig = fs.readFileSync(envPath, "utf-8");
+    envConfig.split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) return;
+      const match = trimmed.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
+      if (match) {
+        const key = match[1];
+        let val = match[2] || "";
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        if (!process.env[key]) {
+          process.env[key] = val;
+        }
+      }
+    });
+  }
+} catch (e) {
+  console.warn("Failed to load root .env file in auth.ts:", e);
+}
+
 import PostgresAdapter from "@auth/pg-adapter";
 import NextAuth, { type DefaultSession, type NextAuthConfig } from "next-auth";
 import Google from "next-auth/providers/google";

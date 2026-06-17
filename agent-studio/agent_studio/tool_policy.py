@@ -30,8 +30,18 @@ def evaluate_tool_policy(
     *,
     registry: ToolManifestRegistry | None = None,
 ) -> ToolPolicyDecision:
-    manifest = (registry or ToolManifestRegistry()).get_manifest(tool_name)
-    return evaluate_manifest_policy(manifest, context)
+    try:
+        manifest = (registry or ToolManifestRegistry()).get_manifest(tool_name)
+        return evaluate_manifest_policy(manifest, context)
+    except KeyError:
+        return ToolPolicyDecision(
+            tool_name=tool_name,
+            allowed=False,
+            requires_approval=True,
+            dry_run=True,
+            blocked_reason=f"Tool {tool_name} is not registered in the system.",
+            policy_reasons=["Unknown tool."],
+        )
 
 
 def evaluate_manifest_policy(

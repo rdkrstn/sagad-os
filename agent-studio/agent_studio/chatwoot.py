@@ -378,7 +378,7 @@ async def resolve_conversation(
     *,
     settings: Settings,
     chatwoot_conversation_id: str | None,
-    contact_identifier: str | None,
+    contact_identifier: str | None = None,
     inbox_identifier: str | None = None,
 ) -> ChatwootResolveResult:
     if not settings.chatwoot_configured:
@@ -397,29 +397,9 @@ async def resolve_conversation(
             detail="Missing Chatwoot conversation ID.",
         )
 
-    resolved_inbox_identifier = inbox_identifier or settings.chatwoot_inbox_identifier
-    if not resolved_inbox_identifier:
-        return ChatwootResolveResult(
-            status="failed",
-            provider="Chatwoot",
-            action="chatwoot.conversations.resolve",
-            detail="Missing Chatwoot inbox identifier.",
-        )
-
-    if not contact_identifier:
-        return ChatwootResolveResult(
-            status="failed",
-            provider="Chatwoot",
-            action="chatwoot.conversations.resolve",
-            detail="Missing Chatwoot contact/source identifier.",
-        )
-
     base_url = str(settings.chatwoot_base_url).rstrip("/")
-    url = (
-        f"{base_url}/public/api/v1/inboxes/{resolved_inbox_identifier}"
-        f"/contacts/{contact_identifier}"
-        f"/conversations/{chatwoot_conversation_id}/toggle_status"
-    )
+    account_id = settings.chatwoot_account_id
+    url = f"{base_url}/api/v1/accounts/{account_id}/conversations/{chatwoot_conversation_id}/toggle_status"
 
     if settings.chatwoot_dry_run:
         return ChatwootResolveResult(
@@ -435,6 +415,7 @@ async def resolve_conversation(
             response = await client.post(
                 url,
                 headers={"api_access_token": str(settings.chatwoot_api_access_token)},
+                json={"status": "resolved"},
             )
     except httpx.TimeoutException as exc:
         return ChatwootResolveResult(

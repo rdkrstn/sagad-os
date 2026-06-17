@@ -44,8 +44,105 @@ class KnowledgeRetrieverProtocol(Protocol):
         ...
 
 
+def _rerank_hits(
+    query: str,
+    hits: list[KnowledgeHit],
+    limit: int,
+    settings: Settings,
+) -> list[KnowledgeHit]:
+    if not hits or not settings.rerank_enabled:
+        return hits[:limit]
+
+    import os
+    documents = [hit.excerpt for hit in hits]
+    results = None
+
+    # Check if we should use direct OpenRouter call
+    is_openrouter = (
+        "openrouter" in settings.rerank_model
+        or (settings.rerank_api_key and settings.rerank_api_key.startswith("sk-or-"))
+        or (os.getenv("OPENROUTER_API_KEY") and not settings.rerank_api_key)
+    )
+
+    if is_openrouter:
+        try:
+            import httpx
+
+            model_name = settings.rerank_model.removeprefix("openrouter/")
+            api_key = settings.rerank_api_key or os.getenv("OPENROUTER_API_KEY")
+
+            if api_key:
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": model_name,
+                    "query": query,
+                    "documents": documents,
+                    "top_n": limit
+                }
+                with httpx.Client(timeout=10.0) as client:
+                    res = client.post("https://openrouter.ai/api/v1/rerank", headers=headers, json=payload)
+                    res.raise_for_status()
+                    data = res.json()
+                    results = data.get("results", [])
+        except Exception as e:
+            print(f"Direct OpenRouter rerank failed: {e}. Trying LiteLLM fallback...")
+
+    # Fallback to LiteLLM rerank if direct call was not made or failed
+    if results is None:
+        try:
+            import litellm
+            kwargs = {
+                "model": settings.rerank_model,
+                "query": query,
+                "documents": documents,
+                "top_n": limit,
+            }
+            if settings.rerank_api_key:
+                kwargs["api_key"] = settings.rerank_api_key
+
+            if settings.litellm_enabled and settings.litellm_base_url:
+                kwargs["api_base"] = settings.litellm_base_url
+                if settings.litellm_master_key:
+                    kwargs["api_key"] = settings.litellm_master_key
+
+            response = litellm.rerank(**kwargs)
+            results = getattr(response, "results", None) or response.get("results", [])
+        except Exception as e:
+            print(f"LiteLLM reranking failed: {e}")
+            return hits[:limit]
+
+    # Re-order hits based on results
+    try:
+        reranked = []
+        for item in results:
+            idx = getattr(item, "index", None)
+            if idx is None and isinstance(item, dict):
+                idx = item.get("index")
+            score = getattr(item, "relevance_score", None)
+            if score is None and isinstance(item, dict):
+                score = item.get("relevance_score")
+
+            if idx is not None and idx < len(hits):
+                hit = hits[idx]
+                if score is not None:
+                    hit.score = float(score)
+                reranked.append(hit)
+
+        if not reranked:
+            return hits[:limit]
+
+        return reranked
+    except Exception as e:
+        print(f"Failed to process reranker results: {e}")
+        return hits[:limit]
+
+
 class InMemoryKnowledgeRetriever:
-    def __init__(self, records: list[KnowledgeRecord] | None = None) -> None:
+    def __init__(self, records: list[KnowledgeRecord] | None = None, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
         self.records = records if records is not None else load_knowledge_records()
         self.documents: list[Document] = to_documents(self.records)
 
@@ -84,7 +181,11 @@ class InMemoryKnowledgeRetriever:
                 scored.append((score, document))
 
         scored.sort(key=lambda item: item[0], reverse=True)
-        return [self._to_hit(document, score) for score, document in scored[:limit]]
+        candidate_limit = max(limit, 15) if self.settings.rerank_enabled else limit
+        hits = [self._to_hit(document, score) for score, document in scored[:candidate_limit]]
+        if self.settings.rerank_enabled:
+            return _rerank_hits(query, hits, limit, self.settings)
+        return hits[:limit]
 
     def _to_hit(self, document: Document, score: float) -> KnowledgeHit:
         content = document.page_content.strip().replace("\n", " ")
@@ -104,7 +205,7 @@ class PostgresKnowledgeRetriever:
         self.settings = settings
         self.embedding_service = EmbeddingService(settings)
         self.records = records if records is not None else load_knowledge_records()
-        self.fallback = InMemoryKnowledgeRetriever(self.records)
+        self.fallback = InMemoryKnowledgeRetriever(self.records, settings=settings)
         initialize_database(settings)
         self._sync_records()
 
@@ -192,10 +293,14 @@ class PostgresKnowledgeRetriever:
                     risk_level,
                     risk_level,
                     embedding,
-                    limit,
+                    max(limit, 15) if self.settings.rerank_enabled else limit,
                 ),
             ).fetchall()
             hits = [self._hit_from_row(row) for row in rows]
+            if self.settings.rerank_enabled:
+                hits = _rerank_hits(query, hits, limit, self.settings)
+            else:
+                hits = hits[:limit]
             for rank, hit in enumerate(hits, start=1):
                 connection.execute(
                     """

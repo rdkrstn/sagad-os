@@ -23,7 +23,6 @@ from agent_studio.db import (
 )
 from agent_studio.embeddings import (
     EmbeddingService,
-    TOKEN_PATTERN,
     content_hash,
     tokenize,
     vector_literal,
@@ -457,9 +456,64 @@ def _extract_pdf_with_ocr(
     )
 
 
+def _extract_pdf_with_docling(
+    raw: bytes,
+    settings: Settings,
+) -> ExtractedDocument:
+    import tempfile
+    import os
+    from pathlib import Path
+
+    # Create temporary scratch folder under workspace
+    workspace_dir = Path(__file__).resolve().parents[2] / "scratch"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile(dir=str(workspace_dir), suffix=".pdf", delete=False) as tmp:
+        tmp.write(raw)
+        tmp_path = tmp.name
+
+    try:
+        from docling.document_converter import DocumentConverter
+
+        converter = DocumentConverter()
+        result = converter.convert(tmp_path)
+
+        try:
+            content = result.document.export_to_markdown()
+        except AttributeError:
+            try:
+                content = result.render_as_markdown()
+            except AttributeError:
+                content = str(result.document)
+
+        cleaned_content = _clean_text(content)
+
+        return ExtractedDocument(
+            title=_title_from_content(cleaned_content, "Imported Docling PDF"),
+            content=cleaned_content,
+            metadata={
+                "extractor": "pdf_docling",
+                "ocr_used": True,
+            },
+        )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
 def _extract_pdf(raw: bytes, settings: Settings | None = None) -> ExtractedDocument:
-    text_parts: list[str] = []
+    actual_settings = settings or get_settings()
     parser_error: str | None = None
+
+    if actual_settings.sagad_docling_enabled:
+        try:
+            return _extract_pdf_with_docling(raw, actual_settings)
+        except Exception as exc:
+            parser_error = f"Docling failed: {exc}"
+
+    text_parts: list[str] = []
     try:
         from pypdf import PdfReader
 
@@ -474,11 +528,11 @@ def _extract_pdf(raw: bytes, settings: Settings | None = None) -> ExtractedDocum
 
     content = _clean_text("\n".join(text_parts)) or _fallback_pdf_text(raw)
     if not content:
-        return _extract_pdf_with_ocr(raw, settings or get_settings(), parser_error=parser_error)
+        return _extract_pdf_with_ocr(raw, actual_settings, parser_error=parser_error)
     return ExtractedDocument(
         title=_title_from_content(content, "Imported PDF"),
         content=content,
-        metadata={"extractor": "pdf", "ocr_used": False},
+        metadata={"extractor": "pdf", "ocr_used": False, **({"pdf_parser_error": parser_error} if parser_error else {})},
     )
 
 
