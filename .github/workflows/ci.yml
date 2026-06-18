@@ -202,17 +202,17 @@ jobs:
           cleanup() {
             status=$?
             if [ "$status" -ne 0 ]; then
-              docker compose -f compose.preview.yaml ps || true
-              docker compose -f compose.preview.yaml logs --no-color sagad-db agent-studio sagad-console || true
+              docker compose -f compose.vps.example.yaml ps || true
+              docker compose -f compose.vps.example.yaml logs --no-color sagad-db agent-studio sagad-console || true
             fi
-            docker compose -f compose.preview.yaml down -v --remove-orphans || true
+            docker compose -f compose.vps.example.yaml down -v --remove-orphans || true
             exit "$status"
           }
           trap cleanup EXIT
 
-          docker compose -f compose.preview.yaml config --quiet
-          docker compose -f compose.preview.yaml up -d --build --wait --wait-timeout 240
+          docker compose -f compose.vps.example.yaml config --quiet
+          docker compose -f compose.vps.example.yaml up -d --build --wait --wait-timeout 240
           curl --fail --show-error --silent http://127.0.0.1:8010/health
           curl --fail --show-error --silent http://127.0.0.1:8010/health/live
           curl --fail --show-error --silent http://127.0.0.1:8010/health/ready
-          docker compose -f compose.preview.yaml exec -T sagad-console node -e "fetch('http://agent-studio:8010/health/live').then(r => { if (!r.ok) process.exit(1); return r.text(); }).then(console.log)"
+          docker compose -f compose.vps.example.yaml exec -T sagad-console node -e "fetch('http://agent-studio:8010/health/live').then(r => { if (!r.ok) process.exit(1); return r.text(); }).then(console.log)"
