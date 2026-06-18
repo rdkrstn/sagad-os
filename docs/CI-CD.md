@@ -15,7 +15,7 @@ Required jobs:
 - Agent Studio: Python 3.12, `uv sync`, pgvector migration smoke check, and `uv run pytest` with the optional Postgres persistence test enabled.
 - OCR runtime: the Agent Studio job installs `poppler-utils`, `tesseract-ocr`, and `tesseract-ocr-eng` before tests so scanned-PDF ingestion paths are covered.
 - Container builds: Docker Buildx builds both runtime images, loads them locally, and scans each image with Trivy.
-- Compose smoke: validates `compose.preview.yaml`, boots Sagad Postgres, Agent Studio, and the Console, then verifies `/health`, `/health/live`, `/health/ready`, and console-to-Agent-Studio internal connectivity.
+- Compose smoke: validates `compose.vps.example.yaml`, boots Sagad Postgres, Agent Studio, and the Console, then verifies `/health`, `/health/live`, `/health/ready`, and console-to-Agent-Studio internal connectivity.
 
 If the compose smoke test fails, CI prints service status and logs for `sagad-db`, `agent-studio`, and `sagad-console`.
 
