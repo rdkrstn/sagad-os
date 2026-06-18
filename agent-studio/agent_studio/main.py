@@ -1138,7 +1138,7 @@ async def stream_draft(
     intent = record.intent or "general_support"
     incoming = record.normalized_message or record.incoming_message or ""
     knowledge = record.retrieved_knowledge or []
-    memory = record.memory_context if hasattr(record, "memory_context") else []
+    _memory = record.memory_context if hasattr(record, "memory_context") else []
     citation_titles = ", ".join(
         getattr(hit, "title", str(hit)) for hit in knowledge[:4]
     )
@@ -1713,6 +1713,7 @@ async def receive_chatwoot_webhook(
     payload: ChatwootWebhookPayload,
     response: Response,
     x_chatwoot_token: Annotated[str | None, Header()] = None,
+    token: Annotated[str | None, Query()] = None,
     x_sagad_org_id: Annotated[str | None, Header()] = None,
     x_sagad_user_id: Annotated[str | None, Header()] = None,
     x_sagad_role: Annotated[str | None, Header()] = None,
@@ -1720,13 +1721,14 @@ async def receive_chatwoot_webhook(
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
     conversation_id = _sagad_conversation_id(payload)
     chatwoot_message_id = _message_id(payload)
+    supplied_token = x_chatwoot_token or token
     log_fields = {
         "chatwoot_conversation_id": _conversation_id(payload),
         "chatwoot_message_id": chatwoot_message_id,
         "event": payload.event,
         "message_type": payload.message_type,
         "private": payload.private,
-        "token_present": bool(x_chatwoot_token),
+        "token_present": bool(supplied_token),
     }
     _log_event(logging.INFO, "chatwoot.webhook.received", "Webhook request received.", **log_fields)
     _record_diagnostic_event(
@@ -1738,7 +1740,7 @@ async def receive_chatwoot_webhook(
         context=context,
     )
     try:
-        _verify_webhook_token(x_chatwoot_token, context)
+        _verify_webhook_token(supplied_token, context)
     except HTTPException:
         _log_event(
             logging.WARNING,
@@ -1853,12 +1855,183 @@ async def receive_chatwoot_webhook(
     record = ConversationRecord(**record_payload)
     if conversation_id:
         record.id = conversation_id
+
+    # Auto-send logic based on thresholds
+    settings = configured_settings(get_settings(), context)
+    compliance_status = record.compliance_status
+    risk_level = record.risk_level
+    confidence = record.final_confidence_score
+    if confidence is None:
+        confidence = record.retrieval_confidence
+    draft_reply = record.draft_reply.strip()
+
+    is_auto_send = (
+        compliance_status == "pass"
+        and risk_level == "low"
+        and confidence is not None
+        and confidence >= 0.88
+        and bool(draft_reply)
+    )
+
+    plan = None
+    tool_result = None
+    result = None
+
+    if is_auto_send:
+        can_reply = True
+        if record.chatwoot_context and record.chatwoot_context.can_reply is False:
+            can_reply = False
+            _record_diagnostic_event(
+                event_type="chatwoot.send.blocked",
+                summary="Chatwoot reports this conversation cannot receive replies.",
+                status_value="warning",
+                conversation_id=record.id,
+                payload={
+                    "chatwoot_conversation_id": record.chatwoot_conversation_id,
+                },
+                context=context,
+                actor_type="system",
+            )
+
+        if can_reply:
+            _log_event(
+                logging.INFO,
+                "chatwoot.send.attempt",
+                "Auto-send conditions met; attempting Chatwoot send.",
+                sagad_conversation_id=record.id,
+                chatwoot_conversation_id=record.chatwoot_conversation_id,
+            )
+            _record_diagnostic_event(
+                event_type="chatwoot.send.attempt",
+                summary="Auto-send conditions met; attempting Chatwoot send.",
+                status_value="info",
+                conversation_id=record.id,
+                payload={
+                    "chatwoot_conversation_id": record.chatwoot_conversation_id,
+                    "confidence": confidence,
+                    "risk_level": risk_level,
+                },
+                context=context,
+                actor_type="system",
+            )
+            policy_decision = evaluate_tool_policy(
+                "chatwoot.messages.send_approved",
+                _chatwoot_policy_context(
+                    settings,
+                    record,
+                    approved=True,
+                ),
+                registry=tool_manifest_registry,
+            )
+            if policy_decision.allowed:
+                result = await send_approved_reply(
+                    settings=settings,
+                    chatwoot_conversation_id=record.chatwoot_conversation_id,
+                    content=draft_reply,
+                )
+                plan, tool_result = _chatwoot_send_tool_result(record, result, content=draft_reply)
+                plan, tool_result = _attach_policy_metadata(
+                    plan,
+                    tool_result,
+                    decision=policy_decision,
+                    approved=True,
+                    supervisor_id="system",
+                    risk_level=record.risk_level,
+                )
+            else:
+                result = {
+                    "status": "blocked",
+                    "detail": policy_decision.blocked_reason or "Send blocked by policy.",
+                    "error_type": "policy_blocked",
+                }
+                plan, tool_result = _blocked_policy_tool_result(
+                    tool_name="chatwoot.messages.send_approved",
+                    action="send supervisor-approved reply",
+                    args={
+                        "chatwoot_conversation_id": record.chatwoot_conversation_id,
+                        "content_preview": draft_reply[:160],
+                    },
+                    decision=policy_decision,
+                    approved=True,
+                    supervisor_id="system",
+                    risk_level=record.risk_level,
+                )
+            record.approval_status = "sent" if result["status"] in {"sent", "dry_run"} else "send_failed"
+            record.send_status = result["status"]
+            if all(existing.id != plan.id for existing in record.tool_plans):
+                record.tool_plans.append(plan)
+            if all(existing.id != tool_result.id for existing in record.tool_results):
+                record.tool_results.append(tool_result)
+            if result["status"] in {"sent", "dry_run"}:
+                record.messages.append(
+                    ConversationMessageRecord(
+                        sender_type="ai_agent",
+                        body=draft_reply,
+                        provider="sagad",
+                        payload={
+                            "approval": "auto_send",
+                            "send_status": result["status"],
+                            "tool_result_id": tool_result.id,
+                        },
+                    ),
+                )
+
     saved = store.save(record, context=context)
+
+    if is_auto_send and plan and tool_result:
+        store.record_tool_execution(
+            plan,
+            tool_result,
+            conversation_id=saved.id,
+            context=context,
+        )
+
     saved = _append_lifecycle_memory(
         saved,
         lifecycle_event="draft_created",
         context=context,
     )
+
+    if is_auto_send and result and result["status"] in {"sent", "dry_run"}:
+        saved = _append_lifecycle_memory(
+            saved,
+            lifecycle_event="approved_send",
+            context=context,
+        )
+        event_status = "success" if result["status"] in {"sent", "dry_run"} else "error"
+        event_type = (
+            "chatwoot.send.succeeded"
+            if result["status"] == "sent"
+            else "chatwoot.send.dry_run"
+            if result["status"] == "dry_run"
+            else "chatwoot.send.failed"
+        )
+        log_level = logging.INFO if event_status != "error" else logging.ERROR
+        _log_event(
+            log_level,
+            event_type,
+            str(result.get("detail", "Chatwoot send completed.")),
+            sagad_conversation_id=saved.id,
+            chatwoot_conversation_id=saved.chatwoot_conversation_id,
+            send_status=saved.send_status,
+            http_status=result.get("http_status"),
+            error_type=result.get("error_type"),
+        )
+        _record_diagnostic_event(
+            event_type=event_type,
+            summary=str(result.get("detail", "Chatwoot send completed.")),
+            status_value=event_status,
+            conversation_id=saved.id,
+            payload={
+                "send_status": saved.send_status,
+                "approval_status": saved.approval_status,
+                "tool_result_id": tool_result.id,
+                "provider_result": _chatwoot_tool_payload(result),
+                "policy_metadata": tool_result.data.get("policy_metadata"),
+            },
+            context=context,
+            actor_type="system",
+        )
     _log_event(
         logging.INFO,
         "chatwoot.webhook.persisted",

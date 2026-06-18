@@ -105,7 +105,13 @@ def test_extractors_parse_supported_fixtures() -> None:
     assert "PDF refund policy text" in pdf_doc.content
 
 
-def test_scanned_pdf_without_text_reports_ocr_needed() -> None:
+def test_scanned_pdf_without_text_reports_ocr_needed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SAGAD_OCR_ENABLED", "false")
+    monkeypatch.setenv("SAGAD_DOCLING_ENABLED", "false")
+    get_settings.cache_clear()
+
     with pytest.raises(ExtractionError) as exc_info:
         extract_file(
             KnowledgeIngestionFile(
@@ -117,6 +123,7 @@ def test_scanned_pdf_without_text_reports_ocr_needed() -> None:
 
     assert exc_info.value.code == "ocr_required"
     assert "OCR" in exc_info.value.message
+
 
 
 def test_scanned_pdf_uses_ocr_when_enabled(
@@ -509,3 +516,30 @@ def test_embedding_failure_returns_readable_error(
 
     assert response.status_code == 502
     assert "OpenAI embedding request failed" in response.json()["detail"]
+
+
+def test_extract_pdf_with_docling_mocked(monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    mock_converter = MagicMock()
+    mock_result = MagicMock()
+    mock_result.document.export_to_markdown.return_value = "# Mocked Docling Content\nDocling layout parsed successfully."
+    mock_converter.convert.return_value = mock_result
+
+    monkeypatch.setattr("docling.document_converter.DocumentConverter", lambda: mock_converter)
+
+    from agent_studio.config import Settings
+    settings = Settings(sagad_docling_enabled=True)
+
+    res = extract_file(
+        KnowledgeIngestionFile(
+            filename="test_docling.pdf",
+            content=_base64_bytes(b"PDF header dummy content"),
+            encoding="base64"
+        ),
+        settings=settings
+    )
+
+    assert res.title == "Mocked Docling Content"
+    assert "Docling layout parsed successfully" in res.content
+    assert res.metadata["extractor"] == "pdf_docling"

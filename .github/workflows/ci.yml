@@ -196,23 +196,36 @@ jobs:
 
       - name: Boot preview stack and verify Agent Studio health
         shell: bash
+        env:
+          SAGAD_POSTGRES_PASSWORD: sagad_ci_smoke
+          SAGAD_WS_PUBLIC_URL: http://localhost:3000
+          SAGAD_REALTIME_SECRET: ci-smoke-realtime-secret
+          AUTH_URL: http://localhost:3000
+          AUTH_SECRET: ci-smoke-auth-secret-must-be-at-least-32-chars
+          EMAIL_SERVER: smtp://localhost:1025
+          EMAIL_FROM: smoke@sagad-os.local
+          AGENT_STUDIO_INTERNAL_SECRET: ci-smoke-internal-secret
+          SAGAD_INTEGRATION_ENCRYPTION_KEY: ci-smoke-fernet-key-must-be-32-bytes
         run: |
           set -euo pipefail
 
           cleanup() {
             status=$?
             if [ "$status" -ne 0 ]; then
-              docker compose -f compose.preview.yaml ps || true
-              docker compose -f compose.preview.yaml logs --no-color sagad-db agent-studio sagad-console || true
+              docker compose -f compose.vps.example.yaml ps || true
+              docker compose -f compose.vps.example.yaml logs --no-color sagad-db agent-studio sagad-console || true
             fi
-            docker compose -f compose.preview.yaml down -v --remove-orphans || true
+            docker network rm client_internal_network || true
+            docker compose -f compose.vps.example.yaml down -v --remove-orphans || true
             exit "$status"
           }
           trap cleanup EXIT
 
-          docker compose -f compose.preview.yaml config --quiet
-          docker compose -f compose.preview.yaml up -d --build --wait --wait-timeout 240
+          docker network create client_internal_network
+
+          docker compose -f compose.vps.example.yaml config --quiet
+          docker compose -f compose.vps.example.yaml up -d --build --wait --wait-timeout 240
           curl --fail --show-error --silent http://127.0.0.1:8010/health
           curl --fail --show-error --silent http://127.0.0.1:8010/health/live
           curl --fail --show-error --silent http://127.0.0.1:8010/health/ready
-          docker compose -f compose.preview.yaml exec -T sagad-console node -e "fetch('http://agent-studio:8010/health/live').then(r => { if (!r.ok) process.exit(1); return r.text(); }).then(console.log)"
+          docker compose -f compose.vps.example.yaml exec -T sagad-console node -e "fetch('http://agent-studio:8010/health/live').then(r => { if (!r.ok) process.exit(1); return r.text(); }).then(console.log)"

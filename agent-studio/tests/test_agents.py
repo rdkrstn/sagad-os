@@ -1,8 +1,6 @@
-import os
-import pytest
 from unittest.mock import patch, MagicMock
 from langchain_core.messages import AIMessage
-from agent_studio.agents import AgentRegistry, AgentConfig
+from agent_studio.agents import AgentRegistry
 from agent_studio.graph import draft_reply, select_markdown_agent
 from agent_studio.state import AgentStudioState
 

@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from typing import Protocol
 
 from psycopg.rows import DictRow
-from psycopg.types.json import Jsonb
 
 from agent_studio.config import Settings, get_settings
 from agent_studio.db import (

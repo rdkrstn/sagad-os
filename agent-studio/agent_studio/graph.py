@@ -1,7 +1,8 @@
 import os
-
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+import re
+import json
+import litellm
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, AIMessageChunk
 from langgraph.graph import END, START, StateGraph
 
 from agent_studio.agents import AgentRegistry
@@ -10,6 +11,9 @@ from agent_studio.retrieval import retriever
 from agent_studio.schemas import ConversationMessageRecord, KnowledgeHit, MemoryHit, QaFinding
 from agent_studio.skill_registry import skill_registry
 from agent_studio.state import AgentStudioState
+from agent_studio.tool_policy import evaluate_tool_policy, ToolPolicyContext
+from agent_studio.twenty import TwentyAdapter
+from agent_studio.config import get_settings
 
 try:
     from agent_studio.retrieval_workflow import build_query_plan, build_retrieval_pack
@@ -24,35 +28,131 @@ else:
 registry = AgentRegistry()
 
 
-def _build_chat_model() -> ChatOpenAI:
-    """Build a ChatOpenAI instance routed through LiteLLM or OpenRouter."""
-    model_name = os.getenv("LITELLM_MODEL", "gpt-4o-mini")
+
+class LiteLLMLangChainWrapper:
+    def __init__(self, model: str, api_base: str | None = None, api_key: str | None = None):
+        self.model = model
+        self.api_base = api_base
+        self.api_key = api_key
+        self.tools = None
+
+    def bind_tools(self, tools, tool_choice=None):
+        self.tools = tools
+        return self
+
+    def _convert_messages(self, messages):
+        litellm_messages = []
+        for m in messages:
+            if isinstance(m, SystemMessage):
+                litellm_messages.append({"role": "system", "content": m.content})
+            elif isinstance(m, HumanMessage):
+                litellm_messages.append({"role": "user", "content": m.content})
+            elif isinstance(m, AIMessage):
+                litellm_messages.append({"role": "assistant", "content": m.content})
+            elif hasattr(m, "content"):
+                litellm_messages.append({"role": "user", "content": m.content})
+            elif isinstance(m, dict):
+                litellm_messages.append(m)
+        return litellm_messages
+
+    def invoke(self, messages):
+        litellm_messages = self._convert_messages(messages)
+        kwargs = {
+            "model": self.model,
+            "messages": litellm_messages,
+        }
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.tools:
+            kwargs["tools"] = self.tools
+            kwargs["tool_choice"] = "none"
+
+        response = litellm.completion(**kwargs)
+        response_message = response.choices[0].message
+        content = response_message.content or ""
+        
+        tool_calls = []
+        if getattr(response_message, "tool_calls", None):
+            for tc in response_message.tool_calls:
+                tool_calls.append({
+                    "name": tc.function.name,
+                    "args": json.loads(tc.function.arguments) if tc.function.arguments else {},
+                    "id": tc.id,
+                })
+        
+        return AIMessage(content=content, tool_calls=tool_calls)
+
+    async def astream(self, messages):
+        litellm_messages = self._convert_messages(messages)
+        kwargs = {
+            "model": self.model,
+            "messages": litellm_messages,
+            "stream": True,
+        }
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.tools:
+            kwargs["tools"] = self.tools
+            kwargs["tool_choice"] = "none"
+
+        response = await litellm.acompletion(**kwargs)
+        async for chunk in response:
+            content = chunk.choices[0].delta.content or ""
+            if content:
+                yield AIMessageChunk(content=content)
+
+
+def _resolve_model(node_type: str) -> str:
+    # node_type: "classifier" | "extractor" | "supervisor" | "guardrail"
+    if node_type in ("classifier", "guardrail"):
+        model = os.getenv("CLASSIFIER_MODEL") or os.getenv("GUARDRAIL_MODEL") or "meta-llama/llama-3.1-8b-instruct"
+    elif node_type == "extractor":
+        model = os.getenv("EXTRACTOR_MODEL") or "meta-llama/llama-3.1-70b-instruct"
+    elif node_type == "supervisor":
+        model = os.getenv("SUPERVISOR_MODEL") or "anthropic/claude-3.5-sonnet"
+    else:
+        model = os.getenv("LITELLM_MODEL", "gpt-4o-mini")
+
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    if openrouter_key and not model.startswith("openrouter/") and ("llama" in model or "claude" in model or "qwen" in model):
+        model = f"openrouter/{model}"
+
+    if not os.getenv("CLASSIFIER_MODEL") and not os.getenv("EXTRACTOR_MODEL") and not os.getenv("SUPERVISOR_MODEL"):
+        return os.getenv("LITELLM_MODEL", "gpt-4o-mini")
+
+    return model
+
+
+def _build_chat_model(model_name: str | None = None) -> LiteLLMLangChainWrapper:
+    """Build a LiteLLM wrapper routed through LiteLLM proxy, OpenRouter, or direct library call."""
+    if not model_name:
+        model_name = os.getenv("LITELLM_MODEL", "gpt-4o-mini")
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
     litellm_base = os.getenv("LITELLM_BASE_URL")
-    openai_key = os.getenv("OPENAI_API_KEY", "")
-    openai_base = os.getenv("OPENAI_BASE_URL")
 
-    # Priority: LiteLLM proxy > OpenRouter > direct OpenAI
+    # Priority 1: LiteLLM proxy server
     if litellm_base and os.getenv("LITELLM_ENABLED", "false").lower() in ("true", "1", "yes"):
-        return ChatOpenAI(
+        return LiteLLMLangChainWrapper(
             model=model_name,
             api_key=os.getenv("LITELLM_MASTER_KEY") or "sk-not-needed",
-            base_url=litellm_base,
-            streaming=True,
+            api_base=litellm_base,
         )
+    # Priority 2: OpenRouter directly
     if openrouter_key and model_name.startswith("openrouter/"):
-        return ChatOpenAI(
+        return LiteLLMLangChainWrapper(
             model=model_name.removeprefix("openrouter/"),
             api_key=openrouter_key,
-            base_url="https://openrouter.ai/api/v1",
-            streaming=True,
+            api_base="https://openrouter.ai/api/v1",
         )
-    return ChatOpenAI(
+    # Priority 3: Direct python library call (reads provider env keys automatically, e.g. GEMINI_API_KEY, OPENAI_API_KEY)
+    return LiteLLMLangChainWrapper(
         model=model_name,
-        api_key=openai_key or "sk-not-needed",
-        base_url=openai_base,
-        streaming=True,
     )
+
 
 
 TOOL_SCHEMAS = {
@@ -540,7 +640,7 @@ def run_qa_compliance(state: AgentStudioState) -> dict[str, object]:
             ),
         )
 
-    if state["risk_level"] == "high":
+    if state.get("risk_level") == "high":
         findings.append(
             QaFinding(
                 label="High-risk escalation",
@@ -568,7 +668,7 @@ def run_qa_compliance(state: AgentStudioState) -> dict[str, object]:
         quality_score = min(quality_score, max(0.0, float(retrieval_confidence)))
     if missing_knowledge:
         quality_score = min(quality_score, 0.48)
-    if state["risk_level"] == "high":
+    if state.get("risk_level") == "high":
         quality_score = min(quality_score, 0.72)
     if has_draft_error or has_empty_draft:
         quality_score = 0.0
@@ -577,7 +677,7 @@ def run_qa_compliance(state: AgentStudioState) -> dict[str, object]:
         "blocked"
         if has_draft_error or has_empty_draft
         else "needs_review"
-        if missing_knowledge or state["risk_level"] == "high"
+        if missing_knowledge or state.get("risk_level") == "high"
         else "review_ready"
     )
     decision_reason = (
@@ -586,7 +686,7 @@ def run_qa_compliance(state: AgentStudioState) -> dict[str, object]:
         else "Missing or weak knowledge requires supervisor review."
         if missing_knowledge
         else "High-risk conversation remains supervisor-gated."
-        if state["risk_level"] == "high"
+        if state.get("risk_level") == "high"
         else "Draft is grounded enough for supervisor review."
     )
     trace_attributes = {
@@ -633,24 +733,577 @@ def run_qa_compliance(state: AgentStudioState) -> dict[str, object]:
     }
 
 
+def _parse_json_from_llm(content: str) -> dict:
+    content = content.strip()
+    if content.startswith("```"):
+        content = re.sub(r"^```(?:json)?\n", "", content)
+        content = re.sub(r"\n```$", "", content)
+    content = content.strip()
+    return json.loads(content)
+
+
+def _prepare_agent_prompt_with_context(agent_prompt: str, state: AgentStudioState) -> str:
+    prompt = agent_prompt
+    memory = state.get("memory_context", [])
+    knowledge = state.get("retrieved_knowledge", [])
+    if memory:
+        memory_context = "\n".join(
+            [
+                f"- {hit.memory_type} ({hit.source}, score {hit.score:.2f}): {hit.content}"
+                for hit in memory
+            ]
+        )
+        prompt += (
+            "\n\nConversation Memory:\n"
+            f"{memory_context}\n"
+            "Use conversation memory only for customer/thread context."
+        )
+    if knowledge:
+        knowledge_context = "\n".join(
+            [
+                f"- {hit.title} ({hit.category}, score {hit.score:.2f}): {hit.excerpt}"
+                for hit in knowledge
+            ]
+        )
+        prompt += f"\n\nSelected Source Pack:\n{knowledge_context}"
+    if state.get("missing_knowledge"):
+        prompt += (
+            "\n\nThe selected sources may be insufficient. Do not invent policy details."
+        )
+    return prompt
+
+
+def classify_and_route(state: AgentStudioState) -> dict[str, object]:
+    message = state["incoming_message"].strip()
+    normalized_message = " ".join(message.split())
+
+    agent = registry.get_agent("classifier_agent")
+    system_prompt = agent.system_prompt if agent else "Classify the user intent and routed agent."
+
+    try:
+        llm = _build_chat_model(_resolve_model("classifier"))
+        lc_messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=normalized_message),
+        ]
+        response = llm.invoke(lc_messages)
+        body = response.content or ""
+
+        data = _parse_json_from_llm(body)
+        intent = data.get("intent", "general_support")
+        risk_level = data.get("risk_level", "medium")
+        routed_agent = data.get("routed_agent", "general_support")
+    except Exception:
+        message_lower = normalized_message.lower()
+        if any(term in message_lower for term in ["refund", "cancel", "angry", "complaint"]):
+            intent = "refund_or_cancellation"
+            risk_level = "high"
+            routed_agent = "refund_resolver"
+        elif any(term in message_lower for term in ["price", "pricing", "quote", "cost"]):
+            intent = "pricing_lead"
+            risk_level = "low"
+            routed_agent = "sales_agent"
+        elif any(term in message_lower for term in ["appointment", "schedule", "book", "reschedule"]):
+            intent = "booking_or_support"
+            risk_level = "medium"
+            routed_agent = "general_support"
+        else:
+            intent = "general_support"
+            risk_level = "medium"
+            routed_agent = "general_support"
+
+    return {
+        "normalized_message": normalized_message,
+        "intent": intent,
+        "risk_level": risk_level,
+        "routed_agent": routed_agent,
+        "selected_agent": routed_agent,
+        "customer_driver": _customer_driver(intent, normalized_message.lower())
+    }
+
+
+def _run_sub_agent(state: AgentStudioState, agent_key: str) -> dict[str, object]:
+    agent = registry.get_agent(agent_key)
+    if not agent:
+        return {
+            "sub_agent_report": {
+                "agent": agent_key,
+                "analysis": "Agent configuration missing.",
+                "recommended_action": "ESCALATE",
+                "tool_requests": [],
+                "draft_hint": "I need assistance from a supervisor.",
+                "confidence": 0.0,
+                "risk_flags": ["missing_config"]
+            },
+            "tool_requests": []
+        }
+
+    prompt = _prepare_agent_prompt_with_context(agent.system_prompt, state)
+
+    try:
+        llm = _build_chat_model(_resolve_model("extractor"))
+        lc_messages = [
+            SystemMessage(content=prompt),
+            HumanMessage(content=state["normalized_message"]),
+        ]
+        response = llm.invoke(lc_messages)
+        body = response.content or ""
+
+        report = _parse_json_from_llm(body)
+
+        report.setdefault("agent", agent.name)
+        report.setdefault("analysis", "")
+        report.setdefault("recommended_action", "DRAFT_REPLY")
+        report.setdefault("tool_requests", [])
+        report.setdefault("draft_hint", "")
+        report.setdefault("confidence", 0.5)
+        report.setdefault("risk_flags", [])
+
+        tool_requests = report.get("tool_requests", [])
+        if not isinstance(tool_requests, list):
+            tool_requests = []
+
+        return {
+            "sub_agent_report": report,
+            "tool_requests": tool_requests
+        }
+    except Exception as exc:
+        return {
+            "sub_agent_report": {
+                "agent": agent.name,
+                "analysis": f"Error running sub-agent: {exc}",
+                "recommended_action": "ESCALATE",
+                "tool_requests": [],
+                "draft_hint": "I encountered an internal error and need supervisor review.",
+                "confidence": 0.0,
+                "risk_flags": ["agent_execution_error"]
+            },
+            "tool_requests": []
+        }
+
+
+def run_sales_agent(state: AgentStudioState) -> dict[str, object]:
+    return _run_sub_agent(state, "pricing_lead")
+
+
+def run_refund_resolver(state: AgentStudioState) -> dict[str, object]:
+    return _run_sub_agent(state, "refund_or_cancellation")
+
+
+def run_support_agent(state: AgentStudioState) -> dict[str, object]:
+    return _run_sub_agent(state, "general_support")
+
+
+async def run_tool_executor(state: AgentStudioState) -> dict[str, object]:
+    tool_requests = state.get("tool_requests", [])
+    tool_outputs = list(state.get("tool_outputs", []))
+    tool_plans = list(state.get("tool_plans", []))
+    tool_results = list(state.get("tool_results", []))
+
+    selected_agent = state.get("routed_agent") or "general_support"
+    risk_level = state.get("risk_level") or "medium"
+
+    settings = get_settings()
+
+    for tr in tool_requests:
+        tool_name = tr.get("tool")
+        args = tr.get("args", {})
+
+        approved = state.get("approval_status") == "approved" or state.get("approved", False)
+
+        policy_context = ToolPolicyContext(
+            selected_agent=selected_agent,
+            conversation_risk=risk_level,
+            approved=approved,
+            autonomous=True,
+            provider_enabled=settings.twenty_enabled,
+            provider_configured=settings.twenty_configured,
+            provider_dry_run=settings.twenty_dry_run,
+            provider_writes_enabled=settings.twenty_allow_writes,
+        )
+
+        policy_decision = evaluate_tool_policy(
+            tool_name,
+            policy_context,
+        )
+
+        if policy_decision.allowed:
+            try:
+                if tool_name == "crm.lookup_contact":
+                    adapter = TwentyAdapter(settings)
+                    query = args.get("query", "")
+                    crm_context, plan, result = await adapter.lookup_contact(
+                        query=query,
+                        conversation_id=state.get("conversation_id"),
+                    )
+
+                    tool_plans.append(plan)
+                    tool_results.append(result)
+
+                    tool_outputs.append({
+                        "tool": tool_name,
+                        "status": "succeeded",
+                        "output": {
+                            "contact_id": crm_context.contact_id if crm_context else None,
+                            "display_name": crm_context.display_name if crm_context else None,
+                            "company_name": crm_context.company_name if crm_context else None,
+                            "phone_masked": crm_context.phone_masked if crm_context else None,
+                            "email_masked": crm_context.email_masked if crm_context else None,
+                        }
+                    })
+                else:
+                    tool_outputs.append({
+                        "tool": tool_name,
+                        "status": "blocked",
+                        "reason": f"Tool {tool_name} execution not implemented."
+                    })
+            except Exception as e:
+                tool_outputs.append({
+                    "tool": tool_name,
+                    "status": "failed",
+                    "error": str(e)
+                })
+        else:
+            from agent_studio.schemas import ToolPlan, ToolResult
+            plan = ToolPlan(
+                tool_name=tool_name,
+                action="Blocked",
+                args=args,
+                requires_approval=policy_decision.requires_approval,
+                approved=approved,
+                dry_run=policy_decision.dry_run,
+                risk_level=risk_level,
+            )
+            result = ToolResult(
+                plan_id=plan.id,
+                tool_name=tool_name,
+                status="blocked",
+                detail=policy_decision.blocked_reason or "Blocked by tool policy.",
+            )
+            tool_plans.append(plan)
+            tool_results.append(result)
+            tool_outputs.append({
+                "tool": tool_name,
+                "status": "blocked",
+                "reason": policy_decision.blocked_reason or "Blocked by tool policy."
+            })
+
+    return {
+        "tool_outputs": tool_outputs,
+        "tool_plans": tool_plans,
+        "tool_results": tool_results
+    }
+
+
+def supervisor_draft(state: AgentStudioState) -> dict[str, object]:
+    agent = registry.get_agent("supervisor_agent")
+    system_prompt = agent.system_prompt if agent else "You are the supervisor. Synthesize response."
+
+    report = state.get("sub_agent_report") or {}
+    tool_outputs = state.get("tool_outputs") or []
+
+    context_str = f"SUB-AGENT REPORT:\n{json.dumps(report, indent=2)}\n\nTOOL OUTPUTS:\n{json.dumps(tool_outputs, indent=2)}"
+
+    knowledge = state.get("retrieved_knowledge", [])
+    citation_titles = ", ".join(hit.title for hit in knowledge[:4])
+    if knowledge:
+        knowledge_context = "\n".join(
+            [
+                f"- {hit.title} ({hit.category}, score {hit.score:.2f}): {hit.excerpt}"
+                for hit in knowledge
+            ]
+        )
+        context_str += f"\n\nSELECTED SOURCE PACK:\n{knowledge_context}"
+
+    try:
+        llm = _build_chat_model(_resolve_model("supervisor"))
+        lc_messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=f"State context:\n{context_str}\n\nCustomer message: {state['normalized_message']}"),
+        ]
+        response = llm.invoke(lc_messages)
+        body = (response.content or "").strip()
+
+        if body.startswith("```"):
+            body = re.sub(r"^```(?:json)?\n", "", body)
+            body = re.sub(r"\n```$", "", body)
+        body = body.strip()
+
+        if not body:
+            body = "I am looking into this request. One moment please."
+    except Exception as exc:
+        body = f"An error occurred: {exc}"
+
+    if citation_titles and not body.startswith("An error occurred:"):
+        body = f"{body}\n\nBasis: {citation_titles}."
+
+    return {
+        "draft_reply": body,
+        "approval_status": "needs_approval"
+    }
+
+
+def run_guardrail(state: AgentStudioState) -> dict[str, object]:
+    knowledge = state.get("retrieved_knowledge", [])
+    memory = state.get("memory_context", [])
+    missing_knowledge = bool(state.get("missing_knowledge", not knowledge))
+    retrieval_confidence = state.get("retrieval_confidence")
+    draft = state.get("draft_reply", "")
+    has_draft_error = draft.startswith("An error occurred:")
+    has_empty_draft = not draft.strip()
+
+    findings = []
+
+    if knowledge and not missing_knowledge:
+        knowledge_status = "pass"
+        knowledge_detail = "Draft includes selected KB/SOP source-pack context."
+    elif knowledge:
+        knowledge_status = "watch"
+        knowledge_detail = "Selected sources were weak or incomplete; supervisor review is required."
+    else:
+        knowledge_status = "watch"
+        knowledge_detail = "No matching knowledge was retrieved."
+
+    if retrieval_confidence is not None:
+        knowledge_detail = f"{knowledge_detail} Retrieval confidence: {retrieval_confidence:.2f}."
+
+    findings.append(
+        QaFinding(
+            label="Knowledge basis",
+            status=knowledge_status,
+            detail=knowledge_detail,
+        )
+    )
+
+    findings.append(
+        QaFinding(
+            label="HITL policy",
+            status="pass",
+            detail="Live Chatwoot replies require supervisor approval.",
+        )
+    )
+
+    if missing_knowledge:
+        findings.append(
+            QaFinding(
+                label="Missing knowledge",
+                status="watch",
+                detail="Graph marked the source pack as insufficient or low confidence.",
+            ),
+        )
+
+    if memory and knowledge:
+        memory_text = " ".join(hit.content.lower() for hit in memory)
+        knowledge_text = " ".join(
+            f"{hit.title} {hit.excerpt}".lower()
+            for hit in knowledge
+        )
+        conflict_terms = ["refund", "cancel", "pricing", "quote"]
+        conflicts = [
+            term
+            for term in conflict_terms
+            if term in memory_text and term not in knowledge_text
+        ]
+        if conflicts:
+            findings.append(
+                QaFinding(
+                    label="Memory policy boundary",
+                    status="watch",
+                    detail=(
+                        "Conversation memory mentions operational context not present in the selected source pack; "
+                        "do not let memory override approved policy."
+                    ),
+                ),
+            )
+
+    if has_draft_error or has_empty_draft:
+        findings.append(
+            QaFinding(
+                label="Draft generation",
+                status="fail",
+                detail="Model/provider output failed or returned no sendable draft.",
+            ),
+        )
+
+    if state.get("risk_level") == "high":
+        findings.append(
+            QaFinding(
+                label="High-risk escalation",
+                status="watch",
+                detail="Refund, cancellation, and complaint language must remain supervisor-gated.",
+            ),
+        )
+
+    diagnostic = dict(state.get("retrieval_diagnostic", {}) or {})
+    diagnostic["skill_diagnostic"] = skill_registry.graph_diagnostic(
+        selected_agent=state.get("routed_agent") or "general_support",
+        completed_stages=[
+            "normalize",
+            "retrieve_memory",
+            "classify",
+            "select_agent",
+            "retrieve",
+            "draft",
+            "qa_compliance",
+        ],
+    )
+
+    quality_score = 0.88
+    if retrieval_confidence is not None:
+        quality_score = min(quality_score, max(0.0, float(retrieval_confidence)))
+    if missing_knowledge:
+        quality_score = min(quality_score, 0.48)
+    if state.get("risk_level") == "high":
+        quality_score = min(quality_score, 0.72)
+    if has_draft_error or has_empty_draft:
+        quality_score = 0.0
+    quality_score = round(quality_score, 4)
+
+    quality_label = (
+        "blocked"
+        if has_draft_error or has_empty_draft
+        else "needs_review"
+        if missing_knowledge or state.get("risk_level") == "high"
+        else "review_ready"
+    )
+
+    decision_reason = (
+        "Provider draft generation failed or returned no sendable reply."
+        if has_draft_error or has_empty_draft
+        else "Missing or weak knowledge requires supervisor review."
+        if missing_knowledge
+        else "High-risk conversation remains supervisor-gated."
+        if state.get("risk_level") == "high"
+        else "Draft is grounded enough for supervisor review."
+    )
+
+    trace_attributes = {
+        "sagad.graph": "Hierarchical Support Graph v0.2.0",
+        "sagad.intent": state.get("intent", "unknown"),
+        "sagad.risk_level": state.get("risk_level", "medium"),
+        "sagad.selected_agent": state.get("routed_agent") or "general_support",
+        "sagad.retrieval_confidence": retrieval_confidence,
+        "sagad.missing_knowledge": missing_knowledge,
+        "sagad.approval_status": "needs_approval",
+        "sagad.quality_label": quality_label,
+    }
+
+    confidence_breakdown = {
+        "retrieval_confidence": retrieval_confidence,
+        "knowledge_available": bool(knowledge),
+        "missing_knowledge": missing_knowledge,
+        "risk_level": state.get("risk_level", "medium"),
+        "draft_available": not has_empty_draft,
+        "provider_error": has_draft_error,
+        "final_score": quality_score,
+    }
+
+    compliance_status = "blocked" if has_draft_error or has_empty_draft else "needs_review"
+
+    return {
+        "qa_findings": findings,
+        "compliance_status": compliance_status,
+        "approval_status": "needs_approval",
+        "retrieval_diagnostic": diagnostic,
+        "eval_tags": [
+            str(state.get("intent", "unknown")),
+            str(state.get("risk_level", "medium")),
+            "missing_knowledge" if missing_knowledge else "knowledge_supported",
+            quality_label,
+        ],
+        "trace_attributes": trace_attributes,
+        "diagnostic_payload": diagnostic,
+        "decision_reason": decision_reason,
+        "guardrail_findings": findings,
+        "confidence_breakdown": confidence_breakdown,
+        "final_confidence_score": quality_score,
+        "quality_score": quality_score,
+        "quality_label": quality_label,
+        "quality_signals": confidence_breakdown,
+        "quality_notes": decision_reason,
+    }
+
+
+def _route_to_agent(state: AgentStudioState) -> str:
+    agent = state.get("routed_agent")
+    if agent == "sales_agent":
+        return "run_sales_agent"
+    elif agent == "refund_resolver":
+        return "run_refund_resolver"
+    else:
+        return "run_support_agent"
+
+
+def _needs_tools(state: AgentStudioState) -> str:
+    report = state.get("sub_agent_report") or {}
+    action = report.get("recommended_action")
+    if action == "REQUEST_TOOL" and state.get("tool_requests"):
+        return "run_tool_executor"
+    return "supervisor_draft"
+
+
 def build_graph() -> object:
     workflow = StateGraph(AgentStudioState)
+
     workflow.add_node("normalize", normalize_message)
     workflow.add_node("retrieve_memory", retrieve_memory)
-    workflow.add_node("classify", classify_message)
-    workflow.add_node("select_agent", select_markdown_agent)
+    workflow.add_node("classify_and_route", classify_and_route)
     workflow.add_node("retrieve", retrieve_knowledge)
-    workflow.add_node("draft", draft_reply)
-    workflow.add_node("qa_compliance", run_qa_compliance)
+
+    workflow.add_node("run_sales_agent", run_sales_agent)
+    workflow.add_node("run_refund_resolver", run_refund_resolver)
+    workflow.add_node("run_support_agent", run_support_agent)
+
+    workflow.add_node("run_tool_executor", run_tool_executor)
+    workflow.add_node("supervisor_draft", supervisor_draft)
+    workflow.add_node("run_guardrail", run_guardrail)
+
     workflow.add_edge(START, "normalize")
     workflow.add_edge("normalize", "retrieve_memory")
-    workflow.add_edge("retrieve_memory", "classify")
-    workflow.add_edge("classify", "select_agent")
-    workflow.add_edge("select_agent", "retrieve")
-    workflow.add_edge("retrieve", "draft")
-    workflow.add_edge("draft", "qa_compliance")
-    workflow.add_edge("qa_compliance", END)
+    workflow.add_edge("retrieve_memory", "classify_and_route")
+    workflow.add_edge("classify_and_route", "retrieve")
+
+    workflow.add_conditional_edges(
+        "retrieve",
+        _route_to_agent,
+        {
+            "run_sales_agent": "run_sales_agent",
+            "run_refund_resolver": "run_refund_resolver",
+            "run_support_agent": "run_support_agent",
+        }
+    )
+
+    workflow.add_conditional_edges(
+        "run_sales_agent",
+        _needs_tools,
+        {
+            "run_tool_executor": "run_tool_executor",
+            "supervisor_draft": "supervisor_draft",
+        }
+    )
+    workflow.add_conditional_edges(
+        "run_refund_resolver",
+        _needs_tools,
+        {
+            "run_tool_executor": "run_tool_executor",
+            "supervisor_draft": "supervisor_draft",
+        }
+    )
+    workflow.add_conditional_edges(
+        "run_support_agent",
+        _needs_tools,
+        {
+            "run_tool_executor": "run_tool_executor",
+            "supervisor_draft": "supervisor_draft",
+        }
+    )
+
+    workflow.add_edge("run_tool_executor", "supervisor_draft")
+    workflow.add_edge("supervisor_draft", "run_guardrail")
+    workflow.add_edge("run_guardrail", END)
+
     return workflow.compile()
 
 
 graph = build_graph()
+

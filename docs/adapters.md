@@ -24,3 +24,7 @@ Adapters let Sagad OS connect to external tools without becoming those tools.
 
 Start with a read-only health check, then add one read method, then one supervised write method. Do not expose browser-direct provider calls.
 
+## Testing Adapters
+Reference adapters are unit and integration tested under `tests/test_adapters.py`:
+- **Chatwoot (`chatwoot.py`)**: Tests cover webhook payload parsing, unread counts, priority labels, conversation detail fetching, approved outgoing replies sending, and conversation status toggling.
+- **Twenty CRM (`twenty.py`)**: Tests cover status resolution (disabled vs ready vs dry_run), people edge contact lookups (with masked email/phone PII output), and mutations (notes, tasks, lead stages).

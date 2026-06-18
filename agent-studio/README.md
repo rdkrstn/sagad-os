@@ -51,6 +51,10 @@ Chatwoot threading rule: one Chatwoot `conversation.id` maps to one Sagad conver
 - `LITELLM_MASTER_KEY`
 - `DEEPSEEK_API_KEY`
 - `OPENROUTER_API_KEY`
+- `SAGAD_DOCLING_ENABLED`
+- `RERANK_ENABLED`
+- `RERANK_MODEL`
+- `RERANK_API_KEY`
 
 OpenAI, OpenRouter, and LangSmith variables are optional in this deterministic dev preview. Chatwoot send runs as `dry_run` when Chatwoot credentials are not set. Twenty CRM is disabled and dry-run by default; live writes require `TWENTY_ENABLED=true`, `TWENTY_DRY_RUN=false`, `TWENTY_ALLOW_WRITES=true`, and an explicit supervisor approval payload.
 
@@ -67,7 +71,7 @@ Local scanned-PDF OCR uses Tesseract and Poppler. The Agent Studio Docker image 
 
 ```powershell
 uv sync
-uv run pytest
+uv run python run_tests.py
 uv run uvicorn agent_studio.main:app --reload --port 8010
 ```
 

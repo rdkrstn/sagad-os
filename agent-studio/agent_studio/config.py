@@ -3,8 +3,25 @@ import os
 
 from dotenv import load_dotenv
 from pydantic import BaseModel
+from pathlib import Path
 
-load_dotenv()
+# Load from repository root .env first, falling back to local .env
+root_env = Path(__file__).resolve().parents[2] / ".env"
+if root_env.exists():
+    load_dotenv(dotenv_path=root_env)
+else:
+    load_dotenv()
+
+# Map LANGSMITH_ env vars to LANGCHAIN_ equivalents for LangGraph tracing
+if os.getenv("LANGSMITH_TRACING"):
+    os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGSMITH_TRACING")
+if os.getenv("LANGSMITH_API_KEY"):
+    os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGSMITH_API_KEY")
+if os.getenv("LANGSMITH_PROJECT"):
+    os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT")
+if os.getenv("LANGSMITH_ENDPOINT"):
+    os.environ["LANGCHAIN_ENDPOINT"] = os.getenv("LANGSMITH_ENDPOINT")
+
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -68,6 +85,10 @@ class Settings(BaseModel):
     sagad_ocr_lang: str = "eng"
     sagad_ocr_max_pages: int = 10
     sagad_ocr_timeout_seconds: float = 30
+    rerank_enabled: bool = False
+    rerank_model: str = "cohere/rerank-english-v3.0"
+    rerank_api_key: str | None = None
+    sagad_docling_enabled: bool = True
 
     @property
     def chatwoot_send_enabled(self) -> bool:
@@ -155,4 +176,8 @@ def get_settings() -> Settings:
         sagad_ocr_lang=os.getenv("SAGAD_OCR_LANG", "eng"),
         sagad_ocr_max_pages=_int_env("SAGAD_OCR_MAX_PAGES", 10),
         sagad_ocr_timeout_seconds=_float_env("SAGAD_OCR_TIMEOUT_SECONDS", 30),
+        rerank_enabled=_bool_env("RERANK_ENABLED", False),
+        rerank_model=os.getenv("RERANK_MODEL", "cohere/rerank-english-v3.0"),
+        rerank_api_key=os.getenv("RERANK_API_KEY"),
+        sagad_docling_enabled=_bool_env("SAGAD_DOCLING_ENABLED", True),
     )

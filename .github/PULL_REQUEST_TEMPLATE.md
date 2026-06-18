@@ -8,7 +8,7 @@
 - [ ] `cd v1 && npx tsc --noEmit --pretty false`
 - [ ] `cd v1 && npm run build`
 - [ ] `cd agent-studio && uv run pytest`
-- [ ] `docker compose -f compose.preview.yaml build`
+- [ ] `docker compose -f compose.vps.example.yaml build`
 
 ## Notes
 

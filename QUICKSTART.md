@@ -82,7 +82,7 @@ From `agent-studio/`:
 
 ```powershell
 uv sync
-uv run pytest
+uv run python run_tests.py
 uv run uvicorn agent_studio.main:app --reload --port 8010
 ```
 

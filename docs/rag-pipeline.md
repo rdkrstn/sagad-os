@@ -38,5 +38,11 @@ Sagad Postgres with pgvector is the retrieval index. It is not the source of tru
 
 - Duplicate detection uses source path plus content hash.
 - Changed documents create a new version; old chunks are retired after the new version is approved.
-- PDFs are parsed directly when embedded text exists. Scanned PDFs run local Tesseract OCR when `SAGAD_OCR_ENABLED=true`; otherwise they return `ocr_required`, `ocr_unavailable`, or `ocr_failed`.
+- PDFs are parsed with layout awareness using **IBM Docling** when `SAGAD_DOCLING_ENABLED=true` (which handles complex structures like tables, columns, and headers). If disabled or fails, the parser falls back to `pypdf` text extraction and scanned PDFs run local Tesseract OCR when `SAGAD_OCR_ENABLED=true`. Otherwise, ingestion returns `ocr_required`, `ocr_unavailable`, or `ocr_failed`.
 - Local uploads and extracted documents can be re-indexed on command from stored extracted content. Google Drive, Notion, Confluence, Guru, websites, and true external source sync are later source adapters. They should sync through Agent Studio, not browser code.
+
+## Post-Retrieval Reranking
+To improve citation precision, we perform a two-stage retrieval pipeline:
+1. **Semantic Search**: Postgres with `pgvector` retrieves a larger initial candidate pool of chunks (e.g. top 15 results).
+2. **Reranking**: If `RERANK_ENABLED=true`, a cross-encoder reranking model (e.g., Cohere/Jina reranking models via OpenRouter or LiteLLM) re-scores and re-orders the candidate list. The agent is then provided only the top `limit` results (default 4), reducing prompt context size and cost while boosting accuracy.
+

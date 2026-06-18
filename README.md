@@ -43,26 +43,78 @@ The first target workflow follows the canonical blueprint: customer channels flo
 ## Core Architecture
 
 ```mermaid
-flowchart LR
-  Channels["Customer Channels"]
-  Chatwoot["Chatwoot Inbox"]
-  Studio["Agent Studio"]
-  Knowledge["Knowledge / SOP / QA"]
-  Tools["Server-Side Adapters"]
-  Console["Sagad Console"]
-  External["Twenty / Uptime Kuma / APIs"]
-  LangSmith["LangSmith Traces"]
+graph LR
+    %% Column 1: Inbound & Memory
+    subgraph Col1 ["1. Intake & Memory"]
+        Inbound["💬 Customer Inbound<br>(Chatwoot Webhook)"]:::entry
+        Normalize["🔄 Normalizer & Sanitizer"]:::gate
+        Memory["🧠 Memory Recall<br>(pgvector)"]:::retrieve
+        
+        Inbound --> Normalize --> Memory
+    end
 
-  Channels --> Chatwoot
-  Chatwoot --> Studio
-  Knowledge --> Studio
-  Studio --> Tools
-  Tools --> External
-  Studio --> Console
-  Console --> Studio
-  Studio --> Chatwoot
-  Studio --> LangSmith
+    %% Column 2: Classifier & RAG
+    subgraph Col2 ["2. Intent Routing & RAG"]
+        Router{"⚖️ Intent Classifier<br>(Llama-3.1-8B)"}:::gate
+        IngestDoc["📄 Layout Ingestion<br>(IBM Docling)"]:::retrieve
+        VectorSearch["🔍 Vector Search<br>(pgvector)"]:::retrieve
+        Reranker["📊 Cohere Reranker<br>(OpenRouter)"]:::retrieve
+
+        Memory --> Router
+        IngestDoc -.-> VectorSearch --> Reranker
+    end
+
+    %% Column 3: Extractors & Tools
+    subgraph Col3 ["3. Sub-Agents & Tools"]
+        Sales["💼 Sales Agent<br>(Qwen-72B)"]:::agent
+        Refund["💳 Refund Agent<br>(Llama-70B)"]:::agent
+        Support["🔧 Support Agent<br>(Llama-70B)"]:::agent
+        
+        Policy["🛡️ Tool Policy Engine"]:::gate
+        Twenty["🗃️ CRM Adapter<br>(Twenty CRM)"]:::tools
+
+        Router -->|pricing_lead| Sales
+        Router -->|refund| Refund
+        Router -->|support| Support
+
+        Reranker -.-> |Context| Sales & Refund & Support
+        Sales & Refund --> Policy --> Twenty
+    end
+
+    %% Column 4: QA & Human Gate
+    subgraph Col4 ["4. QA & Human Approval"]
+        Supervisor["📝 Draft Assembly"]:::gate
+        Guardrail{"🚨 Compliance Guardrail<br>(Llama-3.1-8B)"}:::gate
+        HITLQueue["👤 Review Queue<br>(Next.js Console)"]:::entry
+        Send["🚀 Approved Reply<br>(Chatwoot Outbound)"]:::output
+
+        Sales & Refund & Support & Twenty --> Supervisor
+        Supervisor --> Guardrail -->|Pass| HITLQueue -->|Approval| Send
+    end
+
+    %% Styling
+    classDef entry fill:#ffffff,stroke:#000000,stroke-width:2px;
+    classDef gate fill:#f9f9f9,stroke:#666666,stroke-width:1.5px;
+    classDef agent fill:#000000,stroke:#000000,stroke-width:2px,color:#ffffff;
+    classDef retrieve fill:#eaeaea,stroke:#333333,stroke-width:1px;
+    classDef tools fill:#f5f5f5,stroke:#222222,stroke-width:1px,stroke-dasharray: 5 5;
+    classDef output fill:#eaffea,stroke:#2eb82e,stroke-width:2px;
+
+    class Inbound,HITLQueue entry;
+    class Router,Normalize,Policy,Guardrail,Supervisor gate;
+    class Sales,Refund,Support agent;
+    class Memory,IngestDoc,VectorSearch,Reranker retrieve;
+    class Twenty tools;
+    class Send output;
 ```
+
+## Tech Stack
+
+Sagad OS consists of two primary active runtime environments:
+
+*   **Frontend Console (`v1/`)**: Next.js 16 (App Router), TypeScript, TailwindCSS, Auth.js, and WebSockets.
+*   **Backend Engine (`agent-studio/`)**: Python 3.12, LangGraph, FastAPI, LiteLLM, pgvector (Postgres), and IBM Docling.
+*   **Vector Search & Context Reranker**: PostgreSQL with `pgvector` for semantic search, coupled with Cohere Rerank via OpenRouter for context refinement.
 
 ## Product Modules
 
@@ -216,7 +268,7 @@ npm run build
 ```powershell
 cd agent-studio
 uv sync
-uv run pytest
+uv run python run_tests.py
 uv run uvicorn agent_studio.main:app --reload --port 8010
 ```
 
@@ -362,7 +414,7 @@ Current:
 - Sagad Demo Operations seeded workspace.
 - Golden demo loop with sample conversations, drafts, approvals, audit trail events, and basic AI Ops metrics.
 - Chatwoot and Twenty operator/admin setup and monitoring boundaries.
-- Governed local knowledge ingestion with review-first approval, OpenAI embeddings, and pgvector retrieval.
+- Governed local knowledge ingestion with review-first approval, OpenAI embeddings, pgvector retrieval, layout-aware **IBM Docling** PDF parsing, and post-retrieval **Cohere Rerank** via OpenRouter.
 - Docker and CI scaffolding.
 - Auth.js console session foundation.
 - Sagad Postgres/pgvector schema foundation.
@@ -371,13 +423,13 @@ Current:
 - Dynamic Agent CRUD (Create, Edit, Delete) configurations from the Supervisor Console `/agents` page.
 - Refactored LLM calls to use LangChain's `ChatOpenAI` wrapper with LiteLLM/OpenRouter/OpenAI routing and tool binding.
 - Real-time token streaming for draft reply generation (Server-Sent Events) with a "Regenerate" button in the conversation review console.
+- Tested and verified **Twenty CRM read-only context** (contact lookup) and **Chatwoot messaging integrations** with a 15-case adapter suite.
 
 Next:
 
 - Operator/admin Integrations page wired to Agent Studio connection config endpoints.
 - `Settings -> Advanced` developer view for payloads, DTO contracts, and webhook/tool samples.
 - Live Chatwoot webhook loop.
-- Twenty CRM read-only context.
 - Human-in-the-loop approved send back to Chatwoot.
 - Uptime Kuma read-only health visibility.
 - Remote knowledge adapters for Google Drive, Notion, Confluence, Guru, and website crawling.

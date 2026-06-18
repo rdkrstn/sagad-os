@@ -175,3 +175,81 @@ def test_missing_knowledge_when_only_weak_generic_source_is_available() -> None:
     assert pack.missing_knowledge is True
     assert pack.retrieval_confidence < 0.4
     assert "only generic source retrieved" in pack.reasons
+
+
+def test_reranker_reorders_hits(monkeypatch) -> None:
+    from unittest.mock import MagicMock
+    from agent_studio.retrieval import _rerank_hits
+    from agent_studio.config import Settings
+
+    mock_rerank = MagicMock()
+    mock_response = MagicMock()
+    mock_response.results = [
+        MagicMock(index=1, relevance_score=0.95),
+        MagicMock(index=0, relevance_score=0.45)
+    ]
+    mock_rerank.return_value = mock_response
+
+    monkeypatch.setattr("litellm.rerank", mock_rerank)
+
+    settings = Settings(
+        rerank_enabled=True,
+        rerank_model="cohere/rerank-english-v3.0"
+    )
+
+    hits = [
+        hit("id:0", "Title 0", "category", 0.9, "First excerpt content"),
+        hit("id:1", "Title 1", "category", 0.5, "Second excerpt content")
+    ]
+
+    reranked = _rerank_hits("query text", hits, limit=2, settings=settings)
+
+    assert len(reranked) == 2
+    assert reranked[0].id == "id:1"
+    assert reranked[0].score == 0.95
+    assert reranked[1].id == "id:0"
+    assert reranked[1].score == 0.45
+
+
+def test_openrouter_reranker_direct(monkeypatch) -> None:
+    from unittest.mock import MagicMock
+    from agent_studio.retrieval import _rerank_hits
+    from agent_studio.config import Settings
+
+    mock_post = MagicMock()
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "results": [
+            {"index": 1, "relevance_score": 0.98},
+            {"index": 0, "relevance_score": 0.35}
+        ]
+    }
+    mock_post.return_value = mock_response
+
+    monkeypatch.setattr("httpx.Client.post", mock_post)
+
+    settings = Settings(
+        rerank_enabled=True,
+        rerank_model="openrouter/cohere/rerank-v3.5",
+        rerank_api_key="sk-or-testkey"
+    )
+
+    hits = [
+        hit("id:0", "Title 0", "category", 0.9, "First excerpt content"),
+        hit("id:1", "Title 1", "category", 0.5, "Second excerpt content")
+    ]
+
+    reranked = _rerank_hits("query text", hits, limit=2, settings=settings)
+
+    assert len(reranked) == 2
+    assert reranked[0].id == "id:1"
+    assert reranked[0].score == 0.98
+    assert reranked[1].id == "id:0"
+    assert reranked[1].score == 0.35
+
+    assert mock_post.call_count == 1
+    call_args = mock_post.call_args
+    assert call_args[0][0] == "https://openrouter.ai/api/v1/rerank"
+    assert "Authorization" in call_args[1]["headers"]
+    assert "Bearer sk-or-testkey" == call_args[1]["headers"]["Authorization"]
+    assert call_args[1]["json"]["model"] == "cohere/rerank-v3.5"

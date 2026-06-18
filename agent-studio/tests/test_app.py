@@ -398,12 +398,16 @@ def test_chatwoot_followup_uses_memory_context_separate_from_knowledge(
 
     # With ChatOpenAI, the mock_llm.invoke is called with LangChain messages
     mock_llm = mock_chat_model.return_value  # type: ignore[attr-defined]
-    call_args = mock_llm.invoke.call_args
-    lc_messages = call_args[0][0]  # first positional arg is the message list
-    system_prompt = lc_messages[0].content  # SystemMessage content
-    assert "Conversation Memory" in system_prompt
-    assert "Selected Source Pack" in system_prompt
-    assert "hmmm pricing" in system_prompt
+    found_memory_call = False
+    for call in mock_llm.invoke.call_args_list:
+        lc_messages = call[0][0]
+        system_prompt = lc_messages[0].content
+        if "Conversation Memory" in system_prompt:
+            assert "Selected Source Pack" in system_prompt
+            assert "hmmm pricing" in system_prompt
+            found_memory_call = True
+            break
+    assert found_memory_call, "Could not find LLM call containing Conversation Memory"
 
 
 def test_chatwoot_email_webhook_maps_channel_and_keeps_provider() -> None:
@@ -579,7 +583,14 @@ def test_reject_does_not_send() -> None:
     assert payload["send_status"] == "not_sent"
 
 
-def test_approve_send_uses_dry_run_without_chatwoot_credentials() -> None:
+def test_approve_send_uses_dry_run_without_chatwoot_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHATWOOT_BASE_URL", "")
+    monkeypatch.setenv("CHATWOOT_API_ACCESS_TOKEN", "")
+    monkeypatch.setenv("CHATWOOT_ACCOUNT_ID", "")
+    get_settings.cache_clear()
+
     created = client.post(
         "/webhooks/chatwoot",
         json={"content": "Hello", "conversation": {"id": 88}},
@@ -628,7 +639,12 @@ def test_approve_send_records_policy_metadata_in_chatwoot_tool_result() -> None:
     )
 
 
-def test_approve_send_records_outbound_message_in_same_thread() -> None:
+def test_approve_send_records_outbound_message_in_same_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHATWOOT_DRY_RUN", "true")
+    get_settings.cache_clear()
+
     created = client.post(
         "/webhooks/chatwoot",
         json={
@@ -932,11 +948,9 @@ def test_resolve_conversation_records_successful_chatwoot_result(
         url: str,
         **kwargs: object,
     ) -> httpx.Response:
-        assert url == (
-            "https://chat.example.test/public/api/v1/inboxes/public-inbox/"
-            "contacts/source-660/conversations/660/toggle_status"
-        )
+        assert url == "https://chat.example.test/api/v1/accounts/1/conversations/660/toggle_status"
         assert kwargs["headers"] == {"api_access_token": "secret-token"}
+        assert kwargs.get("json") == {"status": "resolved"}
         return httpx.Response(
             200,
             json={"id": 660, "status": "resolved"},
@@ -1535,3 +1549,186 @@ def test_twenty_live_read_maps_contact_context(
     assert payload["crm_context"]["provider"] == "Twenty CRM"
     assert payload["crm_context"]["contact_id"] == "person_123"
     assert payload["crm_context"]["display_name"] == "Avery Hill"
+
+
+def test_chatwoot_webhook_auto_sends_low_risk_high_confidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import patch
+    monkeypatch.setenv("CHATWOOT_DRY_RUN", "true")
+    get_settings.cache_clear()
+    final_state = {
+        "chatwoot_conversation_id": "88",
+        "chatwoot_message_id": "8801",
+        "customer_name": "Test Customer",
+        "channel": "chatwoot",
+        "incoming_message": "Hello",
+        "normalized_message": "Hello",
+        "intent": "general_support",
+        "risk_level": "low",
+        "retrieved_knowledge": [],
+        "draft_reply": "Hello! I can help you with that.",
+        "qa_findings": [],
+        "compliance_status": "pass",
+        "retrieval_confidence": 0.90,
+        "final_confidence_score": 0.90,
+        "trace_url": "https://smith.langchain.com/trace",
+    }
+    with patch("agent_studio.main.graph.invoke", return_value=final_state):
+        response = client.post(
+            "/webhooks/chatwoot",
+            json={
+                "id": 8801,
+                "content": "Hello",
+                "message_type": "incoming",
+                "conversation": {"id": 88},
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["approval_status"] == "sent"
+        assert payload["send_status"] == "dry_run"
+        assert len(payload["messages"]) == 2
+        assert payload["messages"][1]["sender_type"] == "ai_agent"
+        assert payload["messages"][1]["body"] == "Hello! I can help you with that."
+
+
+def test_chatwoot_webhook_requires_approval_if_risk_is_high() -> None:
+    from unittest.mock import patch
+    final_state = {
+        "chatwoot_conversation_id": "88",
+        "chatwoot_message_id": "8801",
+        "customer_name": "Test Customer",
+        "channel": "chatwoot",
+        "incoming_message": "Hello",
+        "normalized_message": "Hello",
+        "intent": "general_support",
+        "risk_level": "high",
+        "retrieved_knowledge": [],
+        "draft_reply": "Hello! I can help you with that.",
+        "qa_findings": [],
+        "compliance_status": "pass",
+        "retrieval_confidence": 0.90,
+        "final_confidence_score": 0.90,
+        "trace_url": "https://smith.langchain.com/trace",
+    }
+    with patch("agent_studio.main.graph.invoke", return_value=final_state):
+        response = client.post(
+            "/webhooks/chatwoot",
+            json={
+                "id": 8801,
+                "content": "Hello",
+                "message_type": "incoming",
+                "conversation": {"id": 88},
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["approval_status"] == "needs_approval"
+        assert payload["send_status"] == "not_sent"
+
+
+def test_chatwoot_webhook_requires_approval_if_confidence_is_low() -> None:
+    from unittest.mock import patch
+    final_state = {
+        "chatwoot_conversation_id": "88",
+        "chatwoot_message_id": "8801",
+        "customer_name": "Test Customer",
+        "channel": "chatwoot",
+        "incoming_message": "Hello",
+        "normalized_message": "Hello",
+        "intent": "general_support",
+        "risk_level": "low",
+        "retrieved_knowledge": [],
+        "draft_reply": "Hello! I can help you with that.",
+        "qa_findings": [],
+        "compliance_status": "pass",
+        "retrieval_confidence": 0.80,
+        "final_confidence_score": 0.80,
+        "trace_url": "https://smith.langchain.com/trace",
+    }
+    with patch("agent_studio.main.graph.invoke", return_value=final_state):
+        response = client.post(
+            "/webhooks/chatwoot",
+            json={
+                "id": 8801,
+                "content": "Hello",
+                "message_type": "incoming",
+                "conversation": {"id": 88},
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["approval_status"] == "needs_approval"
+        assert payload["send_status"] == "not_sent"
+
+
+def test_chatwoot_webhook_requires_approval_if_compliance_not_pass() -> None:
+    from unittest.mock import patch
+    final_state = {
+        "chatwoot_conversation_id": "88",
+        "chatwoot_message_id": "8801",
+        "customer_name": "Test Customer",
+        "channel": "chatwoot",
+        "incoming_message": "Hello",
+        "normalized_message": "Hello",
+        "intent": "general_support",
+        "risk_level": "low",
+        "retrieved_knowledge": [],
+        "draft_reply": "Hello! I can help you with that.",
+        "qa_findings": [],
+        "compliance_status": "needs_review",
+        "retrieval_confidence": 0.90,
+        "final_confidence_score": 0.90,
+        "trace_url": "https://smith.langchain.com/trace",
+    }
+    with patch("agent_studio.main.graph.invoke", return_value=final_state):
+        response = client.post(
+            "/webhooks/chatwoot",
+            json={
+                "id": 8801,
+                "content": "Hello",
+                "message_type": "incoming",
+                "conversation": {"id": 88},
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["approval_status"] == "needs_approval"
+        assert payload["send_status"] == "not_sent"
+
+
+def test_chatwoot_webhook_no_auto_send_if_draft_empty() -> None:
+    from unittest.mock import patch
+    final_state = {
+        "chatwoot_conversation_id": "88",
+        "chatwoot_message_id": "8801",
+        "customer_name": "Test Customer",
+        "channel": "chatwoot",
+        "incoming_message": "Hello",
+        "normalized_message": "Hello",
+        "intent": "general_support",
+        "risk_level": "low",
+        "retrieved_knowledge": [],
+        "draft_reply": "   ",
+        "qa_findings": [],
+        "compliance_status": "pass",
+        "retrieval_confidence": 0.90,
+        "final_confidence_score": 0.90,
+        "trace_url": "https://smith.langchain.com/trace",
+    }
+    with patch("agent_studio.main.graph.invoke", return_value=final_state):
+        response = client.post(
+            "/webhooks/chatwoot",
+            json={
+                "id": 8801,
+                "content": "Hello",
+                "message_type": "incoming",
+                "conversation": {"id": 88},
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["approval_status"] == "needs_approval"
+        assert payload["send_status"] == "not_sent"
+
