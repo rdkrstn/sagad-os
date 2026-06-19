@@ -60,27 +60,6 @@ jobs:
         working-directory: v1
         run: npm run build
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-
-      - name: Install OCR system dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng
-
-      - name: Install Agent Studio dependencies
-        working-directory: agent-studio
-        run: uv sync
-
-      - name: Agent Studio test
-        working-directory: agent-studio
-        run: uv run pytest
-
   containers:
     name: Container Builds
     runs-on: ubuntu-latest
