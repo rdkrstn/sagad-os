@@ -69,6 +69,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          df -h /
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -87,6 +92,13 @@ jobs:
           ignore-unfixed: true
           severity: CRITICAL,HIGH
           exit-code: "1"
+
+      - name: Free disk before Agent Studio build
+        run: |
+          docker image rm sagad-console:ci || true
+          docker builder prune -af || true
+          docker system prune -af --volumes || true
+          df -h /
 
       - name: Build Agent Studio image
         uses: docker/build-push-action@v6
@@ -112,6 +124,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          df -h /
 
       - name: Boot preview stack and verify Agent Studio health
         env:
@@ -142,7 +159,11 @@ jobs:
           docker network create client_internal_network
 
           docker compose -f compose.vps.example.yaml config --quiet
-          docker compose -f compose.vps.example.yaml up -d --build --wait --wait-timeout 240
+          # Build first, drop build cache, then boot — building both large images
+          # and keeping the cache around overflows the runner disk.
+          docker compose -f compose.vps.example.yaml build
+          docker builder prune -af
+          docker compose -f compose.vps.example.yaml up -d --wait --wait-timeout 240
           curl --fail --show-error --silent http://127.0.0.1:8010/health
           curl --fail --show-error --silent http://127.0.0.1:8010/health/live
           curl --fail --show-error --silent http://127.0.0.1:8010/health/ready
