@@ -22,3 +22,7 @@ You MUST output a valid JSON object matching this schema:
 - pricing_lead -> risk_level: low, routed_agent: sales_agent
 - booking_or_support -> risk_level: medium, routed_agent: general_support
 - general_support -> risk_level: medium, routed_agent: general_support
+
+# Important
+- ``routed_agent`` MUST be one of: ``sales_agent``, ``refund_resolver``, ``general_support``.
+- These agent names map directly to the Sagad agent registry.

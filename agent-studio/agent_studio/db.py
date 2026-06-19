@@ -39,7 +39,7 @@ def database_configured(settings: Settings) -> bool:
 def connect(settings: Settings) -> Iterator[Connection[DictRow]]:
     if not settings.database_url:
         raise RuntimeError("DATABASE_URL is required for the Postgres store.")
-    with psycopg.connect(settings.database_url, row_factory=dict_row) as connection:
+    with psycopg.connect(settings.database_url, row_factory=dict_row, connect_timeout=5) as connection:
         yield connection
 
 

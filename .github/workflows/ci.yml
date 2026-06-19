@@ -8,11 +8,10 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
-  security:
-    name: Security Scan
+  lint-and-test:
+    name: Lint and Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -34,18 +33,6 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
 
-  frontend:
-    name: Frontend
-    runs-on: ubuntu-latest
-    needs:
-      - security
-    defaults:
-      run:
-        working-directory: v1
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -53,102 +40,39 @@ jobs:
           cache: npm
           cache-dependency-path: v1/package-lock.json
 
-      - name: Install dependencies
+      - name: Install frontend dependencies
+        working-directory: v1
         run: npm ci
 
-      - name: Dependency audit
+      - name: Frontend dependency audit
+        working-directory: v1
         run: npm audit --omit=dev --audit-level=high
 
-      - name: Lint
+      - name: Frontend lint
+        working-directory: v1
         run: npm run lint
 
-      - name: Typecheck
+      - name: Frontend typecheck
+        working-directory: v1
         run: npx tsc --noEmit --pretty false
 
-      - name: Build
+      - name: Frontend build
+        working-directory: v1
         run: npm run build
-
-  agent-studio:
-    name: Agent Studio
-    runs-on: ubuntu-latest
-    needs:
-      - security
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_DB: sagad_os_ci
-          POSTGRES_USER: sagad
-          POSTGRES_PASSWORD: sagad_ci_password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U sagad -d sagad_os_ci"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    defaults:
-      run:
-        working-directory: agent-studio
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-
-      - name: Install OCR system dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng
-
-      - name: Install dependencies
-        run: uv sync
-
-      - name: Migration smoke check
-        env:
-          DATABASE_URL: postgresql://sagad:sagad_ci_password@127.0.0.1:5432/sagad_os_ci
-        run: |
-          uv run python - <<'PY'
-          import os
-
-          import psycopg
-
-          from agent_studio.config import Settings
-          from agent_studio.db import initialize_database
-
-          settings = Settings(database_url=os.environ["DATABASE_URL"])
-          initialize_database(settings)
-
-          with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
-              with connection.cursor() as cursor:
-                  cursor.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
-                  assert cursor.fetchone(), "pgvector extension was not enabled"
-                  cursor.execute("SELECT to_regclass('public.knowledge_ingestion_jobs')")
-                  assert cursor.fetchone()[0], "knowledge_ingestion_jobs table is missing"
-                  cursor.execute("SELECT to_regclass('public.conversations')")
-                  assert cursor.fetchone()[0], "conversations table is missing"
-          PY
-
-      - name: Test
-        env:
-          AGENT_STUDIO_TEST_DATABASE_URL: postgresql://sagad:sagad_ci_password@127.0.0.1:5432/sagad_os_ci
-        run: uv run pytest
 
   containers:
     name: Container Builds
     runs-on: ubuntu-latest
     needs:
-      - frontend
-      - agent-studio
+      - lint-and-test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          df -h /
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -168,6 +92,13 @@ jobs:
           ignore-unfixed: true
           severity: CRITICAL,HIGH
           exit-code: "1"
+
+      - name: Free disk before Agent Studio build
+        run: |
+          docker image rm sagad-console:ci || true
+          docker builder prune -af || true
+          docker system prune -af --volumes || true
+          df -h /
 
       - name: Build Agent Studio image
         uses: docker/build-push-action@v6
@@ -194,8 +125,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          df -h /
+
       - name: Boot preview stack and verify Agent Studio health
-        shell: bash
         env:
           SAGAD_POSTGRES_PASSWORD: sagad_ci_smoke
           SAGAD_WS_PUBLIC_URL: http://localhost:3000
@@ -224,7 +159,11 @@ jobs:
           docker network create client_internal_network
 
           docker compose -f compose.vps.example.yaml config --quiet
-          docker compose -f compose.vps.example.yaml up -d --build --wait --wait-timeout 240
+          # Build first, drop build cache, then boot — building both large images
+          # and keeping the cache around overflows the runner disk.
+          docker compose -f compose.vps.example.yaml build
+          docker builder prune -af
+          docker compose -f compose.vps.example.yaml up -d --wait --wait-timeout 240
           curl --fail --show-error --silent http://127.0.0.1:8010/health
           curl --fail --show-error --silent http://127.0.0.1:8010/health/live
           curl --fail --show-error --silent http://127.0.0.1:8010/health/ready

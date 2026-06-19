@@ -9,6 +9,7 @@ ENV UV_LINK_MODE=copy
 RUN apt-get update \
   && apt-get upgrade -y --no-install-recommends \
   && apt-get install -y --no-install-recommends \
+    curl \
     poppler-utils \
     tesseract-ocr \
     tesseract-ocr-eng \
