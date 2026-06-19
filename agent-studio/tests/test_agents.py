@@ -1,7 +1,7 @@
 from unittest.mock import patch, MagicMock
 from langchain_core.messages import AIMessage
 from agent_studio.agents import AgentRegistry
-from agent_studio.graph import draft_reply, select_markdown_agent
+from agent_studio.graph import select_markdown_agent, supervisor_draft
 from agent_studio.state import AgentStudioState
 
 def test_agent_registry_parsing(tmp_path):
@@ -26,9 +26,9 @@ You are a test agent.
 
 
 @patch("agent_studio.graph._build_chat_model")
-def test_draft_reply_with_langchain(mock_build):
+def test_supervisor_draft_with_langchain(mock_build):
     mock_llm = MagicMock()
-    mock_response = AIMessage(content="This is a mocked response.")
+    mock_response = AIMessage(content="This is a mocked supervisor response.")
     mock_llm.invoke.return_value = mock_response
     mock_llm.bind_tools.return_value = mock_llm
     mock_build.return_value = mock_llm
@@ -36,14 +36,12 @@ def test_draft_reply_with_langchain(mock_build):
     state: AgentStudioState = {
         "incoming_message": "hello",
         "normalized_message": "hello",
-        "intent": "general_support",
-        "risk_level": "low"
+        "sub_agent_report": {"agent": "general_support", "analysis": "greeting"},
     }
 
-    result = draft_reply(state)
+    result = supervisor_draft(state)
 
-    assert result["draft_reply"] == "This is a mocked response."
-    mock_build.assert_called_once()
+    assert "This is a mocked supervisor response" in result["draft_reply"]
 
 
 def test_refund_intent_selects_refund_resolver_agent():

@@ -114,7 +114,7 @@ def _rerank_hits(
             print(f"LiteLLM reranking failed: {e}")
             return hits[:limit]
 
-    # Re-order hits based on results
+    # Re-order hits based on results — copy before mutating to avoid side-effects
     try:
         reranked = []
         for item in results:
@@ -126,9 +126,8 @@ def _rerank_hits(
                 score = item.get("relevance_score")
 
             if idx is not None and idx < len(hits):
-                hit = hits[idx]
-                if score is not None:
-                    hit.score = float(score)
+                # Copy the hit to avoid mutating the original score
+                hit = hits[idx].model_copy(update={"score": float(score)})
                 reranked.append(hit)
 
         if not reranked:
@@ -376,7 +375,7 @@ class PostgresKnowledgeRetriever:
                     (
                         record.id,
                         context.organization_id,
-                        "home-services",
+                        "seed-knowledge",
                         record.category,
                         record.source_path,
                         record.title,
@@ -457,6 +456,9 @@ class PostgresKnowledgeRetriever:
         )
 
 
+from functools import lru_cache
+
+
 def build_retriever(settings: Settings | None = None) -> KnowledgeRetrieverProtocol:
     scoped_settings = settings or get_settings()
     if database_configured(scoped_settings):
@@ -464,4 +466,21 @@ def build_retriever(settings: Settings | None = None) -> KnowledgeRetrieverProto
     return InMemoryKnowledgeRetriever()
 
 
-retriever = build_retriever()
+@lru_cache
+def get_retriever(settings: Settings | None = None) -> KnowledgeRetrieverProtocol:
+    """Lazily initialise and cache the retriever.
+
+    Unlike the module-level ``retriever`` pattern this avoids DB-connection
+    attempts at import time so FastAPI health checks and test runners can
+    boot without a database.
+    """
+    return build_retriever(settings)
+
+
+# Legacy module-level retriever — defaults to in-memory to avoid DB-connection
+# hangs at import time (psycopg2 blocks 30s on unreachable hosts).
+#
+# Graph code should call ``get_retriever()`` for the real (potentially
+# Postgres-backed) retriever.  Module-level importers get an in-memory
+# retriever as a safe fallback.
+retriever: KnowledgeRetrieverProtocol = InMemoryKnowledgeRetriever()

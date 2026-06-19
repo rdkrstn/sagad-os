@@ -15,6 +15,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    ports:
+      - "5433:5432"
     networks:
       - client_internal_network
     restart: unless-stopped
@@ -96,13 +98,15 @@ services:
       sagad-db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health/live', timeout=5).read()\""]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8010/health/live || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 20s
     networks:
       - client_internal_network
+    ports:
+      - "8010:8010"
     restart: unless-stopped
 
   litellm:

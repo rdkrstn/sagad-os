@@ -74,7 +74,7 @@ class Settings(BaseModel):
     sagad_integration_encryption_key: str | None = None
     openai_api_key: str | None = None
     openai_base_url: str | None = None
-    openai_model: str = "gpt-5.4"
+    openai_model: str = "gpt-4o-mini"
     openai_embedding_model: str = "text-embedding-3-small"
     litellm_enabled: bool = False
     litellm_base_url: str | None = None
@@ -162,7 +162,7 @@ def get_settings() -> Settings:
         sagad_integration_encryption_key=os.getenv("SAGAD_INTEGRATION_ENCRYPTION_KEY"),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         openai_base_url=os.getenv("OPENAI_BASE_URL"),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-5.4"),
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         openai_embedding_model=os.getenv(
             "OPENAI_EMBEDDING_MODEL",
             "text-embedding-3-small",

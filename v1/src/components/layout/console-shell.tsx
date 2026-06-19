@@ -14,7 +14,6 @@ import {
   ChevronRight,
   CheckCircle2,
   ClipboardCheck,
-  Database,
   FileText,
   Gauge,
   GitBranch,
@@ -39,7 +38,6 @@ import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -243,7 +241,7 @@ function isActive(pathname: string, href: string): boolean {
 }
 
 function useConsoleTheme() {
-  const [theme, setTheme] = useState<Theme>("dark");
+  const [theme, setTheme] = useState<Theme>("light");
 
   useEffect(() => {
     const root = document.documentElement;
@@ -444,7 +442,7 @@ function SidebarFooter({ compact = false }: { compact?: boolean }) {
               <span className="size-2 rounded-full bg-[var(--accent)] shadow-[0_0_0_4px_rgba(0,212,170,0.14)]" />
             </div>
           </TooltipTrigger>
-          <TooltipContent side="right">Preview workspace</TooltipContent>
+          <TooltipContent side="right">Default workspace</TooltipContent>
         </Tooltip>
       </div>
     );
@@ -459,7 +457,7 @@ function SidebarFooter({ compact = false }: { compact?: boolean }) {
               Runtime
             </div>
             <div className="mt-1 truncate text-[13px] font-semibold text-foreground">
-              Preview workspace
+              Default workspace
             </div>
           </div>
           <StatusPill tone="info">Seeded</StatusPill>
@@ -594,14 +592,6 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
               </div>
 
               <div className="hidden items-center gap-2 lg:flex">
-                <Badge className="h-7 gap-1.5 border-border" variant="outline">
-                  <Activity aria-hidden="true" size={13} />
-                  Preview
-                </Badge>
-                <Badge className="h-7 gap-1.5 border-border" variant="outline">
-                  <Database aria-hidden="true" size={13} />
-                  Agent Studio gated
-                </Badge>
                 <ConsoleRealtimeStatus />
               </div>
 
@@ -650,7 +640,7 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
                         Johnred Workspace
                       </div>
                       <div className="mt-0.5 text-[11px] text-muted-foreground">
-                        Owner preview
+                        Owner
                       </div>
                     </DropdownMenuLabel>
                     <DropdownMenuSeparator />

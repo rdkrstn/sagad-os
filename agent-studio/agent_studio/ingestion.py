@@ -569,23 +569,54 @@ def extract_file(
     )
 
 
-def build_chunks(document: KnowledgeDocumentRecord, max_tokens: int = 700) -> list[tuple[str, str, int]]:
+def build_chunks(document: KnowledgeDocumentRecord, max_tokens: int = 700, overlap_tokens: int = 50) -> list[tuple[str, str, int]]:
+    """Chunk document content with heading awareness and token overlap.
+
+    Returns list of (heading, content, token_count) tuples.
+    The heading is derived from the nearest Markdown heading (# or ##) preceding
+    each chunk. Consecutive paragraphs are merged until *max_tokens* is exceeded,
+    then the last *overlap_tokens* worth of tokens are carried into the next chunk.
+    """
     paragraphs = [paragraph.strip() for paragraph in re.split(r"\n\s*\n", document.content) if paragraph.strip()]
     chunks: list[tuple[str, str, int]] = []
     current: list[str] = []
     current_tokens = 0
+    overlap_buffer: list[str] = []
+    overlap_token_count = 0
+    current_heading: str = document.title
+
     for paragraph in paragraphs or [document.content]:
+        # Detect heading from markdown heading markers
+        heading_match = re.match(r"^(#{1,3})\s+(.+)$", paragraph, re.MULTILINE)
+        if heading_match:
+            current_heading = heading_match.group(2).strip()
+
         token_count = len(tokenize(paragraph))
+
         if current and current_tokens + token_count > max_tokens:
             content = "\n\n".join(current)
-            chunks.append((document.title if not chunks else None or document.title, content, current_tokens))
-            current = []
-            current_tokens = 0
+            chunks.append((current_heading, content, current_tokens))
+
+            # Build overlap: take last N tokens' worth of paragraphs
+            overlap_buffer = []
+            overlap_token_count = 0
+            for para in reversed(current):
+                para_tokens = len(tokenize(para))
+                if overlap_token_count + para_tokens > overlap_tokens:
+                    break
+                overlap_buffer.insert(0, para)
+                overlap_token_count += para_tokens
+
+            current = list(overlap_buffer)
+            current_tokens = overlap_token_count
+
         current.append(paragraph)
         current_tokens += token_count
+
     if current:
         content = "\n\n".join(current)
-        chunks.append((document.title, content, current_tokens))
+        chunks.append((current_heading, content, current_tokens))
+
     return chunks
 
 
@@ -716,8 +747,11 @@ class InMemoryKnowledgeIngestionStore:
         if document is None:
             return None
         chunks = build_chunks(document)
-        for _, chunk_content, _ in chunks:
-            embedding_service.embed_text(chunk_content)
+        # Store chunk embeddings in memory for token-overlap + vector retrieval
+        document._chunk_embeddings = [
+            (heading, content, embedding_service.embed_text(content))
+            for heading, content, _ in chunks
+        ]
         document.approval_status = "approved"
         document.chunk_count = len(chunks)
         document.updated_at = _now()

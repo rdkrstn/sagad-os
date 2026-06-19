@@ -228,6 +228,21 @@ function schemaKeys(row: LooseRecord): string[] {
   return keys.slice(0, 4);
 }
 
+async function detailFromResponse(response: Response): Promise<string> {
+  const text = await response.text().catch(() => "");
+  try {
+    const row = asRecord(JSON.parse(text));
+    const detail = textOf(row, ["detail", "message", "error"], "");
+    if (detail) return detail;
+  } catch {
+    // fall through to raw text
+  }
+  if (text) return text;
+  return response.status === 503
+    ? "Agent Studio is not configured. Set SAGAD_API_BASE_URL to manage agents."
+    : `Request failed (${response.status}).`;
+}
+
 function InlineList({ values }: { values: string[] }) {
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -283,6 +298,7 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [editingAgent, setEditingAgent] = useState<{
     id: string;
     name: string;
@@ -302,6 +318,7 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
       system_prompt: "",
       original_id: null,
     });
+    setSaveError(null);
     setDialogOpen(true);
   }
 
@@ -315,18 +332,21 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
       system_prompt: String(row.system_prompt ?? row.systemPrompt ?? ""),
       original_id: id,
     });
+    setSaveError(null);
     setDialogOpen(true);
   }
 
   function openDelete(row: Record<string, unknown>) {
     const id = String(row.id ?? row.name ?? "");
     setDeletingAgent({ id, name: String(row.name ?? id) });
+    setSaveError(null);
     setDeleteDialogOpen(true);
   }
 
   async function handleSave() {
     if (!editingAgent) return;
     setSaving(true);
+    setSaveError(null);
     try {
       const payload = {
         id: editingAgent.id.toLowerCase().replace(/[^a-z0-9_]/g, "_"),
@@ -336,11 +356,16 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
         system_prompt: editingAgent.system_prompt,
         original_id: editingAgent.original_id,
       };
-      await fetch("/api/agents", {
+      const response = await fetch("/api/agents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      if (!response.ok) {
+        const detail = await detailFromResponse(response);
+        setSaveError(detail);
+        return;
+      }
       setDialogOpen(false);
       setEditingAgent(null);
       router.refresh();
@@ -352,10 +377,16 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
   async function handleDelete() {
     if (!deletingAgent) return;
     setSaving(true);
+    setSaveError(null);
     try {
-      await fetch(`/api/agents/${encodeURIComponent(deletingAgent.id)}`, {
+      const response = await fetch(`/api/agents/${encodeURIComponent(deletingAgent.id)}`, {
         method: "DELETE",
       });
+      if (!response.ok) {
+        const detail = await detailFromResponse(response);
+        setSaveError(detail);
+        return;
+      }
       setDeleteDialogOpen(false);
       setDeletingAgent(null);
       router.refresh();
@@ -505,6 +536,17 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
               </div>
             </div>
           )}
+          {saveError ? (
+            <p
+              className={cn(
+                "rounded-md border p-2 text-xs",
+                "border-[var(--danger-border)] bg-[var(--danger-soft)] text-danger",
+              )}
+              role="alert"
+            >
+              {saveError}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>
               Cancel
@@ -525,6 +567,17 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
               Are you sure you want to delete <strong>{deletingAgent?.name}</strong>? This will remove the agent configuration file and cannot be undone.
             </DialogDescription>
           </DialogHeader>
+          {saveError ? (
+            <p
+              className={cn(
+                "rounded-md border p-2 text-xs",
+                "border-[var(--danger-border)] bg-[var(--danger-soft)] text-danger",
+              )}
+              role="alert"
+            >
+              {saveError}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteDialogOpen(false)} disabled={saving}>
               Cancel

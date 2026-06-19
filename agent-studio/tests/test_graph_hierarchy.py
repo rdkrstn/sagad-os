@@ -45,6 +45,11 @@ def make_mock_llm(responses=None):
             else:
                 return AIMessage(content='{"intent": "general_support", "risk_level": "medium", "routed_agent": "general_support"}')
 
+        elif "You are the Supervisor Agent" in sys_msg or "supervisor_agent" in sys_msg:
+            if "ESCALATE" in user_msg:
+                return AIMessage(content="I am escalating this to a supervisor.")
+            return AIMessage(content="This is the finalized draft reply from the supervisor.")
+
         elif "Sales Agent" in sys_msg or "sales_agent" in sys_msg:
             if "lookup" in user_msg.lower() or "tool" in user_msg.lower():
                 return AIMessage(content='{"agent": "sales_agent", "analysis": "lookup contact", "recommended_action": "REQUEST_TOOL", "tool_requests": [{"tool": "crm.lookup_contact", "args": {"query": "customer"}}], "draft_hint": "", "confidence": 0.85, "risk_flags": []}')
@@ -61,10 +66,6 @@ def make_mock_llm(responses=None):
         elif "General Support" in sys_msg or "general_support" in sys_msg:
             return AIMessage(content='{"agent": "general_support", "analysis": "general query", "recommended_action": "DRAFT_REPLY", "tool_requests": [], "draft_hint": "Here is the support response.", "confidence": 0.88, "risk_flags": []}')
 
-        elif "Supervisor" in sys_msg or "supervisor_agent" in sys_msg:
-            if "ESCALATE" in user_msg:
-                return AIMessage(content="I am escalating this to a supervisor.")
-            return AIMessage(content="This is the finalized draft reply from the supervisor.")
 
         return AIMessage(content="Default mocked LLM response.")
 
