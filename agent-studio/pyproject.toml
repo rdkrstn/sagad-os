@@ -34,6 +34,13 @@ dev = [
   "pytest-asyncio>=1.4.0",
 ]
 
+[tool.uv]
+# Force a minimum langsmith version for GHSA-f4xh-w4cj-qxq8 (arbitrary server-side
+# file read via TracingMiddleware, fixed in 0.8.18). langsmith is a transitive dep
+# of langchain-protocol / langgraph-sdk; the override pins it without making it a
+# direct project dependency.
+override-dependencies = ["langsmith>=0.8.18"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
