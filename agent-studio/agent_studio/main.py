@@ -1710,7 +1710,7 @@ async def conversations_websocket(websocket: WebSocket, token: str) -> None:
 
 @app.post("/webhooks/chatwoot", response_model=ConversationRecord | IgnoredWebhookResponse)
 async def receive_chatwoot_webhook(
-    payload: ChatwootWebhookPayload,
+    raw_payload: Annotated[dict[str, object], Body()],
     response: Response,
     x_chatwoot_token: Annotated[str | None, Header()] = None,
     token: Annotated[str | None, Query()] = None,
@@ -1719,9 +1719,60 @@ async def receive_chatwoot_webhook(
     x_sagad_role: Annotated[str | None, Header()] = None,
 ) -> ConversationRecord | IgnoredWebhookResponse:
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    supplied_token = x_chatwoot_token or token
+
+    # Always record the raw payload for debugging / audit purposes.
+    _record_diagnostic_event(
+        event_type="chatwoot.webhook.raw_received",
+        summary="Raw Chatwoot webhook payload received.",
+        status_value="info",
+        conversation_id=None,
+        payload={
+            "raw_body": raw_payload,
+            "token_present": bool(supplied_token),
+            "headers": {
+                "x_chatwoot_token": bool(x_chatwoot_token),
+                "x_sagad_org_id": x_sagad_org_id,
+                "x_sagad_user_id": x_sagad_user_id,
+                "x_sagad_role": x_sagad_role,
+            },
+        },
+        context=context,
+    )
+
+    try:
+        payload = ChatwootWebhookPayload.model_validate(raw_payload)
+    except Exception as exc:
+        _log_event(
+            logging.WARNING,
+            "chatwoot.webhook.parse_failed",
+            "Webhook payload could not be parsed.",
+            error=exc.__class__.__name__,
+            raw_payload_keys=list(raw_payload.keys()),
+        )
+        _record_diagnostic_event(
+            event_type="chatwoot.webhook.parse_failed",
+            summary=f"Webhook payload could not be parsed: {exc.__class__.__name__}.",
+            status_value="error",
+            conversation_id=None,
+            payload={
+                "raw_body": raw_payload,
+                "error": exc.__class__.__name__,
+                "error_detail": str(exc),
+            },
+            context=context,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "chatwoot_payload_parse_failed",
+                "message": str(exc),
+                "raw_keys": list(raw_payload.keys()),
+            },
+        ) from exc
+
     conversation_id = _sagad_conversation_id(payload)
     chatwoot_message_id = _message_id(payload)
-    supplied_token = x_chatwoot_token or token
     log_fields = {
         "chatwoot_conversation_id": _conversation_id(payload),
         "chatwoot_message_id": chatwoot_message_id,
