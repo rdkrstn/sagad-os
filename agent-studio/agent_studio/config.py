@@ -88,7 +88,7 @@ class Settings(BaseModel):
     rerank_enabled: bool = False
     rerank_model: str = "cohere/rerank-english-v3.0"
     rerank_api_key: str | None = None
-    sagad_docling_enabled: bool = True
+    sagad_docling_enabled: bool = False
 
     @property
     def chatwoot_send_enabled(self) -> bool:
@@ -179,5 +179,5 @@ def get_settings() -> Settings:
         rerank_enabled=_bool_env("RERANK_ENABLED", False),
         rerank_model=os.getenv("RERANK_MODEL", "cohere/rerank-english-v3.0"),
         rerank_api_key=os.getenv("RERANK_API_KEY"),
-        sagad_docling_enabled=_bool_env("SAGAD_DOCLING_ENABLED", True),
+        sagad_docling_enabled=_bool_env("SAGAD_DOCLING_ENABLED", False),
     )
