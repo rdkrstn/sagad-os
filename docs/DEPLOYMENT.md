@@ -130,6 +130,8 @@ docker logs --tail=200 sagad-agent-studio
 docker exec sagad-agent-studio python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8010/health/ready').read().decode())"
 ```
 
+The `agent-studio` healthcheck uses Python's stdlib `urllib` (not `curl`) so it works even when the image does not ship `curl`. If the health log shows `/bin/sh: 1: curl: not found`, the running image is stale (built before `curl` was added to the Dockerfile) — rebuild with `docker compose -f compose.vps.yaml up -d --build`. Because the healthcheck no longer depends on `curl`, recreating the container is also sufficient on its own.
+
 For provider failures where Agent Studio returns HTTP 200 but the external action fails, use the console first:
 
 - `Conversation Review -> Tool & Delivery Results` shows the Chatwoot/Twenty action status, HTTP status, error type, and clipped provider response body for the selected conversation.
