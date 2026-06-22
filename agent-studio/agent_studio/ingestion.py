@@ -460,6 +460,14 @@ def _extract_pdf_with_docling(
     raw: bytes,
     settings: Settings,
 ) -> ExtractedDocument:
+    try:
+        from docling.document_converter import DocumentConverter
+    except ImportError as exc:
+        raise ExtractionError(
+            "docling_unavailable",
+            "docling is not installed. Install the optional 'docling' dependency group to enable rich PDF parsing.",
+        ) from exc
+
     import tempfile
     import os
     from pathlib import Path
@@ -473,8 +481,6 @@ def _extract_pdf_with_docling(
         tmp_path = tmp.name
 
     try:
-        from docling.document_converter import DocumentConverter
-
         converter = DocumentConverter()
         result = converter.convert(tmp_path)
 
