@@ -10,7 +10,7 @@ from agent_studio.config import Settings
 
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
-DEV_EMBEDDING_DIMENSIONS = 384
+DEV_EMBEDDING_DIMENSIONS = 1536
 DEFAULT_EMBEDDING_DIMENSIONS = 1536
 DEV_EMBEDDING_MODEL = "sagad-dev-hash-embedding-v1"
 OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1"
