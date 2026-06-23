@@ -46,7 +46,11 @@ def make_mock_llm(responses=None):
                 return AIMessage(content='{"intent": "general_support", "risk_level": "medium", "routed_agent": "general_support"}')
 
         elif "You are the Supervisor Agent" in sys_msg or "supervisor_agent" in sys_msg:
-            if "ESCALATE" in user_msg:
+            # supervisor_draft puts the sub-agent report (incl. recommended_action) into the
+            # system prompt, not the user message. The static prompt mentions "ESCALATE" in
+            # guidance text, so discriminate on the JSON key/value pair that only appears in
+            # the actual report.
+            if '"recommended_action": "ESCALATE"' in sys_msg or "ESCALATE" in user_msg:
                 return AIMessage(content="I am escalating this to a supervisor.")
             return AIMessage(content="This is the finalized draft reply from the supervisor.")
 
@@ -429,14 +433,18 @@ def test_supervisor_draft_produces_reply(mock_graph_llm):
 
 def test_supervisor_draft_incorporates_tool_outputs(mock_graph_llm):
     def custom_llm(sys, user):
-        if "ACME" in user:
+        # supervisor_draft puts tool outputs (incl. company_name ACME) into the system prompt,
+        # not the user message — so check both.
+        if "ACME" in user or "ACME" in sys:
             return "Finalized draft for ACME customer."
         return None
     mock_graph_llm.return_value = make_mock_llm(custom_llm)
 
     state: AgentStudioState = {
         "normalized_message": "Hello",
-        "sub_agent_report": {"agent": "sales_agent"},
+        # "analysis" is required to enter the re-entry draft path that injects tool_outputs
+        # into the system prompt (supervisor_draft gates on report.get("analysis")).
+        "sub_agent_report": {"agent": "sales_agent", "analysis": "pricing request"},
         "tool_outputs": [{"tool": "crm.lookup_contact", "output": {"company_name": "ACME"}}]
     }
     res = supervisor_draft(state)
@@ -446,7 +454,10 @@ def test_supervisor_draft_incorporates_tool_outputs(mock_graph_llm):
 def test_supervisor_draft_escalation_flag(mock_graph_llm):
     state: AgentStudioState = {
         "normalized_message": "Hello",
-        "sub_agent_report": {"agent": "sales_agent", "recommended_action": "ESCALATE"}
+        # "analysis" is required to enter the re-entry draft path that injects the report
+        # (incl. recommended_action) into the system prompt (supervisor_draft gates on
+        # report.get("analysis")).
+        "sub_agent_report": {"agent": "sales_agent", "analysis": "high risk", "recommended_action": "ESCALATE"}
     }
     res = supervisor_draft(state)
     assert "escalating" in res["draft_reply"].lower()

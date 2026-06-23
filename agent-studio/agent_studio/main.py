@@ -1,12 +1,13 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import asyncio
 import logging
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
+from fastapi import Body, FastAPI, Header, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -17,9 +18,12 @@ from agent_studio.chatwoot import (
     send_approved_reply,
 )
 from agent_studio.chatwoot_mapping import channel_from_payload
+from agent_studio.adapters import get_adapter, registered_providers
+from agent_studio.adapters.base import ChannelAdapter, NormalizedInbound
+from agent_studio.webhook_debounce import DebounceCoordinator
 from agent_studio.config import Settings
 from agent_studio.config import get_settings
-from agent_studio.db import TrustedContext, initialize_database
+from agent_studio.db import TrustedContext, database_ready, initialize_database_safe
 from agent_studio.evals import built_in_eval_cases, run_fixture_evals
 from agent_studio.graph import graph
 from agent_studio.integration_config import (
@@ -79,8 +83,29 @@ from agent_studio.agents import AgentRegistry
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
-    initialize_database(get_settings())
+    # Startup must never crash the process. If the DB is briefly unreachable or a migration
+    # errors, we log it and keep serving (so /health/live stays 200 = container "healthy"),
+    # while /health/ready reports not-ready. A background task retries until the DB recovers,
+    # so a slow-to-start Postgres self-heals without a container restart.
+    settings = get_settings()
+    initialize_database_safe(settings)
+    asyncio.create_task(_retry_database_init(settings))
     yield
+
+
+async def _retry_database_init(settings: Settings, *, attempts: int = 6, delay: float = 2.0) -> None:
+    for attempt in range(1, attempts + 1):
+        if initialize_database_safe(settings, log=False):
+            if attempt > 1:
+                logger.info("Database initialization recovered on attempt %d.", attempt)
+            return
+        logger.warning(
+            "Database initialization failed (attempt %d/%d); retrying in %.1fs",
+            attempt,
+            attempts,
+            delay,
+        )
+        await asyncio.sleep(delay)
 
 
 app = FastAPI(title="Sagad Agent Studio", version="0.1.0", lifespan=lifespan)
@@ -1046,17 +1071,9 @@ def health_live() -> dict[str, str]:
 @app.get("/health/ready")
 def health_ready() -> dict[str, object]:
     settings = get_settings()
-    database_ready = True
-    database_detail = "DATABASE_URL is not configured; using in-memory preview stores."
-    if settings.database_url:
-        try:
-            initialize_database(settings)
-            database_detail = "Database migrations and seed checks completed."
-        except Exception as exc:
-            database_ready = False
-            database_detail = f"Database readiness failed: {exc.__class__.__name__}."
+    db_ready, database_detail = database_ready(settings)
 
-    if not database_ready:
+    if not db_ready:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
@@ -1069,9 +1086,9 @@ def health_ready() -> dict[str, object]:
         )
 
     return {
-        "status": "ready" if database_ready else "not_ready",
+        "status": "ready" if db_ready else "not_ready",
         "service": "agent-studio",
-        "database_ready": database_ready,
+        "database_ready": db_ready,
         "database_detail": database_detail,
         "knowledge_records": len(retriever.records),
     }
@@ -2119,6 +2136,379 @@ async def receive_chatwoot_webhook(
             organization_id=context.organization_id,
         ),
     )
+    return saved
+
+
+# ---------------------------------------------------------------------------
+# Universal webhook — POST /webhooks/{provider}
+# ---------------------------------------------------------------------------
+
+
+class DebouncedWebhookResponse(BaseModel):
+    """Returned (202) when WEBHOOK_DEBOUNCE_ENABLED is on; processing completes in the background."""
+
+    status: Literal["debounced"] = "debounced"
+    provider: str
+    conversation_id: str | None = None
+    pending_keys: int = 0
+
+
+# Dispatches to a registered ChannelAdapter (ghl today; chatwoot keeps its own
+# dedicated /webhooks/chatwoot route above so its 14 tests stay untouched). The
+# adapter verifies the inbound signature, normalizes the payload, then we run
+# the same graph.ainvoke → record → (optional) auto-send pipeline. Debouncing is
+# opt-in via WEBHOOK_DEBOUNCE_ENABLED (default false = synchronous ConversationRecord).
+
+_debounce: DebounceCoordinator | None = None
+
+
+def _get_debounce(settings: Settings) -> DebounceCoordinator:
+    global _debounce
+    if _debounce is None:
+        _debounce = DebounceCoordinator(settings.webhook_debounce_ms, _debounce_process)
+    return _debounce
+
+
+def _universal_conversation_id(normalized: NormalizedInbound) -> str | None:
+    ref = normalized.provider_conversation_id
+    if not ref:
+        ref = normalized.provider_message_id
+    if not ref:
+        return None
+    return f"{normalized.provider}_{_safe_id_part(str(ref))}"
+
+
+async def _maybe_auto_send_universal(
+    adapter: ChannelAdapter,
+    record: ConversationRecord,
+    normalized: NormalizedInbound,
+    settings: Settings,
+    context: StoreContext,
+) -> dict[str, object] | None:
+    """Auto-send the draft through the adapter when risk/compliance thresholds are met.
+
+    Mirrors the Chatwoot auto-send thresholds (compliance pass, risk low, confidence
+    >= 0.88, non-empty draft) but routes through the provider adapter's send_outbound
+    instead of the Chatwoot-specific tool_policy/manifest path. Returns the send result
+    dict, or None when auto-send conditions are not met.
+    """
+    draft_reply = (record.draft_reply or "").strip()
+    confidence = record.final_confidence_score
+    if confidence is None:
+        confidence = record.retrieval_confidence
+    is_auto_send = (
+        record.compliance_status == "pass"
+        and record.risk_level == "low"
+        and confidence is not None
+        and confidence >= 0.88
+        and bool(draft_reply)
+    )
+    if not is_auto_send:
+        return None
+
+    _record_diagnostic_event(
+        event_type=f"{normalized.provider}.send.attempt",
+        summary=f"Auto-send conditions met; attempting {normalized.provider.upper()} send.",
+        status_value="info",
+        conversation_id=record.id,
+        payload={
+            "provider_conversation_id": normalized.provider_conversation_id,
+            "confidence": confidence,
+            "risk_level": record.risk_level,
+            "outbound_mode": settings.ghl_outbound_mode if normalized.provider == "ghl" else "webhook",
+        },
+        context=context,
+        actor_type="system",
+    )
+    result = await adapter.send_outbound(draft_reply, normalized, settings)
+    record.approval_status = "sent" if result.get("status") in {"sent", "dry_run"} else "send_failed"
+    record.send_status = result.get("status", "not_sent")
+    if result.get("status") in {"sent", "dry_run"}:
+        record.messages.append(
+            ConversationMessageRecord(
+                sender_type="ai_agent",
+                body=draft_reply,
+                provider=normalized.provider,
+                payload={
+                    "approval": "auto_send",
+                    "send_status": result.get("status"),
+                    "provider": normalized.provider,
+                },
+            ),
+        )
+    _record_diagnostic_event(
+        event_type=f"{normalized.provider}.send.completed",
+        summary=str(result.get("detail", f"{normalized.provider} send completed.")),
+        status_value="success" if result.get("status") in {"sent", "dry_run"} else "error",
+        conversation_id=record.id,
+        payload={"provider_result": result},
+        context=context,
+        actor_type="system",
+    )
+    return result
+
+
+async def _run_universal_inbound(
+    adapter: ChannelAdapter,
+    normalized: NormalizedInbound,
+    *,
+    context: StoreContext,
+    settings: Settings,
+) -> ConversationRecord:
+    """Shared synchronous pipeline: normalize → graph.ainvoke → record → save → (auto-send).
+
+    Called both by the universal webhook route (sync mode) and by the debounce
+    flush callback (the burst is merged into `normalized.message_text` before calling).
+    """
+    conversation_id = _universal_conversation_id(normalized)
+    incoming_message = normalized.message_text or ""
+
+    existing_record = store.get(conversation_id, context=context) if conversation_id else None
+    if _message_already_recorded(existing_record, normalized.provider_message_id):
+        _record_diagnostic_event(
+            event_type=f"{normalized.provider}.webhook.duplicate",
+            summary=f"Duplicate {normalized.provider} webhook retry ignored.",
+            status_value="info",
+            conversation_id=conversation_id,
+            payload={"provider_message_id": normalized.provider_message_id},
+            context=context,
+        )
+        return existing_record  # type: ignore[return-value]
+
+    log_fields = {
+        "provider": normalized.provider,
+        "provider_conversation_id": normalized.provider_conversation_id,
+        "provider_message_id": normalized.provider_message_id,
+        "event": normalized.event_type,
+        "channel": normalized.channel,
+    }
+    _record_diagnostic_event(
+        event_type=f"{normalized.provider}.webhook.processing",
+        summary=f"{normalized.provider} webhook processing.",
+        status_value="info",
+        conversation_id=conversation_id,
+        payload=log_fields,
+        context=context,
+    )
+
+    initial_state: dict[str, object] = {
+        "conversation_id": conversation_id,
+        "chatwoot_conversation_id": None,
+        "chatwoot_message_id": normalized.provider_message_id,
+        "customer_name": normalized.customer_name,
+        "channel": normalized.channel,
+        "incoming_message": incoming_message,
+        "conversation_history": existing_record.messages if existing_record else [],
+        "memory_context": store.list_memory_items(
+            conversation_id,
+            query=incoming_message,
+            context=context,
+        )
+        if conversation_id
+        else [],
+        "trace_url": None,
+    }
+    final_state = await graph.ainvoke(initial_state)
+
+    record_payload: dict[str, object] = {
+        "chatwoot_conversation_id": None,
+        "chatwoot_message_id": None,
+        "customer_name": str(final_state.get("customer_name", normalized.customer_name)),
+        "channel": str(final_state.get("channel", normalized.channel)),
+        "incoming_message": incoming_message,
+        "normalized_message": str(final_state.get("normalized_message", incoming_message)),
+        "intent": str(final_state.get("intent", "unknown")),
+        "risk_level": final_state.get("risk_level", "medium"),
+        "retrieved_knowledge": final_state.get("retrieved_knowledge", []),
+        "draft_reply": str(final_state.get("draft_reply", "")),
+        "qa_findings": final_state.get("qa_findings", []),
+        "compliance_status": final_state.get("compliance_status", "needs_review"),
+        "approval_status": "needs_approval",
+        "send_status": "not_sent",
+        "trace_url": final_state.get("trace_url"),
+        "messages": [
+            ConversationMessageRecord(
+                sender_type="customer",
+                body=incoming_message,
+                external_message_id=normalized.provider_message_id,
+                provider=normalized.provider,
+                payload=normalized.raw_payload,
+            ),
+        ],
+    }
+    for field_name in _SPRINT2_CONVERSATION_STATE_FIELDS:
+        if field_name in ConversationRecord.model_fields and field_name in final_state:
+            record_payload[field_name] = final_state.get(field_name)
+    record = ConversationRecord(**record_payload)
+    if conversation_id:
+        record.id = conversation_id
+
+    await _maybe_auto_send_universal(adapter, record, normalized, settings, context)
+
+    saved = store.save(record, context=context)
+    saved = _append_lifecycle_memory(saved, lifecycle_event="draft_created", context=context)
+
+    _record_diagnostic_event(
+        event_type=f"{normalized.provider}.webhook.persisted",
+        summary=f"{normalized.provider} inbound message persisted and draft generated.",
+        status_value="success",
+        conversation_id=saved.id,
+        payload={
+            **log_fields,
+            "intent": saved.intent,
+            "risk_level": saved.risk_level,
+            "approval_status": saved.approval_status,
+            "send_status": saved.send_status,
+        },
+        context=context,
+    )
+    await realtime_manager.broadcast(
+        context.organization_id,
+        _realtime_event(
+            "conversation.upserted",
+            saved,
+            organization_id=context.organization_id,
+        ),
+    )
+    return saved
+
+
+async def _debounce_process(key: str, messages: list[NormalizedInbound]) -> None:
+    """Debounce flush callback: merge the burst into the lead message and run the pipeline once."""
+    if not messages:
+        return
+    lead = messages[-1]
+    context = lead.extra.get("_debounce_context")
+    settings = lead.extra.get("_debounce_settings")
+    if context is None or settings is None:
+        logger.warning("debounce.process_missing_context key=%s", key)
+        return
+    adapter = get_adapter(lead.provider)
+    if adapter is None:
+        logger.warning("debounce.unknown_provider key=%s provider=%s", key, lead.provider)
+        return
+    texts = [m.message_text for m in messages if m.message_text]
+    if texts:
+        lead.message_text = " | ".join(texts)
+    _record_diagnostic_event(
+        event_type=f"{lead.provider}.webhook.debounce_flushed",
+        summary=f"Debounced burst of {len(messages)} message(s) flushed into one graph run.",
+        status_value="info",
+        conversation_id=key,
+        payload={"provider": lead.provider, "message_count": len(messages)},
+        context=context,
+    )
+    await _run_universal_inbound(adapter, lead, context=context, settings=settings)
+
+
+@app.post("/webhooks/{provider}", response_model=ConversationRecord | IgnoredWebhookResponse | DebouncedWebhookResponse)
+async def receive_universal_webhook(
+    provider: str,
+    request: Request,
+    response: Response,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+) -> ConversationRecord | IgnoredWebhookResponse | DebouncedWebhookResponse:
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    adapter = get_adapter(provider)
+    if adapter is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "unknown_webhook_provider",
+                "message": f"Unknown webhook provider '{provider}'.",
+                "known_providers": registered_providers(),
+                "note": "Chatwoot uses the dedicated /webhooks/chatwoot endpoint.",
+            },
+        )
+
+    raw_body = await request.body()
+    try:
+        raw_payload = await request.json()
+    except Exception as exc:
+        _record_diagnostic_event(
+            event_type=f"{provider}.webhook.parse_failed",
+            summary=f"{provider} webhook payload could not be parsed: {exc.__class__.__name__}.",
+            status_value="error",
+            conversation_id=None,
+            payload={"error": exc.__class__.__name__},
+            context=context,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"{provider}_payload_parse_failed", "message": str(exc)},
+        ) from exc
+
+    _record_diagnostic_event(
+        event_type=f"{provider}.webhook.raw_received",
+        summary=f"Raw {provider} webhook payload received.",
+        status_value="info",
+        conversation_id=None,
+        payload={"raw_body": raw_payload, "provider": provider},
+        context=context,
+    )
+
+    # verify_inbound raises HTTPException(401) on signature/token failure.
+    adapter.verify_inbound(raw_body, dict(request.headers))
+    normalized = adapter.normalize(raw_payload if isinstance(raw_payload, dict) else {})
+
+    log_fields = {
+        "provider": normalized.provider,
+        "provider_conversation_id": normalized.provider_conversation_id,
+        "provider_message_id": normalized.provider_message_id,
+        "channel": normalized.channel,
+        "event": normalized.event_type,
+    }
+    _log_event(logging.INFO, f"{normalized.provider}.webhook.received", "Webhook request received.", **log_fields)
+
+    if adapter.ignores(normalized):
+        _record_diagnostic_event(
+            event_type=f"{normalized.provider}.webhook.ignored",
+            summary=f"{normalized.provider} webhook event ignored (not an inbound customer message).",
+            status_value="info",
+            conversation_id=_universal_conversation_id(normalized),
+            payload=log_fields,
+            context=context,
+        )
+        response.status_code = status.HTTP_202_ACCEPTED
+        return IgnoredWebhookResponse(reason=f"{normalized.provider} event is not an inbound customer message.")
+
+    if not (normalized.message_text or "").strip():
+        _record_diagnostic_event(
+            event_type=f"{normalized.provider}.webhook.invalid_payload",
+            summary=f"{normalized.provider} webhook payload did not include message content.",
+            status_value="error",
+            conversation_id=_universal_conversation_id(normalized),
+            payload=log_fields,
+            context=context,
+        )
+        raise HTTPException(status_code=400, detail="Webhook payload did not include message content.")
+
+    settings = configured_settings(get_settings(), context)
+
+    if settings.webhook_debounce_enabled:
+        normalized.extra["_debounce_context"] = context
+        normalized.extra["_debounce_settings"] = settings
+        coordinator = _get_debounce(settings)
+        await coordinator.schedule(_universal_conversation_id(normalized) or provider, normalized)
+        _record_diagnostic_event(
+            event_type=f"{normalized.provider}.webhook.debounced",
+            summary=f"{normalized.provider} webhook buffered for debounced processing.",
+            status_value="info",
+            conversation_id=_universal_conversation_id(normalized),
+            payload={**log_fields, "pending_keys": coordinator.pending_keys},
+            context=context,
+        )
+        response.status_code = status.HTTP_202_ACCEPTED
+        return {
+            "status": "debounced",
+            "provider": normalized.provider,
+            "conversation_id": _universal_conversation_id(normalized),
+            "pending_keys": coordinator.pending_keys,
+        }  # type: ignore[return-value]
+
+    saved = await _run_universal_inbound(adapter, normalized, context=context, settings=settings)
     return saved
 
 

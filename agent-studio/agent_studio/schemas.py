@@ -33,7 +33,7 @@ IntegrationStatus = Literal[
 
 ToolExecutionStatus = Literal["planned", "dry_run", "blocked", "succeeded", "failed"]
 ToolRiskLevel = Literal["low", "medium", "high"]
-IntegrationProvider = Literal["chatwoot", "twenty"] # TODO: Fetch from Agent Studio when API is available, and remove from the integration provider list. or should we create a new model for integration provider info that includes display name and other metadata?
+IntegrationProvider = Literal["chatwoot", "twenty", "ghl"] # TODO: Fetch from Agent Studio when API is available, and remove from the integration provider list. or should we create a new model for integration provider info that includes display name and other metadata?
 KnowledgeSourceType = Literal[
     "manual_upload",
     "local_markdown_pack",

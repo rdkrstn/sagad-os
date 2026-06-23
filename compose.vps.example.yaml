@@ -74,6 +74,14 @@ services:
       LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://sagad-litellm:4000/v1}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # LLM_MODE=dry_run runs the graph with a deterministic stub model (no credentials, no GPU)
+      # so the compose e2e roundtrip is reproducible in CI. Empty = use the real LiteLLM/OpenAI stack.
+      LLM_MODE: ${LLM_MODE:-}
+      RERANK_ENABLED: ${RERANK_ENABLED:-false}
+      # Webhook debouncing (opt-in). When enabled, the universal/GHL handlers return 202 and
+      # coalesce a burst of messages into a single graph run after the debounce window.
+      WEBHOOK_DEBOUNCE_ENABLED: ${WEBHOOK_DEBOUNCE_ENABLED:-false}
+      WEBHOOK_DEBOUNCE_MS: ${WEBHOOK_DEBOUNCE_MS:-2500}
       CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-}
       CHATWOOT_ACCOUNT_ID: ${CHATWOOT_ACCOUNT_ID:-}
       CHATWOOT_API_ACCESS_TOKEN: ${CHATWOOT_API_ACCESS_TOKEN:-}
@@ -101,8 +109,8 @@ services:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8010/health/live || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 10
-      start_period: 20s
+      retries: 15
+      start_period: 40s
     networks:
       - client_internal_network
     ports:

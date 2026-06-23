@@ -119,6 +119,99 @@ class LiteLLMLangChainWrapper:
                 yield AIMessageChunk(content=content)
 
 
+class DryRunChatModel:
+    """Deterministic stub chat model for CI / local e2e without LLM credentials.
+
+    Enabled via ``LLM_MODE=dry_run``. Inspects the system prompt to emit canned responses
+    that drive the graph forward end-to-end: classifier JSON routing by keyword, sub-agent
+    JSON analysis, a supervisor agent.* tool call on the first pass, a plain-text draft on
+    re-entry, and a streaming draft for ``/conversations/{id}/draft/stream``. No network,
+    no API key, no GPU — so the compose e2e roundtrip is fully deterministic in CI.
+    """
+
+    def __init__(self, model: str = "dry-run") -> None:
+        self.model = model
+        self.tools: list[dict[str, object]] | None = None
+        self.tool_choice: object | None = None
+
+    def bind_tools(self, tools, tool_choice=None):
+        self.tools = tools or []
+        self.tool_choice = tool_choice
+        return self
+
+    @staticmethod
+    def _messages_text(messages) -> tuple[str, str]:
+        sys_msg = next((m.content for m in messages if isinstance(m, SystemMessage)), "") or ""
+        user_msg = next((m.content for m in messages if isinstance(m, HumanMessage)), "") or ""
+        return sys_msg, user_msg
+
+    def _respond(self, messages):
+        sys_msg, user_msg = self._messages_text(messages)
+        low = (user_msg or "").lower()
+        is_draft_stream = "Respond directly with the message content" in sys_msg
+        is_supervisor = "Supervisor Agent" in sys_msg or "supervisor_agent" in sys_msg
+
+        # Supervisor node — checked first because its system prompt embeds the sub-agent
+        # report (which contains sub-agent keywords like "sales_agent").
+        if is_supervisor:
+            # First pass: agent tools are bound — emit one agent.* tool call so the pipeline
+            # progresses to a sub-agent, then back to the supervisor for the draft.
+            if self.tools:
+                for tool in self.tools:
+                    name = (
+                        tool["function"]["name"]
+                        if isinstance(tool, dict) and "function" in tool
+                        else getattr(tool, "name", "")
+                    )
+                    if name.startswith("agent."):
+                        return AIMessage(
+                            content="",
+                            tool_calls=[{"name": name, "args": {"message": user_msg or "hello"}, "id": "dryrun-tool-1"}],
+                        )
+            # Re-entry (draft synthesis) or draft-stream endpoint — plain text only.
+            if is_draft_stream:
+                return AIMessage(content="Here is the finalized draft for your request. Let me know if you need anything else.")
+            return AIMessage(content="This is the finalized draft reply from the supervisor.")
+
+        # Classifier node.
+        if "Classifier Agent" in sys_msg or "classifier_agent" in sys_msg:
+            if "refund" in low or "cancel" in low:
+                return AIMessage(content='{"intent":"refund_or_cancellation","risk_level":"high","routed_agent":"refund_resolver"}')
+            if any(w in low for w in ("price", "pricing", "quote", "cost", "plan")):
+                return AIMessage(content='{"intent":"pricing_lead","risk_level":"low","routed_agent":"sales_agent"}')
+            if any(w in low for w in ("appoint", "schedule", "book")):
+                return AIMessage(content='{"intent":"booking_or_support","risk_level":"medium","routed_agent":"general_support"}')
+            return AIMessage(content='{"intent":"general_support","risk_level":"medium","routed_agent":"general_support"}')
+
+        # Sub-agent nodes return a structured JSON report.
+        if "Sales Agent" in sys_msg or "sales_agent" in sys_msg:
+            return AIMessage(content='{"agent":"sales_agent","analysis":"pricing info","recommended_action":"DRAFT_REPLY","tool_requests":[],"draft_hint":"Here is the pricing info.","confidence":0.9,"risk_flags":[]}')
+        if "Refund Resolver" in sys_msg or "refund_resolver" in sys_msg:
+            return AIMessage(content='{"agent":"refund_resolver","analysis":"refund request","recommended_action":"DRAFT_REPLY","tool_requests":[],"draft_hint":"Refund needs supervisor review.","confidence":0.95,"risk_flags":["refund_request"]}')
+        if "General Support" in sys_msg or "general_support" in sys_msg:
+            return AIMessage(content='{"agent":"general_support","analysis":"general query","recommended_action":"DRAFT_REPLY","tool_requests":[],"draft_hint":"Here is the support response.","confidence":0.88,"risk_flags":[]}')
+
+        # Draft-stream endpoint for a non-supervisor agent (plain text only).
+        if is_draft_stream:
+            return AIMessage(content="Here is the finalized draft for your request. Let me know if you need anything else.")
+
+        # Default fallback.
+        return AIMessage(content="This is the finalized draft reply from the supervisor.")
+
+    def invoke(self, messages):
+        return self._respond(messages)
+
+    async def ainvoke(self, messages):
+        return self._respond(messages)
+
+    async def astream(self, messages):
+        response = self._respond(messages)
+        text = response.content or ""
+        # Stream word-by-word so /conversations/{id}/draft/stream emits real SSE tokens.
+        for token in text.split():
+            yield AIMessageChunk(content=token + " ")
+
+
 def _resolve_model(node_type: str) -> str:
     """Resolve the model for a given node type.
 
@@ -145,8 +238,14 @@ def _resolve_model(node_type: str) -> str:
     return model
 
 
-def _build_chat_model(model_name: str | None = None) -> LiteLLMLangChainWrapper:
-    """Build a LiteLLM wrapper routed through LiteLLM proxy, OpenRouter, or direct library call."""
+def _build_chat_model(model_name: str | None = None):
+    """Build a chat model routed through LiteLLM proxy, OpenRouter, direct library call, or dry-run stub.
+
+    When ``LLM_MODE=dry_run`` is set, returns a :class:`DryRunChatModel` so the full graph runs
+    deterministically with no LLM credentials — used by the compose e2e roundtrip in CI/local.
+    """
+    if os.getenv("LLM_MODE", "").lower() == "dry_run":
+        return DryRunChatModel(model=model_name or "dry-run")
     if not model_name:
         model_name = os.getenv("LITELLM_MODEL", "gpt-4o-mini")
     openrouter_key = os.getenv("OPENROUTER_API_KEY")

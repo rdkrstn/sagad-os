@@ -9,6 +9,7 @@ from agent_studio.db import (
     connect,
     database_configured,
     initialize_database,
+    initialize_database_safe,
     resolve_trusted_context,
     set_app_context,
 )
@@ -205,8 +206,10 @@ class PostgresKnowledgeRetriever:
         self.embedding_service = EmbeddingService(settings)
         self.records = records if records is not None else load_knowledge_records()
         self.fallback = InMemoryKnowledgeRetriever(self.records, settings=settings)
-        initialize_database(settings)
-        self._sync_records()
+        # Non-fatal init; only sync seed records if migrations succeeded (otherwise the
+        # fallback in-memory retriever stays usable and readiness reports not-ready).
+        if initialize_database_safe(settings):
+            self._sync_records()
 
     def add_record(self, record: KnowledgeRecord) -> None:
         self.fallback.add_record(record)
