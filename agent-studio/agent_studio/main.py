@@ -1872,7 +1872,7 @@ async def receive_chatwoot_webhook(
         else [],
         "trace_url": None,
     }
-    final_state = graph.invoke(initial_state)
+    final_state = await graph.ainvoke(initial_state)
     record_payload: dict[str, object] = {
         "chatwoot_conversation_id": final_state.get("chatwoot_conversation_id"),
         "chatwoot_message_id": final_state.get("chatwoot_message_id"),
