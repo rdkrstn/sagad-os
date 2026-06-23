@@ -10,6 +10,7 @@ from agent_studio.db import (
     connect,
     database_configured,
     initialize_database,
+    initialize_database_safe,
     resolve_trusted_context,
     set_app_context,
 )
@@ -312,7 +313,8 @@ class PostgresIntegrationConfigStore:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        initialize_database(settings)
+        # Non-fatal: must not kill the process at import time when the DB is briefly unavailable.
+        initialize_database_safe(settings)
 
     def list(self, context: StoreContext | None = None) -> list[IntegrationConnection]:
         return [_connection_from_record(self.get(provider, context=context), provider) for provider in ("chatwoot", "twenty")]

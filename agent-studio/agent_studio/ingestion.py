@@ -18,6 +18,7 @@ from agent_studio.db import (
     connect,
     database_configured,
     initialize_database,
+    initialize_database_safe,
     resolve_trusted_context,
     set_app_context,
 )
@@ -809,7 +810,9 @@ class PostgresKnowledgeIngestionStore:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        initialize_database(settings)
+        # Non-fatal: a slow/unreachable DB at import time must not kill the process. If this
+        # fails, queries retry the connection lazily and the readiness probe reports not-ready.
+        initialize_database_safe(settings)
 
     def upsert_source(
         self,

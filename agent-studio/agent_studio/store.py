@@ -15,6 +15,7 @@ from agent_studio.db import (
     connect,
     database_configured,
     initialize_database,
+    initialize_database_safe,
     resolve_trusted_context,
     set_app_context,
 )
@@ -846,7 +847,8 @@ class PostgresConversationStore:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.embedding_service = EmbeddingService(settings)
-        initialize_database(settings)
+        # Non-fatal: a slow/unreachable DB at construction must not kill the process.
+        initialize_database_safe(settings)
 
     def list(self, context: StoreContext | None = None) -> list[ConversationRecord]:
         with connect(self.settings) as connection:

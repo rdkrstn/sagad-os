@@ -60,6 +60,18 @@ class Settings(BaseModel):
     chatwoot_api_access_token: str | None = None
     chatwoot_webhook_token: str | None = None
     chatwoot_dry_run: bool = False
+    # GoHighLevel (GHL) adapter — inbound webhook (HMAC) + outbound send.
+    # outbound_mode: "webhook" (POST back to GHL messages API) or "mcp" (auto-send via MCP tool).
+    ghl_webhook_secret: str | None = None
+    ghl_api_key: str | None = None
+    ghl_location_id: str | None = None
+    ghl_base_url: str | None = None
+    ghl_outbound_mode: str = "webhook"
+    ghl_dry_run: bool = True
+    # Universal-webhook debouncing (opt-in). When enabled, /webhooks/{provider} returns 202
+    # and coalesces a burst of messages into a single graph run after the debounce window.
+    webhook_debounce_enabled: bool = False
+    webhook_debounce_ms: int = 2500
     twenty_enabled: bool = False
     twenty_base_url: str | None = None
     twenty_api_key: str | None = None
@@ -105,6 +117,20 @@ class Settings(BaseModel):
         )
 
     @property
+    def ghl_configured(self) -> bool:
+        return all(
+            [
+                self.ghl_base_url,
+                self.ghl_api_key,
+                self.ghl_location_id,
+            ],
+        )
+
+    @property
+    def ghl_send_enabled(self) -> bool:
+        return self.ghl_configured and not self.ghl_dry_run
+
+    @property
     def twenty_configured(self) -> bool:
         return bool(self.twenty_base_url and self.twenty_api_key)
 
@@ -148,6 +174,14 @@ def get_settings() -> Settings:
         chatwoot_api_access_token=os.getenv("CHATWOOT_API_ACCESS_TOKEN"),
         chatwoot_webhook_token=os.getenv("CHATWOOT_WEBHOOK_TOKEN"),
         chatwoot_dry_run=_bool_env("CHATWOOT_DRY_RUN", False),
+        ghl_webhook_secret=os.getenv("GHL_WEBHOOK_SECRET"),
+        ghl_api_key=os.getenv("GHL_API_KEY"),
+        ghl_location_id=os.getenv("GHL_LOCATION_ID"),
+        ghl_base_url=os.getenv("GHL_BASE_URL"),
+        ghl_outbound_mode=os.getenv("GHL_OUTBOUND_MODE", "webhook"),
+        ghl_dry_run=_bool_env("GHL_DRY_RUN", True),
+        webhook_debounce_enabled=_bool_env("WEBHOOK_DEBOUNCE_ENABLED", False),
+        webhook_debounce_ms=int(os.getenv("WEBHOOK_DEBOUNCE_MS", "2500")),
         twenty_enabled=_bool_env("TWENTY_ENABLED", False),
         twenty_base_url=os.getenv("TWENTY_BASE_URL"),
         twenty_api_key=os.getenv("TWENTY_API_KEY"),

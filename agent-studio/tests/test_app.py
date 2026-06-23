@@ -1554,7 +1554,7 @@ def test_twenty_live_read_maps_contact_context(
 def test_chatwoot_webhook_auto_sends_low_risk_high_confidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from unittest.mock import patch
+    from unittest.mock import patch, AsyncMock
     monkeypatch.setenv("CHATWOOT_DRY_RUN", "true")
     get_settings.cache_clear()
     final_state = {
@@ -1574,7 +1574,7 @@ def test_chatwoot_webhook_auto_sends_low_risk_high_confidence(
         "final_confidence_score": 0.90,
         "trace_url": "https://smith.langchain.com/trace",
     }
-    with patch("agent_studio.main.graph.invoke", return_value=final_state):
+    with patch("agent_studio.main.graph.ainvoke", new=AsyncMock(return_value=final_state)):
         response = client.post(
             "/webhooks/chatwoot",
             json={
@@ -1594,7 +1594,7 @@ def test_chatwoot_webhook_auto_sends_low_risk_high_confidence(
 
 
 def test_chatwoot_webhook_requires_approval_if_risk_is_high() -> None:
-    from unittest.mock import patch
+    from unittest.mock import patch, AsyncMock
     final_state = {
         "chatwoot_conversation_id": "88",
         "chatwoot_message_id": "8801",
@@ -1612,7 +1612,7 @@ def test_chatwoot_webhook_requires_approval_if_risk_is_high() -> None:
         "final_confidence_score": 0.90,
         "trace_url": "https://smith.langchain.com/trace",
     }
-    with patch("agent_studio.main.graph.invoke", return_value=final_state):
+    with patch("agent_studio.main.graph.ainvoke", new=AsyncMock(return_value=final_state)):
         response = client.post(
             "/webhooks/chatwoot",
             json={
@@ -1629,7 +1629,7 @@ def test_chatwoot_webhook_requires_approval_if_risk_is_high() -> None:
 
 
 def test_chatwoot_webhook_requires_approval_if_confidence_is_low() -> None:
-    from unittest.mock import patch
+    from unittest.mock import patch, AsyncMock
     final_state = {
         "chatwoot_conversation_id": "88",
         "chatwoot_message_id": "8801",
@@ -1647,7 +1647,7 @@ def test_chatwoot_webhook_requires_approval_if_confidence_is_low() -> None:
         "final_confidence_score": 0.80,
         "trace_url": "https://smith.langchain.com/trace",
     }
-    with patch("agent_studio.main.graph.invoke", return_value=final_state):
+    with patch("agent_studio.main.graph.ainvoke", new=AsyncMock(return_value=final_state)):
         response = client.post(
             "/webhooks/chatwoot",
             json={
@@ -1664,7 +1664,7 @@ def test_chatwoot_webhook_requires_approval_if_confidence_is_low() -> None:
 
 
 def test_chatwoot_webhook_requires_approval_if_compliance_not_pass() -> None:
-    from unittest.mock import patch
+    from unittest.mock import patch, AsyncMock
     final_state = {
         "chatwoot_conversation_id": "88",
         "chatwoot_message_id": "8801",
@@ -1682,7 +1682,7 @@ def test_chatwoot_webhook_requires_approval_if_compliance_not_pass() -> None:
         "final_confidence_score": 0.90,
         "trace_url": "https://smith.langchain.com/trace",
     }
-    with patch("agent_studio.main.graph.invoke", return_value=final_state):
+    with patch("agent_studio.main.graph.ainvoke", new=AsyncMock(return_value=final_state)):
         response = client.post(
             "/webhooks/chatwoot",
             json={
@@ -1699,7 +1699,7 @@ def test_chatwoot_webhook_requires_approval_if_compliance_not_pass() -> None:
 
 
 def test_chatwoot_webhook_no_auto_send_if_draft_empty() -> None:
-    from unittest.mock import patch
+    from unittest.mock import patch, AsyncMock
     final_state = {
         "chatwoot_conversation_id": "88",
         "chatwoot_message_id": "8801",
@@ -1717,7 +1717,7 @@ def test_chatwoot_webhook_no_auto_send_if_draft_empty() -> None:
         "final_confidence_score": 0.90,
         "trace_url": "https://smith.langchain.com/trace",
     }
-    with patch("agent_studio.main.graph.invoke", return_value=final_state):
+    with patch("agent_studio.main.graph.ainvoke", new=AsyncMock(return_value=final_state)):
         response = client.post(
             "/webhooks/chatwoot",
             json={

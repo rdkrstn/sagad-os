@@ -94,7 +94,10 @@ class AgentRegistry:
         return config
 
     def delete_agent(self, agent_id: str) -> bool:
-        file_path = self.agents_dir / f"{agent_id}.md"
+        # Match the same id normalization save_agent applies, so a hyphenated id
+        # (e.g. "e2e-test") deletes the file it actually wrote ("e2e_test.md").
+        safe_id = re.sub(r"[^a-z0-9_]", "_", agent_id.lower().strip())
+        file_path = self.agents_dir / f"{safe_id}.md"
         if file_path.exists():
             file_path.unlink()
             self.reload_agents()
