@@ -119,7 +119,9 @@ def main() -> int:
                 "draft/stream produced tokens", repr(text)[:120])
 
     # 6. Agents CRUD -----------------------------------------------------------
-    agent_id = f"e2e-test-{uuid.uuid4().hex[:6]}"
+    # Use an already-normalized id (save_agent maps [^a-z0-9_] -> _), so the id
+    # we POST is exactly the id that ends up in GET /agents and in DELETE path.
+    agent_id = f"e2e_test_{uuid.uuid4().hex[:6]}"
     create = client.post("/agents", json={
         "id": agent_id,
         "name": "E2E Test Agent",
@@ -137,12 +139,18 @@ def main() -> int:
     _record(delete.status_code == 200, "DELETE /agents/{id} 200", str(delete.status_code))
 
     # 7. Knowledge search -----------------------------------------------------
-    search = client.get("/knowledge/search-test", params={"query": "tune-up pricing", "limit": 5})
+    # /knowledge/search-test is a POST taking a KnowledgeSearchTestRequest body
+    # (query, intent, risk_level, limit) and returning {"hits": [...]}.
+    search = client.post("/knowledge/search-test", json={
+        "query": "tune-up pricing",
+        "intent": "pricing_lead",
+        "risk_level": "low",
+        "limit": 5,
+    })
     if search.status_code == 200:
-        hits = search.json()
-        _record(isinstance(hits, list), "knowledge/search-test returns list", str(search.status_code))
+        hits = search.json().get("hits", [])
+        _record(isinstance(hits, list), "knowledge/search-test returns hits list", str(search.status_code))
     else:
-        # search-test may require a query param shape; record but don't fail hard.
         _record(False, "knowledge/search-test 200", str(search.status_code))
 
     print(f"\n== {checks - len(failures)}/{checks} checks passed ==")
