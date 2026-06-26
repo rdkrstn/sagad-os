@@ -69,7 +69,9 @@ trap teardown EXIT
 echo "== dev-e2e: boot compose ($COMPOSE, LLM_MODE=dry_run) =="
 docker network create client_internal_network >/dev/null 2>&1 || true
 docker compose -f "$COMPOSE" config --quiet
-docker compose -f "$COMPOSE" build sagad-agent-studio sagad-db
+# Build only the service we changed (service name is `agent-studio`; sagad-db is a pulled
+# pgvector image with no build context). Scoped build keeps the loop fast.
+docker compose -f "$COMPOSE" build agent-studio
 docker compose -f "$COMPOSE" up -d --wait --wait-timeout 240
 
 echo "== dev-e2e: poll health =="
