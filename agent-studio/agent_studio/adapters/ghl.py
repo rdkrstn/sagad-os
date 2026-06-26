@@ -17,14 +17,17 @@ in `docs/adapters/ghl.md`.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
+import time
 from typing import Any, Mapping
 
 import httpx
 
 from agent_studio.adapters.base import ChannelAdapter, NormalizedInbound, SendResult
+from agent_studio.schemas import CrmContactContext
 
 _logger = logging.getLogger(__name__)
 
@@ -44,6 +47,122 @@ def _constant_time_hex_eq(left: str, right: str) -> bool:
 
 def _hmac_sha256_hex(secret: str, raw_body: bytes) -> str:
     return hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+
+
+def _decode_key_or_sig(value: str) -> bytes | None:
+    """Decode an Ed25519 public key or signature that GHL delivers as hex or base64."""
+    value = value.strip()
+    try:
+        return bytes.fromhex(value)
+    except ValueError:
+        pass
+    try:
+        import base64
+
+        return base64.b64decode(value, validate=True)
+    except (ValueError, base64.binascii.Error):  # type: ignore[attr-defined]
+        return None
+
+
+class GhlSignatureVerifier:
+    """Verifies a GHL inbound webhook signature. No-op when no secret is configured (dev/test)."""
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], settings: Any) -> None:
+        raise NotImplementedError
+
+
+class HmacGhlVerifier(GhlSignatureVerifier):
+    """HMAC-SHA256 over the raw body (X-GHL-Signature / webhook-signature / x-signature).
+
+    The default scheme for GHL Workflow/Custom webhooks; behavior is unchanged from the
+    original single-implementation verify_inbound.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], settings: Any) -> None:
+        from fastapi import HTTPException
+
+        secret = settings.ghl_webhook_secret
+        if not secret:
+            return
+        lower_headers = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
+        supplied = None
+        for header in _SIGNATURE_HEADERS:
+            if header in lower_headers and lower_headers[header]:
+                supplied = lower_headers[header]
+                break
+        if not supplied:
+            raise HTTPException(status_code=401, detail="Missing GHL webhook signature.")
+        expected = _hmac_sha256_hex(secret, raw_body)
+        if not _constant_time_hex_eq(supplied, expected):
+            raise HTTPException(status_code=401, detail="Invalid GHL webhook signature.")
+
+
+class Ed25519GhlVerifier(GhlSignatureVerifier):
+    """Ed25519 over the raw body (x-wh-signature) -- GHL's native InboundMessage webhook.
+
+    Activates only when GHL_SIGNATURE_SCHEME=ed25519. The verification public key is the one
+    GHL shows when you subscribe the native webhook (set via GHL_NATIVE_WEBHOOK_KEY, hex or
+    base64). cryptography is imported lazily so the default HMAC path stays dependency-light.
+    """
+
+    _SIGNATURE_HEADER = "x-wh-signature"
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], settings: Any) -> None:
+        from fastapi import HTTPException
+
+        public_key_str = settings.ghl_native_webhook_key
+        # No key configured -> verification is a no-op (dev/test mode), matching HMAC behavior.
+        if not public_key_str:
+            return
+        lower_headers = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
+        supplied = lower_headers.get(self._SIGNATURE_HEADER)
+        if not supplied:
+            raise HTTPException(status_code=401, detail="Missing GHL native webhook signature.")
+        try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        except ImportError as exc:  # pragma: no cover - cryptography is a transitive dep
+            raise HTTPException(
+                status_code=500,
+                detail="GHL Ed25519 verification requires the 'cryptography' package.",
+            ) from exc
+        key_bytes = _decode_key_or_sig(public_key_str)
+        sig_bytes = _decode_key_or_sig(supplied)
+        if key_bytes is None or sig_bytes is None:
+            raise HTTPException(status_code=401, detail="Malformed GHL Ed25519 key or signature.")
+        try:
+            Ed25519PublicKey.from_public_bytes(key_bytes).verify(sig_bytes, raw_body)
+        except Exception as exc:
+            raise HTTPException(status_code=401, detail="Invalid GHL webhook signature.") from exc
+
+
+_GHL_VERIFIERS: dict[str, GhlSignatureVerifier] = {
+    "hmac": HmacGhlVerifier(),
+    "ed25519": Ed25519GhlVerifier(),
+}
+
+
+#: TTL for the in-process CRM-context cache (keyed by GHL contact id). Keeps a hot thread from
+#: refetching the same contact/opportunity on every inbound message.
+_CRM_CACHE_TTL_SECONDS = 300.0
+#: Hard cap on a single CRM-context fetch so a slow GHL API can never block inbound processing.
+_CRM_FETCH_TIMEOUT_SECONDS = 8.0
+# contact_id -> (expiry_monotonic, CrmContactContext)
+_crm_context_cache: dict[str, tuple[float, CrmContactContext]] = {}
+
+
+def _clear_crm_context_cache() -> None:
+    """Test hook: drop the in-process CRM-context cache."""
+    _crm_context_cache.clear()
+
+
+def _mask_secret(value: str | None, *, keep_head: int = 2) -> str | None:
+    """Mask a phone/email for safe display in CRM context (e.g. '+1***23')."""
+    if not value:
+        return None
+    text = str(value)
+    if len(text) <= keep_head:
+        return "***"
+    return f"{text[:keep_head]}***{text[-2:]}"
 
 
 def _as_text(value: Any) -> str | None:
@@ -68,25 +187,13 @@ class GhlAdapter(ChannelAdapter):
     outbound_modes = ["webhook", "mcp"]
 
     def verify_inbound(self, raw_body: bytes, headers: Mapping[str, str]) -> None:
-        from fastapi import HTTPException
-
         settings = _settings()
-        secret = settings.ghl_webhook_secret
-        # No secret configured -> verification is a no-op (dev/test mode). In production set
-        # GHL_WEBHOOK_SECRET so inbound is authenticated.
-        if not secret:
-            return
-        supplied = None
-        lower_headers = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
-        for header in _SIGNATURE_HEADERS:
-            if header in lower_headers and lower_headers[header]:
-                supplied = lower_headers[header]
-                break
-        if not supplied:
-            raise HTTPException(status_code=401, detail="Missing GHL webhook signature.")
-        expected = _hmac_sha256_hex(secret, raw_body)
-        if not _constant_time_hex_eq(supplied, expected):
-            raise HTTPException(status_code=401, detail="Invalid GHL webhook signature.")
+        # Dispatch on the configured signature scheme. "hmac" (default) is the GHL Workflow/
+        # Custom webhook path; "ed25519" is the native InboundMessage webhook (Marketplace/OAuth
+        # app). Unknown schemes fall back to HMAC so a misconfigured env never disables auth.
+        scheme = (settings.ghl_signature_scheme or "hmac").lower()
+        verifier = _GHL_VERIFIERS.get(scheme, _GHL_VERIFIERS["hmac"])
+        verifier.verify(raw_body, headers, settings)
 
     def normalize(self, raw_payload: dict[str, object]) -> NormalizedInbound:
         message = _at(raw_payload, "message") if isinstance(raw_payload, Mapping) else None
@@ -136,6 +243,97 @@ class GhlAdapter(ChannelAdapter):
             return True
         return False
 
+    async def fetch_crm_context(
+        self,
+        normalized: NormalizedInbound,
+        settings: Any,
+    ) -> CrmContactContext | None:
+        """Read-only GHL CRM context (contact + first opportunity) for an inbound contact.
+
+        Never raises and never blocks inbound: the fetch is wrapped in an 8s ``asyncio.wait_for``
+        plus a broad ``except`` so any timeout/HTTP/parse failure returns ``None`` and the graph
+        proceeds without CRM context. Results are cached per ``contact_id`` for 5 minutes so a
+        hot thread does not refetch on every message. Only runs when GHL is configured; this is
+        strictly read-only -- no CRM writes are ever performed.
+        """
+        if not getattr(settings, "ghl_configured", False):
+            return None
+        contact_id = _as_text(_at(normalized.raw_payload, "contact", "id"))
+        if not contact_id:
+            return None
+        now = time.monotonic()
+        cached = _crm_context_cache.get(contact_id)
+        if cached and cached[0] > now:
+            return cached[1]
+        try:
+            context = await asyncio.wait_for(
+                self._fetch_crm_context(contact_id, settings),
+                timeout=_CRM_FETCH_TIMEOUT_SECONDS,
+            )
+        except Exception:  # never let a CRM fetch block or break inbound
+            _logger.warning("GHL CRM context fetch failed for contact %s; degrading to None.", contact_id)
+            return None
+        if context is not None:
+            _crm_context_cache[contact_id] = (now + _CRM_CACHE_TTL_SECONDS, context)
+        return context
+
+    async def _fetch_crm_context(self, contact_id: str, settings: Any) -> CrmContactContext | None:
+        base_url = str(settings.ghl_base_url).rstrip("/")
+        headers = {
+            "Authorization": f"Bearer {settings.ghl_api_key}",
+            "Version": _GHL_API_VERSION,
+            "Accept": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=_CRM_FETCH_TIMEOUT_SECONDS) as client:
+                contact_resp = await client.get(f"{base_url}/contacts/{contact_id}", headers=headers)
+                contact_payload: object = None
+                if contact_resp.is_success:
+                    try:
+                        body = contact_resp.json()
+                    except ValueError:
+                        body = None
+                    contact_payload = body.get("contact") if isinstance(body, Mapping) else body
+                # GHL's opportunity search is a POST with a contact_id/location_id body.
+                opportunities: list[Mapping[str, object]] = []
+                try:
+                    opp_resp = await client.post(
+                        f"{base_url}/opportunities/search",
+                        headers={**headers, "Content-Type": "application/json"},
+                        json={"location_id": settings.ghl_location_id, "contact_id": contact_id},
+                    )
+                    if opp_resp.is_success:
+                        opp_body = opp_resp.json()
+                        raw_opps = opp_body.get("opportunities") if isinstance(opp_body, Mapping) else None
+                        if isinstance(raw_opps, list):
+                            opportunities = [o for o in raw_opps if isinstance(o, Mapping)]
+                except (httpx.RequestError, ValueError):
+                    opportunities = []
+        except httpx.RequestError:
+            return None
+        if not isinstance(contact_payload, Mapping):
+            # No contact found -> nothing useful to attach; degrade rather than fabricate.
+            return None
+        opp = opportunities[0] if opportunities else None
+        company_name = _as_text(_at(contact_payload, "companyName")) or _as_text(
+            _at(contact_payload, "company", "name")
+        )
+        tags_raw = contact_payload.get("tags")
+        tags = [str(t) for t in tags_raw] if isinstance(tags_raw, list) else []
+        return CrmContactContext(
+            provider="GHL",
+            status="ready",
+            contact_id=str(contact_payload.get("id") or contact_id),
+            display_name=_as_text(_at(contact_payload, "name")) or _as_text(_at(contact_payload, "firstName")),
+            company_name=company_name,
+            phone_masked=_mask_secret(_as_text(_at(contact_payload, "phone"))),
+            email_masked=_mask_secret(_as_text(_at(contact_payload, "email"))),
+            tags=tags,
+            deal_stage=_as_text(_at(opp, "pipelineStage", "name")) or _as_text(_at(opp, "status")) if opp else None,
+            deal_value=_as_text(_at(opp, "monetaryValue")) if opp else None,
+            raw={"contact": dict(contact_payload), "opportunities": [dict(o) for o in opportunities]},
+        )
+
     async def send_outbound(
         self,
         reply: str,
@@ -161,13 +359,21 @@ class GhlAdapter(ChannelAdapter):
             )
 
         if settings.ghl_outbound_mode.lower() == "mcp":
-            # MCP auto-send executor is a follow-up; surface a clear, honest status rather
-            # than silently no-op'ing. Configure GHL_OUTBOUND_MODE=webhook to send live.
+            # The Agent Studio MCP gateway is descriptor-only by design (mcp_gateway.py
+            # builds redacted tool descriptors; it has no execution runtime and exposes no
+            # provider credentials). So MCP-mode outbound is an honest dry-run that names
+            # the descriptor the supervisor WOULD invoke once an executor exists, rather
+            # than silently no-op'ing or fabricating a send. Set GHL_OUTBOUND_MODE=webhook
+            # to send live today; an MCP executor is a tracked follow-up (see docs/adapters/ghl.md).
             return SendResult(
                 status="dry_run",
                 provider="GHL",
                 action=action,
-                detail="GHL MCP auto-send executor is not wired yet; set GHL_OUTBOUND_MODE=webhook to send.",
+                target_url=f"mcp://ghl.messages.send?conversationId={conversation_id}",
+                detail=(
+                    "GHL MCP outbound is descriptor-only (no executor runtime yet); "
+                    "not sent. Set GHL_OUTBOUND_MODE=webhook to send live."
+                ),
             )
 
         base_url = str(settings.ghl_base_url).rstrip("/")

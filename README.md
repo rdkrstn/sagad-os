@@ -241,6 +241,7 @@ New contributors can also start with:
 - `docs/adapters.md`
 - `docs/agents.md`
 - `docs/rag-pipeline.md`
+- `docs/revops-tickets.md`
 - `docs/approval-queue.md`
 - `docs/audit-log.md`
 - `docs/DEPLOYMENT.md`

@@ -171,6 +171,7 @@ def test_tools_manifests_endpoint_returns_current_manifests_without_secrets(
         "crm.update_lead_stage",
         "chatwoot.messages.send_approved",
         "chatwoot.conversations.resolve",
+        "ghl.messages.send_approved",
     }
     for manifest in manifests:
         assert manifest["provider"]
@@ -208,6 +209,7 @@ def test_mcp_descriptors_endpoint_is_descriptor_only_and_does_not_call_network(
         "crm.update_lead_stage",
         "chatwoot.messages.send_approved",
         "chatwoot.conversations.resolve",
+        "ghl.messages.send_approved",
     }
     for descriptor in descriptors:
         assert descriptor["enabled"] is True

@@ -2,6 +2,10 @@
 
 Sagad Approvals is the supervisor control point.
 
+> The ticket fields this doc aspired to (assignee, priority, pipeline_stage, SLA,
+> ticket_status) are now implemented on every conversation — see
+> [`docs/revops-tickets.md`](./revops-tickets.md) for the queue + `PATCH .../ticket` surface.
+
 ## When Approval Is Required
 
 - low trust score;

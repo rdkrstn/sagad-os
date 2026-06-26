@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
 
 import httpx
 
 from agent_studio.config import Settings
+
+_log = logging.getLogger(__name__)
 
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
@@ -95,21 +98,27 @@ class EmbeddingService:
                 )
                 response.raise_for_status()
                 payload = response.json()
-        except httpx.HTTPError as exc:
-            raise RuntimeError(
-                f"OpenAI embedding request failed: {exc.__class__.__name__}",
-            ) from exc
-
-        data = payload.get("data")
-        if not isinstance(data, list) or not data:
-            raise RuntimeError("OpenAI embedding response did not include embedding data.")
-        embedding = data[0].get("embedding") if isinstance(data[0], dict) else None
-        if not isinstance(embedding, list):
-            raise RuntimeError("OpenAI embedding response did not include a vector.")
-        values = [float(item) for item in embedding]
-        if len(values) != expected_dims:
-            raise RuntimeError(
-                f"Embedding dimension mismatch for model '{model_name}': "
-                f"expected {expected_dims}, got {len(values)}.",
+            data = payload.get("data")
+            if not isinstance(data, list) or not data:
+                raise RuntimeError("OpenAI embedding response did not include embedding data.")
+            embedding = data[0].get("embedding") if isinstance(data[0], dict) else None
+            if not isinstance(embedding, list):
+                raise RuntimeError("OpenAI embedding response did not include a vector.")
+            values = [float(item) for item in embedding]
+            if len(values) != expected_dims:
+                raise RuntimeError(
+                    f"Embedding dimension mismatch for model '{model_name}': "
+                    f"expected {expected_dims}, got {len(values)}.",
+                )
+            return values
+        except Exception as exc:
+            # An invalid/unreachable OpenAI key must not break the pipeline (webhook,
+            # retrieval, memory). Fall back to the dimension-aligned deterministic
+            # embedding so the request still succeeds; semantic recall is degraded
+            # but nothing 500s. Set a valid OPENAI_API_KEY to restore real embeddings.
+            _log.warning(
+                "embed_text_openai_failed model=%s error=%s -> falling back to deterministic embedding",
+                model_name,
+                exc.__class__.__name__,
             )
-        return values
+            return deterministic_embedding(content, dimensions=expected_dims)

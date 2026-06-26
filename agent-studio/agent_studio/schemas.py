@@ -12,6 +12,9 @@ ConversationStatus = Literal[
     "sent",
     "send_failed",
 ]
+# RevOps ticket lifecycle. A conversation IS a ticket; these stage the supervisor queue.
+TicketStatus = Literal["open", "in_progress", "waiting", "resolved"]
+TicketPriority = Literal["low", "medium", "high", "urgent"]
 IntegrationKind = Literal[
     "channel",
     "crm",
@@ -211,6 +214,8 @@ class CrmContactContext(BaseModel):
     phone_masked: str | None = None
     email_masked: str | None = None
     lead_stage: str | None = None
+    deal_stage: str | None = None
+    deal_value: str | None = None
     last_contacted_at: datetime | None = None
     social_profiles: dict[str, str] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
@@ -315,6 +320,9 @@ class ConversationRecord(BaseModel):
     id: str = Field(default_factory=lambda: f"conv_{uuid4().hex[:12]}")
     chatwoot_conversation_id: str | None = None
     chatwoot_message_id: str | None = None
+    # Provider-native conversation id (GHL conversationId, etc.). Set by the universal inbound
+    # pipeline so GHL approve-send + the poller can route back without Chatwoot-specific fields.
+    provider_conversation_id: str | None = None
     customer_name: str = "Unknown customer"
     channel: str = "chatwoot"
     incoming_message: str
@@ -338,6 +346,13 @@ class ConversationRecord(BaseModel):
     compliance_status: Literal["pass", "needs_review", "blocked"] = "needs_review"
     approval_status: ConversationStatus = "needs_approval"
     send_status: str = "not_sent"
+    # RevOps ticket fields (see migrations/0008_tickets_revops.sql). Defaults preserve prior
+    # behavior: a freshly-created conversation is an `open` ticket with no assignee/SLA.
+    ticket_status: TicketStatus = "open"
+    assignee: str | None = None
+    priority: TicketPriority | None = None
+    pipeline_stage: str | None = None
+    sla_due_at: datetime | None = None
     trace_url: str | None = None
     eval_tags: list[str] = Field(default_factory=list)
     trace_attributes: dict[str, object] = Field(default_factory=dict)
@@ -418,6 +433,36 @@ class ApprovalRequest(BaseModel):
     approved: bool = True
     supervisor_id: str = "dev-supervisor"
     edited_reply: str | None = None
+
+
+class TicketUpdateRequest(BaseModel):
+    # All fields optional; a field is left unchanged when omitted (None). ticket_status and
+    # priority are validated against the DB CHECK constraints (migrations/0008) on write.
+    ticket_status: TicketStatus | None = None
+    assignee: str | None = None
+    priority: TicketPriority | None = None
+    pipeline_stage: str | None = None
+    sla_due_at: datetime | None = None
+    supervisor_id: str = "dev-supervisor"
+
+
+class IntegrationSyncState(BaseModel):
+    """Per-(organization, provider) watermark row backing the inbound pollers.
+
+    ``updated_since`` is a millisecond epoch used as the GHL ``updatedSince`` cursor; ``payload``
+    holds provider-specific sub-state (for GHL: a ``{"last_message_ids": {conversation_id:
+    lastMessageId}}`` map). The poller only advances a watermark after the messages in that
+    window have been successfully persisted, so a mid-cycle crash re-fetches (and dedup-skips)
+    rather than drops messages.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    organization_id: str | None = None
+    provider: str
+    updated_since: int = 0
+    payload: dict[str, object] = Field(default_factory=dict)
+    updated_at: datetime | None = None
 
 
 class CrmLookupContactRequest(BaseModel):

@@ -6,11 +6,12 @@ Adapters let Sagad OS connect to external tools without becoming those tools.
 
 | Adapter | Purpose | v0.1 state |
 |---|---|---|
-| Chatwoot | Channel intake and approved replies | Reference adapter |
+| Chatwoot | Channel intake and approved replies | Reference adapter (`POST /webhooks/chatwoot`) |
 | Twenty CRM | Customer and lead context | Reference adapter |
+| GoHighLevel (GHL) | Channel intake + approved replies via universal webhook | Working (`POST /webhooks/ghl`) — see [`adapters/ghl.md`](./adapters/ghl.md) |
 | Markdown Knowledge Pack | Approved answer source | Local seed |
-| Generic Webhooks | Future connector primitive | Planned |
-| MCP/FastMCP | Future tool facade behind Agent Studio | Planned |
+| Universal Webhook (`ChannelAdapter` registry) | Provider-pluggable inbound/outbound behind one route | Working (`POST /webhooks/{provider}`) — see [`universal-webhook.md`](./universal-webhook.md) |
+| MCP/FastMCP | Tool facade behind Agent Studio | Descriptor-only by design (no executor runtime); GHL `mcp` outbound is an honest dry-run |
 
 ## Rules
 
