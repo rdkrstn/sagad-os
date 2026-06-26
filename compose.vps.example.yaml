@@ -82,6 +82,18 @@ services:
       # coalesce a burst of messages into a single graph run after the debounce window.
       WEBHOOK_DEBOUNCE_ENABLED: ${WEBHOOK_DEBOUNCE_ENABLED:-false}
       WEBHOOK_DEBOUNCE_MS: ${WEBHOOK_DEBOUNCE_MS:-2500}
+      # RevOps tiered auto-send "safe lane". Empty allowlist (default) => no promotion, so every
+      # conversation still lands in needs_approval (prior behavior). Set REVOPS_AUTOSEND_INTENTS
+      # to a comma-list of low-risk intents allowed to auto-send once confidence >= the threshold.
+      REVOPS_AUTOSEND_ENABLED: ${REVOPS_AUTOSEND_ENABLED:-true}
+      REVOPS_AUTOSEND_INTENTS: ${REVOPS_AUTOSEND_INTENTS:-}
+      REVOPS_AUTOSEND_CONFIDENCE: ${REVOPS_AUTOSEND_CONFIDENCE:-0.88}
+      # GHL inbound poller (Private Integration Token -> Conversations API). Off by default; the
+      # poller feeds the SAME _run_universal_inbound pipeline as /webhooks/ghl (no parallel graph
+      # path) and skips silently when GHL is unconfigured or the DB is not ready. Enable to poll
+      # GHL without the native Marketplace InboundMessage webhook. Watermarks persist in
+      # integration_sync_state (per-conversation lastMessageId cursor in payload).
+      GHL_POLL_ENABLED: ${GHL_POLL_ENABLED:-false}
       CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-}
       CHATWOOT_ACCOUNT_ID: ${CHATWOOT_ACCOUNT_ID:-}
       CHATWOOT_API_ACCESS_TOKEN: ${CHATWOOT_API_ACCESS_TOKEN:-}

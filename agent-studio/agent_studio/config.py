@@ -2,7 +2,7 @@ from functools import lru_cache
 import os
 
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pathlib import Path
 
 # Load from repository root .env first, falling back to local .env
@@ -68,6 +68,24 @@ class Settings(BaseModel):
     ghl_base_url: str | None = None
     ghl_outbound_mode: str = "webhook"
     ghl_dry_run: bool = True
+    # GHL inbound poller (tests the "direct inbound, not via webhook" theory using the
+    # Private Integration Token's read scope). Off by default; enable with GHL_POLL_ENABLED.
+    ghl_poll_enabled: bool = False
+    ghl_poll_interval_seconds: int = 30
+    ghl_poll_conversation_limit: int = 50
+    ghl_poll_message_limit: int = 20
+    ghl_poll_timeout_seconds: float = 20.0
+    # GHL webhook signature scheme. "hmac" (default, X-GHL-Signature HMAC-SHA256, built) or
+    # "ed25519" (native InboundMessage webhook, x-wh-signature, Marketplace/OAuth app -- groundwork
+    # for the later native-webhook flip; activates only on this scheme).
+    ghl_signature_scheme: str = "hmac"
+    ghl_native_webhook_key: str | None = None
+    # RevOps tiered auto-send: a narrow allowlist of low-risk intents that may be promoted to
+    # compliance_status="pass" (and thus auto-sent) when risk=low + confidence>=threshold.
+    # EMPTY by default => no promotion => existing needs_approval behavior is unchanged.
+    revops_autosend_enabled: bool = True
+    revops_autosend_intents: list[str] = Field(default_factory=list)
+    revops_autosend_confidence: float = 0.88
     # Universal-webhook debouncing (opt-in). When enabled, /webhooks/{provider} returns 202
     # and coalesces a burst of messages into a single graph run after the debounce window.
     webhook_debounce_enabled: bool = False
@@ -180,6 +198,20 @@ def get_settings() -> Settings:
         ghl_base_url=os.getenv("GHL_BASE_URL"),
         ghl_outbound_mode=os.getenv("GHL_OUTBOUND_MODE", "webhook"),
         ghl_dry_run=_bool_env("GHL_DRY_RUN", True),
+        ghl_poll_enabled=_bool_env("GHL_POLL_ENABLED", False),
+        ghl_poll_interval_seconds=_int_env("GHL_POLL_INTERVAL_SECONDS", 30),
+        ghl_poll_conversation_limit=_int_env("GHL_POLL_CONVERSATION_LIMIT", 50),
+        ghl_poll_message_limit=_int_env("GHL_POLL_MESSAGE_LIMIT", 20),
+        ghl_poll_timeout_seconds=_float_env("GHL_POLL_TIMEOUT_SECONDS", 20.0),
+        ghl_signature_scheme=os.getenv("GHL_SIGNATURE_SCHEME", "hmac"),
+        ghl_native_webhook_key=os.getenv("GHL_NATIVE_WEBHOOK_KEY"),
+        revops_autosend_enabled=_bool_env("REVOPS_AUTOSEND_ENABLED", True),
+        revops_autosend_intents=[
+            token.strip()
+            for token in os.getenv("REVOPS_AUTOSEND_INTENTS", "").split(",")
+            if token.strip()
+        ],
+        revops_autosend_confidence=_float_env("REVOPS_AUTOSEND_CONFIDENCE", 0.88),
         webhook_debounce_enabled=_bool_env("WEBHOOK_DEBOUNCE_ENABLED", False),
         webhook_debounce_ms=int(os.getenv("WEBHOOK_DEBOUNCE_MS", "2500")),
         twenty_enabled=_bool_env("TWENTY_ENABLED", False),

@@ -46,6 +46,20 @@ export LLM_MODE="dry_run"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 # Chatwoot webhook token is read by the app AND by dev_e2e.py (via ?token=).
 export CHATWOOT_WEBHOOK_TOKEN="${CHATWOOT_WEBHOOK_TOKEN:-dev-e2e-cw-token}"
+# RevOps tiered auto-send: enable the safe lane for the e2e run so the tiered check in
+# dev_e2e.py can prove allowlisted low-risk intents auto-send end-to-end. pricing_lead is the
+# deterministic dry_run intent for the pricing fixture. Confidence threshold 0.0 keeps the check
+# robust to knowledge-store state (fresh container => confidence 0.48; seeded => ~0.74) — the
+# threshold logic itself is unit-tested in tests/test_revops_autosend.py.
+export REVOPS_AUTOSEND_ENABLED="${REVOPS_AUTOSEND_ENABLED:-true}"
+export REVOPS_AUTOSEND_INTENTS="${REVOPS_AUTOSEND_INTENTS:-pricing_lead}"
+export REVOPS_AUTOSEND_CONFIDENCE="${REVOPS_AUTOSEND_CONFIDENCE:-0.0}"
+# GHL inbound poller: enable it for the e2e boot so dev_e2e.py can assert a poller-enabled boot
+# stays healthy. GHL is unconfigured in this credential-free stack, so the poller's per-cycle
+# no-creds skip keeps it a no-op (no GHL API calls); the real roundtrip is pytest-covered
+# (tests/test_ghl_poller.py, stubbed httpx). This proves the lifespan wiring never destabilizes
+# the container. Default CI keeps it off via the compose env default.
+export GHL_POLL_ENABLED="${GHL_POLL_ENABLED:-true}"
 
 teardown() {
   status=$?

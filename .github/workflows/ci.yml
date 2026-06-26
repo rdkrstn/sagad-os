@@ -152,6 +152,9 @@ jobs:
           # embeddings. DATABASE_URL="" overrides any local .env so no Postgres is required.
           DATABASE_URL: ""
           LLM_MODE: dry_run
+          # Poller is off in CI; the poller roundtrip is pytest-covered with stubbed httpx
+          # (tests/test_ghl_poller.py). Keep it explicit so a stray local .env can't flip it on.
+          GHL_POLL_ENABLED: "false"
         run: uv run python -m pytest -q
 
   compose-smoke:

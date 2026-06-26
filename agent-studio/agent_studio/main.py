@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import asyncio
 import logging
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 import httpx
@@ -39,6 +39,7 @@ from agent_studio.mcp_gateway import build_mcp_descriptors
 from agent_studio.observability import aggregate_ai_ops_metrics, sanitize_payload
 from agent_studio.realtime import realtime_manager, verify_realtime_token
 from agent_studio.retrieval import retriever
+from agent_studio.revops_autosend import revops_autosend_decision
 from agent_studio.schemas import (
     ApprovalRequest,
     ChatwootWebhookPayload,
@@ -48,6 +49,7 @@ from agent_studio.schemas import (
     CrmCreateNoteRequest,
     CrmCreateTaskRequest,
     CrmLookupContactRequest,
+    CrmContactContext,
     CrmProviderStatus,
     CrmToolResponse,
     CrmUpdateLeadStageRequest,
@@ -72,6 +74,7 @@ from agent_studio.schemas import (
     KnowledgeSourceListResponse,
     ToolPlan,
     ToolResult,
+    TicketUpdateRequest,
 )
 from agent_studio.skill_registry import list_skill_definitions
 from agent_studio.store import StoreContext, store
@@ -79,6 +82,10 @@ from agent_studio.tool_manifests import ToolManifestRegistry
 from agent_studio.tool_policy import ToolPolicyContext, ToolPolicyDecision, evaluate_tool_policy
 from agent_studio.twenty import TwentyAdapter, twenty_status
 from agent_studio.agents import AgentRegistry
+
+
+# Handle to the background GHL poller, if started. Stopped on lifespan shutdown.
+_ghl_poller: Any | None = None
 
 
 @asynccontextmanager
@@ -90,7 +97,22 @@ async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     initialize_database_safe(settings)
     asyncio.create_task(_retry_database_init(settings))
+    # GHL inbound poller: opt-in via GHL_POLL_ENABLED. The poller feeds the SAME
+    # _run_universal_inbound pipeline as the /webhooks/ghl route (no parallel graph path) and
+    # degrades safely when GHL is unconfigured or the DB is not ready. Started here so a live
+    # deploy can poll GHL without the native Marketplace webhook; off by default for CI/tests.
+    global _ghl_poller
+    if settings.ghl_poll_enabled:
+        from agent_studio.ghl_poller import run_ghl_poller
+
+        try:
+            _ghl_poller = await run_ghl_poller(settings)
+        except Exception as exc:  # noqa: BLE001 - startup must never crash the process
+            logger.warning("GHL poller failed to start: %s", exc.__class__.__name__)
     yield
+    if _ghl_poller is not None:
+        _ghl_poller.stop()
+        _ghl_poller = None
 
 
 async def _retry_database_init(settings: Settings, *, attempts: int = 6, delay: float = 2.0) -> None:
@@ -635,6 +657,74 @@ def _chatwoot_send_tool_result(
             detail=str(result.get("detail", "Chatwoot send completed.")),
             external_id=str(result["external_id"]) if result.get("external_id") else None,
             data=_chatwoot_tool_payload(result),
+        ),
+    )
+
+
+def _ghl_policy_context(
+    settings: Settings,
+    record: ConversationRecord,
+    *,
+    approved: bool,
+    risk_level: str | None = None,
+) -> ToolPolicyContext:
+    return ToolPolicyContext(
+        selected_agent=_policy_agent_name(record),
+        conversation_risk=(risk_level or record.risk_level),  # type: ignore[arg-type]
+        approved=approved,
+        autonomous=False,
+        provider_enabled=True,
+        provider_configured=settings.ghl_configured,
+        provider_dry_run=settings.ghl_dry_run,
+        provider_writes_enabled=settings.ghl_send_enabled,
+    )
+
+
+def _ghl_tool_payload(result: dict[str, object]) -> dict[str, object]:
+    # Same redaction as the Chatwoot payload: drop echoed provider/action/status/detail.
+    return {
+        key: value
+        for key, value in result.items()
+        if key not in {"provider", "action", "status", "detail"}
+        and value is not None
+    }
+
+
+def _ghl_send_tool_result(
+    record: ConversationRecord,
+    result: dict[str, object],
+    *,
+    content: str,
+) -> tuple[ToolPlan, ToolResult]:
+    status_value = str(result.get("status", "failed"))
+    tool_status = {
+        "sent": "succeeded",
+        "dry_run": "dry_run",
+        "failed": "failed",
+    }.get(status_value, "failed")
+    plan = ToolPlan(
+        provider="GHL",
+        tool_name="ghl.messages.send_approved",
+        action="send supervisor-approved reply",
+        risk_level=record.risk_level,
+        requires_approval=True,
+        approved=True,
+        dry_run=status_value == "dry_run",
+        args={
+            "provider_conversation_id": record.provider_conversation_id,
+            "content_preview": content[:160],
+        },
+    )
+    return (
+        plan,
+        ToolResult(
+            plan_id=plan.id,
+            provider="GHL",
+            tool_name="ghl.messages.send_approved",
+            status=tool_status,  # type: ignore[arg-type]
+            detail=str(result.get("detail", "GHL send completed.")),
+            external_id=str(result["external_id"]) if result.get("external_id") else None,
+            data=_ghl_tool_payload(result),
         ),
     )
 
@@ -2187,10 +2277,14 @@ async def _maybe_auto_send_universal(
 ) -> dict[str, object] | None:
     """Auto-send the draft through the adapter when risk/compliance thresholds are met.
 
-    Mirrors the Chatwoot auto-send thresholds (compliance pass, risk low, confidence
-    >= 0.88, non-empty draft) but routes through the provider adapter's send_outbound
-    instead of the Chatwoot-specific tool_policy/manifest path. Returns the send result
-    dict, or None when auto-send conditions are not met.
+    Auto-send fires when compliance is "pass", risk is low, confidence meets the configured
+    RevOps auto-send threshold, and the draft is non-empty. The confidence threshold is
+    ``settings.revops_autosend_confidence`` (default 0.88) — the SAME threshold the
+    ``revops_autosend`` safe lane used to decide promotion, so the two gates stay consistent.
+    In practice ``compliance_status == "pass"`` is only ever produced by the safe-lane
+    promotion (the guardrail itself emits only needs_review/blocked), so this gate is reached
+    solely via that narrow allowlist. Returns the send result dict, or None when auto-send
+    conditions are not met.
     """
     draft_reply = (record.draft_reply or "").strip()
     confidence = record.final_confidence_score
@@ -2200,7 +2294,7 @@ async def _maybe_auto_send_universal(
         record.compliance_status == "pass"
         and record.risk_level == "low"
         and confidence is not None
-        and confidence >= 0.88
+        and confidence >= float(settings.revops_autosend_confidence)
         and bool(draft_reply)
     )
     if not is_auto_send:
@@ -2308,11 +2402,32 @@ async def _run_universal_inbound(
         else [],
         "trace_url": None,
     }
+    # Read-only CRM context (GHL today): pull contact + opportunity so the graph and the
+    # RevOps queue can reason about deal stage/value. Provider-agnostic guard so non-GHL
+    # adapters (Chatwoot) skip this and behave exactly as before. The fetch never blocks
+    # inbound -- it degrades to None on timeout/error (see GhlAdapter.fetch_crm_context).
+    crm_context: CrmContactContext | None = None
+    if hasattr(adapter, "fetch_crm_context"):
+        try:
+            crm_context = await adapter.fetch_crm_context(normalized, settings)
+        except Exception:  # belt-and-suspenders: never let CRM context break inbound
+            crm_context = None
+    if crm_context is not None:
+        initial_state["crm_context"] = crm_context
     final_state = await graph.ainvoke(initial_state)
+
+    # RevOps safe-lane promotion: a narrow allowlist of low-risk intents may be promoted from
+    # needs_review -> "pass" so the reply can auto-send without a supervisor round-trip. The
+    # guardrail's "blocked" verdict always wins -- we only consult the safe lane when the
+    # guardrail did NOT block. Empty allowlist (default) => no promotion => prior behavior.
+    if final_state.get("compliance_status") != "blocked":
+        if revops_autosend_decision(final_state, settings) == "pass":
+            final_state["compliance_status"] = "pass"
 
     record_payload: dict[str, object] = {
         "chatwoot_conversation_id": None,
         "chatwoot_message_id": None,
+        "provider_conversation_id": normalized.provider_conversation_id,
         "customer_name": str(final_state.get("customer_name", normalized.customer_name)),
         "channel": str(final_state.get("channel", normalized.channel)),
         "incoming_message": incoming_message,
@@ -2326,6 +2441,7 @@ async def _run_universal_inbound(
         "approval_status": "needs_approval",
         "send_status": "not_sent",
         "trace_url": final_state.get("trace_url"),
+        "crm_context": final_state.get("crm_context") or crm_context,
         "messages": [
             ConversationMessageRecord(
                 sender_type="customer",
@@ -2518,15 +2634,76 @@ def list_conversations(
     x_sagad_user_id: Annotated[str | None, Header()] = None,
     x_sagad_role: Annotated[str | None, Header()] = None,
     x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+    ticket_status: Annotated[str | None, Query(description="Filter the RevOps ticket queue by ticket status.")] = None,
+    assignee: Annotated[str | None, Query(description="Filter by assigned supervisor/user id.")] = None,
+    priority: Annotated[str | None, Query(description="Filter by ticket priority.")] = None,
 ) -> ConversationListResponse:
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
     return ConversationListResponse(
         conversations=[
             _attach_memory_context(record, context=context)
-            for record in store.list(context=context)
+            for record in store.list(
+                context=context,
+                ticket_status=ticket_status,
+                assignee=assignee,
+                priority=priority,
+            )
         ],
     )
+
+
+@app.patch("/conversations/{conversation_id}/ticket", response_model=ConversationRecord)
+async def update_conversation_ticket(
+    conversation_id: str,
+    request: TicketUpdateRequest,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> ConversationRecord:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    record = store.get(conversation_id, context=context)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    _require_supervisor_approval(True)
+    updated = store.update_ticket(
+        conversation_id,
+        ticket_status=request.ticket_status,
+        assignee=request.assignee,
+        priority=request.priority,
+        pipeline_stage=request.pipeline_stage,
+        sla_due_at=request.sla_due_at,
+        context=context,
+    )
+    if updated is None:
+        updated = record
+    _record_diagnostic_event(
+        event_type="ticket.updated",
+        summary="Supervisor updated the RevOps ticket fields.",
+        status_value="info",
+        conversation_id=updated.id,
+        payload={
+            "ticket_status": updated.ticket_status,
+            "assignee": updated.assignee,
+            "priority": updated.priority,
+            "pipeline_stage": updated.pipeline_stage,
+            "supervisor_id": request.supervisor_id,
+        },
+        context=context,
+        actor_type="user",
+        actor_id=request.supervisor_id,
+    )
+    await realtime_manager.broadcast(
+        context.organization_id,
+        _realtime_event(
+            "ticket.updated",
+            updated,
+            organization_id=context.organization_id,
+        ),
+    )
+    return _attach_memory_context(updated, context=context)
 
 
 @app.get("/conversations/{conversation_id}", response_model=ConversationRecord)
@@ -2774,6 +2951,175 @@ async def resolve_chatwoot_conversation(
     return saved
 
 
+async def _approve_send_ghl(
+    record: ConversationRecord,
+    content: str,
+    request: ApprovalRequest,
+    settings: Settings,
+    context: StoreContext,
+) -> ConversationRecord:
+    """Supervisor-approved send for a GHL-sourced conversation.
+
+    Routes the approved reply through ``GhlAdapter.send_outbound`` (rebuilt NormalizedInbound
+    carries ``record.provider_conversation_id`` so the send lands in the right GHL conversation),
+    runs the ``ghl.messages.send_approved`` tool policy, records the tool execution + approval,
+    and broadcasts the update. Mirrors the Chatwoot approve-send shape but skips the
+    Chatwoot-only ``can_reply`` 409. Provider-agnostic ``store.record_approval`` handles the
+    ``sent``/``send_failed`` audit.
+    """
+    adapter = get_adapter("ghl")
+    normalized = NormalizedInbound(
+        provider="ghl",
+        provider_conversation_id=record.provider_conversation_id,
+        provider_message_id=None,
+        customer_name=record.customer_name,
+        channel=record.channel or "sms",
+        message_text=record.incoming_message,
+        event_type=None,
+        raw_payload={},
+        extra={},
+    )
+    _log_event(
+        logging.INFO,
+        "ghl.send.attempt",
+        "Supervisor approved reply; attempting GHL send.",
+        sagad_conversation_id=record.id,
+        provider_conversation_id=record.provider_conversation_id,
+    )
+    _record_diagnostic_event(
+        event_type="ghl.send.attempt",
+        summary="Supervisor approved reply; attempting GHL send.",
+        status_value="info",
+        conversation_id=record.id,
+        payload={
+            "provider_conversation_id": record.provider_conversation_id,
+            "supervisor_id": request.supervisor_id,
+            "edited": bool(request.edited_reply),
+        },
+        context=context,
+        actor_type="user",
+        actor_id=request.supervisor_id,
+    )
+    policy_decision = evaluate_tool_policy(
+        "ghl.messages.send_approved",
+        _ghl_policy_context(settings, record, approved=True),
+        registry=tool_manifest_registry,
+    )
+    if policy_decision.allowed:
+        result = await adapter.send_outbound(content, normalized, settings)
+        result = dict(result)  # SendResult -> plain dict for the helper paths below
+        plan, tool_result = _ghl_send_tool_result(record, result, content=content)
+        plan, tool_result = _attach_policy_metadata(
+            plan,
+            tool_result,
+            decision=policy_decision,
+            approved=True,
+            supervisor_id=request.supervisor_id,
+            risk_level=record.risk_level,
+        )
+    else:
+        result = {
+            "status": "blocked",
+            "detail": policy_decision.blocked_reason or "Send blocked by policy.",
+            "error_type": "policy_blocked",
+        }
+        plan, tool_result = _blocked_policy_tool_result(
+            tool_name="ghl.messages.send_approved",
+            action="send supervisor-approved reply",
+            args={
+                "provider_conversation_id": record.provider_conversation_id,
+                "content_preview": content[:160],
+            },
+            decision=policy_decision,
+            approved=True,
+            supervisor_id=request.supervisor_id,
+            risk_level=record.risk_level,
+        )
+    record.draft_reply = content
+    record.approval_status = "sent" if result["status"] in {"sent", "dry_run"} else "send_failed"
+    record.send_status = result["status"]
+    if all(existing.id != plan.id for existing in record.tool_plans):
+        record.tool_plans.append(plan)
+    if all(existing.id != tool_result.id for existing in record.tool_results):
+        record.tool_results.append(tool_result)
+    if result["status"] in {"sent", "dry_run"}:
+        record.messages.append(
+            ConversationMessageRecord(
+                sender_type="ai_agent",
+                body=content,
+                provider="ghl",
+                payload={
+                    "approval": "supervisor_approved",
+                    "send_status": result["status"],
+                    "tool_result_id": tool_result.id,
+                },
+            ),
+        )
+    record.updated_at = datetime.now(timezone.utc)
+    saved = store.save(record, context=context)
+    store.record_tool_execution(
+        plan,
+        tool_result,
+        conversation_id=saved.id,
+        context=context,
+    )
+    store.record_approval(
+        saved,
+        supervisor_id=request.supervisor_id,
+        approved=True,
+        edited_reply=request.edited_reply,
+        context=context,
+    )
+    if result["status"] in {"sent", "dry_run"}:
+        saved = _append_lifecycle_memory(saved, lifecycle_event="approved_send", context=context)
+    else:
+        saved = _attach_memory_context(saved, context=context)
+    event_status = "success" if result["status"] in {"sent", "dry_run"} else "error"
+    event_type = (
+        "ghl.send.succeeded"
+        if result["status"] == "sent"
+        else "ghl.send.dry_run"
+        if result["status"] == "dry_run"
+        else "ghl.send.failed"
+    )
+    log_level = logging.INFO if event_status != "error" else logging.ERROR
+    _log_event(
+        log_level,
+        event_type,
+        str(result.get("detail", "GHL send completed.")),
+        sagad_conversation_id=saved.id,
+        provider_conversation_id=saved.provider_conversation_id,
+        send_status=saved.send_status,
+        http_status=result.get("http_status"),
+        error_type=result.get("error_type"),
+    )
+    _record_diagnostic_event(
+        event_type=event_type,
+        summary=str(result.get("detail", "GHL send completed.")),
+        status_value=event_status,
+        conversation_id=saved.id,
+        payload={
+            "send_status": saved.send_status,
+            "approval_status": saved.approval_status,
+            "tool_result_id": tool_result.id,
+            "provider_result": _ghl_tool_payload(result),
+            "policy_metadata": tool_result.data.get("policy_metadata"),
+        },
+        context=context,
+        actor_type="user",
+        actor_id=request.supervisor_id,
+    )
+    await realtime_manager.broadcast(
+        context.organization_id,
+        _realtime_event(
+            "approval.updated",
+            saved,
+            organization_id=context.organization_id,
+        ),
+    )
+    return saved
+
+
 @app.post("/conversations/{conversation_id}/approve-send", response_model=ConversationRecord)
 async def approve_send(
     conversation_id: str,
@@ -2814,6 +3160,17 @@ async def approve_send(
         raise HTTPException(status_code=409, detail="Conversation is not waiting for approval.")
 
     content = request.edited_reply or record.draft_reply
+    # Provider dispatch: a GHL-sourced conversation (provider_conversation_id set, no Chatwoot
+    # context) routes through the GHL adapter's send_outbound. Everything else uses the existing
+    # Chatwoot send path verbatim below, so all Chatwoot approve-send behavior is unchanged.
+    if (
+        record.provider_conversation_id
+        and not record.chatwoot_conversation_id
+        and not record.chatwoot_context
+    ):
+        settings = configured_settings(get_settings(), context)
+        return await _approve_send_ghl(record, content, request, settings, context)
+
     if record.chatwoot_context and record.chatwoot_context.can_reply is False:
         _record_diagnostic_event(
             event_type="chatwoot.send.blocked",

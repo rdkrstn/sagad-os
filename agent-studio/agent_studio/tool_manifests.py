@@ -15,6 +15,7 @@ DEFAULT_TOOL_NAMES = [
     "crm.update_lead_stage",
     "chatwoot.messages.send_approved",
     "chatwoot.conversations.resolve",
+    "ghl.messages.send_approved",
 ]
 
 
@@ -159,6 +160,23 @@ def _default_manifests() -> list[ToolManifest]:
             requires_approval=True,
             description="Resolve a Chatwoot conversation after supervisor action.",
             input_schema=_schema({"conversation_id": {"type": "string"}}, ["conversation_id"]),
+        ),
+        ToolManifest(
+            tool_name="ghl.messages.send_approved",
+            provider="GHL",
+            skill_name="create_approval_item",
+            mode="write",
+            risk_level="medium",
+            allowed_agents=support_sales,
+            requires_approval=True,
+            description="Send the supervisor-approved reply to a GoHighLevel conversation.",
+            input_schema=_schema(
+                {
+                    "conversation_id": {"type": "string"},
+                    "edited_reply": {"type": "string"},
+                },
+                ["conversation_id"],
+            ),
         ),
     ]
 

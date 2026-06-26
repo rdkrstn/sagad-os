@@ -24,6 +24,7 @@ def test_mcp_descriptors_expose_only_enabled_policy_wrapped_tools() -> None:
         "crm.update_lead_stage",
         "chatwoot.messages.send_approved",
         "chatwoot.conversations.resolve",
+        "ghl.messages.send_approved",
     }
     for descriptor in descriptors:
         assert descriptor.enabled is True

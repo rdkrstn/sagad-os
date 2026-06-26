@@ -25,6 +25,7 @@ from agent_studio.schemas import (
     ConversationRecord,
     CrmContactContext,
     DiagnosticEvent,
+    IntegrationSyncState,
     MemoryHit,
     QaFinding,
     ToolPlan,
@@ -61,7 +62,14 @@ EVAL_RESULT_STATUSES = {"passed", "failed", "errored", "skipped"}
 class ConversationStoreProtocol(Protocol):
     backend_name: str
 
-    def list(self, context: StoreContext | None = None) -> list[ConversationRecord]:
+    def list(
+        self,
+        context: StoreContext | None = None,
+        *,
+        ticket_status: str | None = None,
+        assignee: str | None = None,
+        priority: str | None = None,
+    ) -> list[ConversationRecord]:
         ...
 
     def get(
@@ -76,6 +84,19 @@ class ConversationStoreProtocol(Protocol):
         record: ConversationRecord,
         context: StoreContext | None = None,
     ) -> ConversationRecord:
+        ...
+
+    def update_ticket(
+        self,
+        conversation_id: str,
+        *,
+        ticket_status: str | None = None,
+        assignee: str | None = None,
+        priority: str | None = None,
+        pipeline_stage: str | None = None,
+        sla_due_at: datetime | None = None,
+        context: StoreContext | None = None,
+    ) -> ConversationRecord | None:
         ...
 
     def record_approval(
@@ -183,6 +204,22 @@ class ConversationStoreProtocol(Protocol):
         limit: int = 100,
         context: StoreContext | None = None,
     ) -> list[DiagnosticEvent]:
+        ...
+
+    def get_sync_state(
+        self,
+        provider: str,
+        *,
+        context: StoreContext | None = None,
+    ) -> IntegrationSyncState | None:
+        ...
+
+    def save_sync_state(
+        self,
+        state: IntegrationSyncState,
+        *,
+        context: StoreContext | None = None,
+    ) -> IntegrationSyncState:
         ...
 
     def clear(self) -> None:
@@ -570,13 +607,53 @@ class InMemoryConversationStore:
         self._memory: dict[str, list[MemoryHit]] = {}
         self._eval_runs: dict[str, dict[str, object]] = {}
         self._eval_results: dict[str, dict[str, dict[str, object]]] = {}
+        # Per-(organization_id, provider) poller watermark rows (integration_sync_state).
+        self._sync_state: dict[tuple[str | None, str], IntegrationSyncState] = {}
 
-    def list(self, context: StoreContext | None = None) -> list[ConversationRecord]:
-        return sorted(
-            self._records.values(),
-            key=lambda record: record.updated_at,
-            reverse=True,
-        )
+    def list(
+        self,
+        context: StoreContext | None = None,
+        *,
+        ticket_status: str | None = None,
+        assignee: str | None = None,
+        priority: str | None = None,
+    ) -> list[ConversationRecord]:
+        records = list(self._records.values())
+        if ticket_status:
+            records = [r for r in records if r.ticket_status == ticket_status]
+        if assignee:
+            records = [r for r in records if r.assignee == assignee]
+        if priority:
+            records = [r for r in records if r.priority == priority]
+        return sorted(records, key=lambda record: record.updated_at, reverse=True)
+
+    def update_ticket(
+        self,
+        conversation_id: str,
+        *,
+        ticket_status: str | None = None,
+        assignee: str | None = None,
+        priority: str | None = None,
+        pipeline_stage: str | None = None,
+        sla_due_at: datetime | None = None,
+        context: StoreContext | None = None,
+    ) -> ConversationRecord | None:
+        record = self._records.get(conversation_id)
+        if record is None:
+            return None
+        if ticket_status is not None:
+            record.ticket_status = ticket_status  # type: ignore[assignment]
+        if assignee is not None:
+            record.assignee = assignee
+        if priority is not None:
+            record.priority = priority  # type: ignore[assignment]
+        if pipeline_stage is not None:
+            record.pipeline_stage = pipeline_stage
+        if sla_due_at is not None:
+            record.sla_due_at = sla_due_at
+        record.updated_at = _now()
+        self._records[conversation_id] = record
+        return record
 
     def get(
         self,
@@ -596,6 +673,15 @@ class InMemoryConversationStore:
         if existing is not None:
             record.created_at = existing.created_at
             record.messages = _merge_messages(existing.messages, incoming_messages)
+            # Preserve RevOps ticket fields across inbound re-saves. The inbound pipeline never
+            # manages tickets (only the PATCH endpoint does, via update_ticket), so a fresh
+            # record with default ticket fields must not overwrite a supervisor's assignment.
+            # Mirrors the Postgres store, where ticket columns are absent from ON CONFLICT DO UPDATE.
+            record.ticket_status = existing.ticket_status
+            record.assignee = existing.assignee
+            record.priority = existing.priority
+            record.pipeline_stage = existing.pipeline_stage
+            record.sla_due_at = existing.sla_due_at
         else:
             record.messages = _merge_messages([], incoming_messages)
         self._records[record.id] = record
@@ -833,12 +919,34 @@ class InMemoryConversationStore:
             events = [event for event in events if event.conversation_id == conversation_id]
         return sorted(events, key=lambda event: event.created_at, reverse=True)[:limit]
 
+    def get_sync_state(
+        self,
+        provider: str,
+        *,
+        context: StoreContext | None = None,
+    ) -> IntegrationSyncState | None:
+        scoped = context or DEFAULT_CONTEXT
+        return self._sync_state.get((scoped.organization_id, provider))
+
+    def save_sync_state(
+        self,
+        state: IntegrationSyncState,
+        *,
+        context: StoreContext | None = None,
+    ) -> IntegrationSyncState:
+        scoped = context or DEFAULT_CONTEXT
+        state.organization_id = scoped.organization_id
+        state.updated_at = _now()
+        self._sync_state[(scoped.organization_id, state.provider)] = state
+        return state
+
     def clear(self) -> None:
         self._records.clear()
         self._events.clear()
         self._memory.clear()
         self._eval_runs.clear()
         self._eval_results.clear()
+        self._sync_state.clear()
 
 
 class PostgresConversationStore:
@@ -850,10 +958,28 @@ class PostgresConversationStore:
         # Non-fatal: a slow/unreachable DB at construction must not kill the process.
         initialize_database_safe(settings)
 
-    def list(self, context: StoreContext | None = None) -> list[ConversationRecord]:
+    def list(
+        self,
+        context: StoreContext | None = None,
+        *,
+        ticket_status: str | None = None,
+        assignee: str | None = None,
+        priority: str | None = None,
+    ) -> list[ConversationRecord]:
         with connect(self.settings) as connection:
             scoped = resolve_trusted_context(connection, _trusted_context(context))
             set_app_context(connection, scoped)
+            where = ["organization_id = %s"]
+            params: list[object] = [scoped.organization_id]
+            if ticket_status:
+                where.append("ticket_status = %s")
+                params.append(ticket_status)
+            if assignee:
+                where.append("assignee = %s")
+                params.append(assignee)
+            if priority:
+                where.append("priority = %s")
+                params.append(priority)
             rows = connection.execute(
                 """
                 SELECT
@@ -879,12 +1005,70 @@ class PostgresConversationStore:
                     '[]'::jsonb
                   ) AS messages
                 FROM conversations
-                WHERE organization_id = %s
+                WHERE """ + " AND ".join(where) + """
                 ORDER BY updated_at DESC
                 """,
-                (scoped.organization_id,),
+                tuple(params),
             ).fetchall()
             return [self._record_from_row(row) for row in rows]
+
+    def update_ticket(
+        self,
+        conversation_id: str,
+        *,
+        ticket_status: str | None = None,
+        assignee: str | None = None,
+        priority: str | None = None,
+        pipeline_stage: str | None = None,
+        sla_due_at: datetime | None = None,
+        context: StoreContext | None = None,
+    ) -> ConversationRecord | None:
+        sets: list[str] = []
+        params: list[object] = []
+        if ticket_status is not None:
+            sets.append("ticket_status = %s")
+            params.append(ticket_status)
+        if assignee is not None:
+            sets.append("assignee = %s")
+            params.append(assignee)
+        if priority is not None:
+            sets.append("priority = %s")
+            params.append(priority)
+        if pipeline_stage is not None:
+            sets.append("pipeline_stage = %s")
+            params.append(pipeline_stage)
+        if sla_due_at is not None:
+            sets.append("sla_due_at = %s")
+            params.append(sla_due_at)
+        if not sets:
+            return self.get(conversation_id, context=context)
+        sets.append("updated_at = now()")
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            cursor = connection.execute(
+                "UPDATE conversations SET " + ", ".join(sets) + """
+                WHERE organization_id = %s AND id = %s
+                """,
+                (*params, scoped.organization_id, conversation_id),
+            )
+            if cursor.rowcount:
+                self._record_audit_event(
+                    connection,
+                    organization_id=scoped.organization_id,
+                    conversation_id=conversation_id,
+                    actor_type=_audit_actor_type(scoped.role),
+                    actor_id=scoped.user_id,
+                    event_type="ticket.updated",
+                    payload={
+                        "ticket_status": ticket_status,
+                        "assignee": assignee,
+                        "priority": priority,
+                        "pipeline_stage": pipeline_stage,
+                    },
+                )
+            connection.commit()
+        return self.get(conversation_id, context=context)
 
     def get(
         self,
@@ -949,6 +1133,7 @@ class PostgresConversationStore:
                   organization_id,
                   chatwoot_conversation_id,
                   chatwoot_message_id,
+                  provider_conversation_id,
                   customer_name,
                   channel,
                   incoming_message,
@@ -970,6 +1155,11 @@ class PostgresConversationStore:
                   compliance_status,
                   approval_status,
                   send_status,
+                  ticket_status,
+                  assignee,
+                  priority,
+                  pipeline_stage,
+                  sla_due_at,
                   trace_url,
                   eval_tags,
                   trace_attributes,
@@ -991,6 +1181,7 @@ class PostgresConversationStore:
                   %(organization_id)s,
                   %(chatwoot_conversation_id)s,
                   %(chatwoot_message_id)s,
+                  %(provider_conversation_id)s,
                   %(customer_name)s,
                   %(channel)s,
                   %(incoming_message)s,
@@ -1012,6 +1203,11 @@ class PostgresConversationStore:
                   %(compliance_status)s,
                   %(approval_status)s,
                   %(send_status)s,
+                  %(ticket_status)s,
+                  %(assignee)s,
+                  %(priority)s,
+                  %(pipeline_stage)s,
+                  %(sla_due_at)s,
                   %(trace_url)s,
                   %(eval_tags)s,
                   %(trace_attributes)s,
@@ -1031,6 +1227,7 @@ class PostgresConversationStore:
                 ON CONFLICT (id) DO UPDATE SET
                   chatwoot_conversation_id = EXCLUDED.chatwoot_conversation_id,
                   chatwoot_message_id = EXCLUDED.chatwoot_message_id,
+                  provider_conversation_id = EXCLUDED.provider_conversation_id,
                   customer_name = EXCLUDED.customer_name,
                   channel = EXCLUDED.channel,
                   incoming_message = EXCLUDED.incoming_message,
@@ -1549,6 +1746,64 @@ class PostgresConversationStore:
                 ).fetchall()
         return [_diagnostic_event_from_row(row) for row in rows]
 
+    def get_sync_state(
+        self,
+        provider: str,
+        *,
+        context: StoreContext | None = None,
+    ) -> IntegrationSyncState | None:
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            row = connection.execute(
+                """
+                SELECT organization_id::text AS organization_id,
+                       provider,
+                       updated_since,
+                       payload,
+                       updated_at
+                FROM integration_sync_state
+                WHERE organization_id = %s
+                  AND provider = %s
+                """,
+                (scoped.organization_id, provider),
+            ).fetchone()
+        if row is None:
+            return None
+        return IntegrationSyncState(
+            organization_id=row["organization_id"],
+            provider=row["provider"],
+            updated_since=int(row["updated_since"] or 0),
+            payload=_json_dict(row["payload"]),
+            updated_at=_coerce_datetime(row["updated_at"]),
+        )
+
+    def save_sync_state(
+        self,
+        state: IntegrationSyncState,
+        *,
+        context: StoreContext | None = None,
+    ) -> IntegrationSyncState:
+        with connect(self.settings) as connection:
+            scoped = resolve_trusted_context(connection, _trusted_context(context))
+            set_app_context(connection, scoped)
+            payload_json = Jsonb(state.payload or {})
+            connection.execute(
+                """
+                INSERT INTO integration_sync_state
+                    (organization_id, provider, updated_since, payload, updated_at)
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (organization_id, provider) DO UPDATE
+                SET updated_since = EXCLUDED.updated_since,
+                    payload = EXCLUDED.payload,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (scoped.organization_id, state.provider, int(state.updated_since), payload_json),
+            )
+            connection.commit()
+        state.organization_id = scoped.organization_id
+        return state
+
     def clear(self) -> None:
         with connect(self.settings) as connection:
             connection.execute("TRUNCATE conversation_summaries CASCADE")
@@ -1647,6 +1902,7 @@ class PostgresConversationStore:
             "id": row["id"],
             "chatwoot_conversation_id": row["chatwoot_conversation_id"],
             "chatwoot_message_id": row["chatwoot_message_id"],
+            "provider_conversation_id": row.get("provider_conversation_id"),
             "customer_name": row["customer_name"],
             "channel": row["channel"],
             "incoming_message": row["incoming_message"],
@@ -1668,6 +1924,11 @@ class PostgresConversationStore:
             "compliance_status": row["compliance_status"],
             "approval_status": row["approval_status"],
             "send_status": row["send_status"],
+            "ticket_status": row.get("ticket_status", "open"),
+            "assignee": row.get("assignee"),
+            "priority": row.get("priority"),
+            "pipeline_stage": row.get("pipeline_stage"),
+            "sla_due_at": _coerce_optional_datetime(row.get("sla_due_at")),
             "trace_url": row["trace_url"],
             "eval_tags": _json_list(row.get("eval_tags")),
             "trace_attributes": _json_dict(row.get("trace_attributes")),
@@ -1699,6 +1960,7 @@ class PostgresConversationStore:
             "organization_id": organization_id,
             "chatwoot_conversation_id": record.chatwoot_conversation_id,
             "chatwoot_message_id": record.chatwoot_message_id,
+            "provider_conversation_id": getattr(record, "provider_conversation_id", None),
             "customer_name": record.customer_name,
             "channel": record.channel,
             "incoming_message": record.incoming_message,
@@ -1726,6 +1988,11 @@ class PostgresConversationStore:
             "compliance_status": record.compliance_status,
             "approval_status": record.approval_status,
             "send_status": record.send_status,
+            "ticket_status": getattr(record, "ticket_status", "open"),
+            "assignee": getattr(record, "assignee", None),
+            "priority": getattr(record, "priority", None),
+            "pipeline_stage": getattr(record, "pipeline_stage", None),
+            "sla_due_at": getattr(record, "sla_due_at", None),
             "trace_url": record.trace_url,
             "eval_tags": Jsonb(quality_values["eval_tags"]),
             "trace_attributes": Jsonb(quality_values["trace_attributes"]),
@@ -2184,8 +2451,20 @@ class StoreProxy:
             self._database_url = database_url
         return self._store
 
-    def list(self, context: StoreContext | None = None) -> list[ConversationRecord]:
-        return self._current().list(context=context)
+    def list(
+        self,
+        context: StoreContext | None = None,
+        *,
+        ticket_status: str | None = None,
+        assignee: str | None = None,
+        priority: str | None = None,
+    ) -> list[ConversationRecord]:
+        return self._current().list(
+            context=context,
+            ticket_status=ticket_status,
+            assignee=assignee,
+            priority=priority,
+        )
 
     def get(
         self,
@@ -2200,6 +2479,27 @@ class StoreProxy:
         context: StoreContext | None = None,
     ) -> ConversationRecord:
         return self._current().save(record, context=context)
+
+    def update_ticket(
+        self,
+        conversation_id: str,
+        *,
+        ticket_status: str | None = None,
+        assignee: str | None = None,
+        priority: str | None = None,
+        pipeline_stage: str | None = None,
+        sla_due_at: datetime | None = None,
+        context: StoreContext | None = None,
+    ) -> ConversationRecord | None:
+        return self._current().update_ticket(
+            conversation_id,
+            ticket_status=ticket_status,
+            assignee=assignee,
+            priority=priority,
+            pipeline_stage=pipeline_stage,
+            sla_due_at=sla_due_at,
+            context=context,
+        )
 
     def record_approval(
         self,
@@ -2354,6 +2654,22 @@ class StoreProxy:
 
     def clear(self) -> None:
         return self._current().clear()
+
+    def get_sync_state(
+        self,
+        provider: str,
+        *,
+        context: StoreContext | None = None,
+    ) -> IntegrationSyncState | None:
+        return self._current().get_sync_state(provider, context=context)
+
+    def save_sync_state(
+        self,
+        state: IntegrationSyncState,
+        *,
+        context: StoreContext | None = None,
+    ) -> IntegrationSyncState:
+        return self._current().save_sync_state(state, context=context)
 
 
 ConversationStore = InMemoryConversationStore
