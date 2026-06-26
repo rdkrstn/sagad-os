@@ -12,12 +12,15 @@ Required jobs:
 
 - Security scan: `gitleaks` secret scan plus Trivy filesystem scan for high and critical vulnerabilities.
 - Frontend: `npm ci`, production dependency audit, `npm run lint`, `npx tsc --noEmit --pretty false`, and `npm run build`.
-- Agent Studio: Python 3.12, `uv sync`, pgvector migration smoke check, and `uv run pytest` with the optional Postgres persistence test enabled.
-- OCR runtime: the Agent Studio job installs `poppler-utils`, `tesseract-ocr`, and `tesseract-ocr-eng` before tests so scanned-PDF ingestion paths are covered.
+- Backend tests (`backend-tests`): Python 3.12, `uv sync --frozen`, and `uv run python -m pytest` with `DATABASE_URL="" LLM_MODE=dry_run` (credential-free, no Postgres, no GPU).
+- OCR runtime: the backend-tests job installs `poppler-utils`, `tesseract-ocr`, and `tesseract-ocr-eng` before tests so scanned-PDF ingestion paths are covered.
 - Container builds: Docker Buildx builds both runtime images, loads them locally, and scans each image with Trivy.
-- Compose smoke: validates `compose.vps.example.yaml`, boots Sagad Postgres, Agent Studio, and the Console, then verifies `/health`, `/health/live`, `/health/ready`, and console-to-Agent-Studio internal connectivity.
+- Compose smoke: validates `compose.vps.example.yaml`, boots Sagad Postgres, Agent Studio, and the Console, polls `/health/ready` with fast-fail diagnostics, then verifies `/health`, `/health/live`, `/health/ready`, and console-to-Agent-Studio internal connectivity.
+- Dev E2E (`dev-e2e`): boots compose with `LLM_MODE=dry_run` and runs `scripts/dev-e2e.sh` — the full live roundtrip (Chatwoot + GHL webhooks, conversation persistence + traces, draft SSE stream, agents CRUD, knowledge search). Must be `ALL GREEN`. See [`ci-and-e2e.md`](./ci-and-e2e.md).
 
-If the compose smoke test fails, CI prints service status and logs for `sagad-db`, `agent-studio`, and `sagad-console`.
+If the compose smoke or dev-e2e test fails, CI prints the Agent Studio health-check log, service status (`compose ps --format json`), and the last 120 log lines for `sagad-db`, `agent-studio`, and `sagad-console` so an unhealthy container says *why*.
+
+Branch protection should require: `lint-and-test`, `containers`, `backend-tests`, `compose-smoke`, and `dev-e2e`.
 
 ## Release Gate
 

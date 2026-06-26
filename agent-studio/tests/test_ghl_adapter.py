@@ -161,8 +161,12 @@ async def test_send_mcp_mode_is_honest_stub(adapter: GhlAdapter, patch_settings)
     patch_settings(settings)
     normalized = adapter.normalize(_ghl_payload())
     result = await adapter.send_outbound("reply", normalized, settings)
+    # The MCP gateway is descriptor-only by design (no executor runtime), so MCP mode is
+    # an honest dry-run that names the descriptor it WOULD invoke — never a fabricated send.
     assert result["status"] == "dry_run"
     assert "MCP" in result["detail"]
+    assert result["target_url"].startswith("mcp://ghl.messages.send")
+    assert "conversationId=conv-abc" in result["target_url"]
 
 
 @pytest.mark.asyncio

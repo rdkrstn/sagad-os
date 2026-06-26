@@ -44,3 +44,26 @@ Operators can regenerate drafts and watch tokens stream in real-time in the supe
 * **Endpoint**: `GET /conversations/{conversation_id}/draft/stream` returns an SSE event stream (`text/event-stream`).
 * **Regeneration UI**: Conversations with existing drafts display a **Regenerate** button in the draft panel. Clicking it triggers the streaming endpoint and progressively renders the tokens into the draft textarea.
 * **Persistence**: Once the stream completes, the final text draft is persisted to the conversation database.
+
+## Inbound Channels: Universal Webhook
+
+Inbound messages arrive through a universal webhook pipeline behind a `ChannelAdapter`
+registry, so new providers plug in without touching the graph. See
+[`docs/universal-webhook.md`](./universal-webhook.md) for the full pipeline + sequence
+diagram, and [`docs/adapters/ghl.md`](./adapters/ghl.md) for the GHL worked example.
+
+* **`POST /webhooks/{provider}`** — universal route; dispatches to
+  `adapters.registry.get_adapter(provider)` (verify → normalize → dedup → `graph.ainvoke`
+  → auto-send gate → persist). Unknown provider → 404.
+* **`POST /webhooks/chatwoot`** — dedicated Chatwoot route, preserved unchanged so its
+  synchronous `ConversationRecord` contract (and tests) stay green.
+* **Debouncing** (opt-in, `WEBHOOK_DEBOUNCE_ENABLED=false` by default) coalesces a burst of
+  messages on the same conversation into one graph run; returns `202 debounced` when enabled.
+* **Traces** — `trace_attributes` is persisted on each conversation; per-stage diagnostic
+  events are visible at `/diagnostics/events`; `trace_url` is non-null when LangSmith
+  tracing is enabled.
+
+The "two included agents vs dynamic CRUD" tension is intentional: the two seeded agents
+(Sales, Support) are the v0.1 routing targets, while CRUD (`POST /agents`, `DELETE
+/agents/{id}`) lets supervisors add/refine agents without a redeploy. The deterministic
+router maps classifier intents to whatever agents the registry currently holds.

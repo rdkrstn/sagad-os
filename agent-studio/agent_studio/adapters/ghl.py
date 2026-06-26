@@ -161,13 +161,21 @@ class GhlAdapter(ChannelAdapter):
             )
 
         if settings.ghl_outbound_mode.lower() == "mcp":
-            # MCP auto-send executor is a follow-up; surface a clear, honest status rather
-            # than silently no-op'ing. Configure GHL_OUTBOUND_MODE=webhook to send live.
+            # The Agent Studio MCP gateway is descriptor-only by design (mcp_gateway.py
+            # builds redacted tool descriptors; it has no execution runtime and exposes no
+            # provider credentials). So MCP-mode outbound is an honest dry-run that names
+            # the descriptor the supervisor WOULD invoke once an executor exists, rather
+            # than silently no-op'ing or fabricating a send. Set GHL_OUTBOUND_MODE=webhook
+            # to send live today; an MCP executor is a tracked follow-up (see docs/adapters/ghl.md).
             return SendResult(
                 status="dry_run",
                 provider="GHL",
                 action=action,
-                detail="GHL MCP auto-send executor is not wired yet; set GHL_OUTBOUND_MODE=webhook to send.",
+                target_url=f"mcp://ghl.messages.send?conversationId={conversation_id}",
+                detail=(
+                    "GHL MCP outbound is descriptor-only (no executor runtime yet); "
+                    "not sent. Set GHL_OUTBOUND_MODE=webhook to send live."
+                ),
             )
 
         base_url = str(settings.ghl_base_url).rstrip("/")
