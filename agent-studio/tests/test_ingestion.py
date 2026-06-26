@@ -519,6 +519,12 @@ def test_embedding_failure_returns_readable_error(
 
 
 def test_extract_pdf_with_docling_mocked(monkeypatch) -> None:
+    # docling is an optional dependency group (not installed in CI / not in the default
+    # `uv sync`). This test mocks the docling converter, but monkeypatch.setattr still has to
+    # import `docling.document_converter` to resolve the attribute path — so skip cleanly when
+    # the optional extra is absent. The production path (_extract_pdf_with_docling) degrades
+    # to a docling_unavailable ExtractionError without the package, unit-tested separately.
+    pytest.importorskip("docling")
     from unittest.mock import MagicMock
 
     mock_converter = MagicMock()
