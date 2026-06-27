@@ -206,16 +206,18 @@ class GhlPoller:
         self._stop.set()
 
     def _resolved_settings(self) -> Settings:
-        """DB-backed GHL config (superadmin console) over env, refreshed each cycle.
+        """DB-backed GHL config (superadmin console) over the poller's base settings, refreshed each cycle.
 
-        ``context=system`` resolves the default organization (single-location GHL today).
-        Env is the fallback when no ``ghl`` row is stored, so env-only deployments keep
-        working unchanged.
+        The base is ``self.settings`` (the settings the poller was constructed with — in
+        production that's ``get_settings()`` captured at lifespan startup). The DB-backed
+        ``integration_config`` store overlays it each cycle, so superadmin console edits take
+        effect without a restart. ``context=system`` resolves the default organization
+        (single-location GHL today). When no ``ghl`` row is stored, the base settings pass
+        through unchanged, so env-only deployments keep working.
         """
-        from agent_studio.config import get_settings
         from agent_studio.integration_config import configured_settings
 
-        return configured_settings(get_settings(), context=_system_context())
+        return configured_settings(self.settings, context=_system_context())
 
     async def run(self) -> None:
         interval = max(1.0, float(self._resolved_settings().ghl_poll_interval_seconds))
