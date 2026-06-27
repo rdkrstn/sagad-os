@@ -27,6 +27,11 @@ def _in_memory_store(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("agent_studio.main.integration_config_store", store)
     monkeypatch.setattr("agent_studio.integration_config.model_provider_config_store", mp_store)
     monkeypatch.setattr("agent_studio.main.model_provider_config_store", mp_store)
+    # Isolate from the real .env: default to the "none" provider so the default-behavior
+    # tests below are deterministic regardless of what MODEL_PROVIDER the dev .env sets.
+    # Tests that exercise a real provider override this via _setenv(...).
+    monkeypatch.setenv("MODEL_PROVIDER", "none")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "none")
     get_settings.cache_clear()
     yield mp_store
 
