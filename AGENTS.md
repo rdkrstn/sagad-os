@@ -24,6 +24,22 @@ Run backend commands from `agent-studio/`:
 - `uv run pytest`: run Agent Studio tests.
 - `uv run uvicorn agent_studio.main:app --reload --port 8010`: start the dev API.
 
+## Code Navigation (graphify)
+
+Before searching or reading the codebase, consult the graphify code graph instead of blind Glob/Grep. The graph is a structural AST index of what symbols exist, where they live, and how they connect.
+
+The index lives at `graphify-out/graph.json` (gitignored — it is regenerated locally). If that file does not exist, build it once with `graphify update .` (full re-extract; no LLM needed). The CLI is `graphify-ts` (`npm i -g graphify-ts`).
+
+Use it every time you need to locate or understand code:
+
+- Find symbols by name: `graphify query graphify-out/graph.json <name>` (case-insensitive; returns symbols with file + line + community).
+- Explain a node and its neighbors in plain language: `graphify explain "<symbol>"`.
+- Shortest path between two symbols: `graphify path "A" "B"`.
+- After editing files you will query again in the same session, refresh the graph: `graphify update .` for a full pass, or `graphify auto-update` to re-extract only files changed per `git diff` + untracked files.
+- Supported languages: Python, JavaScript, TypeScript (JSX/TSX), Go, Rust, Java, C, C++, Ruby, C#, Kotlin, Scala, PHP.
+
+Prefer a `graphify query` over a keyword Grep when you know the symbol or concept you are looking for. Fall back to Glob/Grep only when the graph is missing or the search is text/content-based rather than structural.
+
 ## Coding Style & Naming Conventions
 
 Frontend code uses TypeScript, React, Tailwind, and explicit interfaces. Do not use TypeScript `any`. Keep route files thin and put reusable panels under `v1/src/components/`, adapters under `v1/src/lib/api/`, domain types under `v1/src/lib/domain/`, and fixtures under `v1/src/lib/mocks/`.

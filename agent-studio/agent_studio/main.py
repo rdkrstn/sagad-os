@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import datetime, timezone
 import asyncio
 import logging
@@ -36,6 +37,15 @@ from agent_studio.integration_config import (
 from agent_studio.ingestion import KnowledgeIngestionService, build_knowledge_ingestion_store
 from agent_studio.memory_workflow import memory_items_from_record
 from agent_studio.mcp_gateway import build_mcp_descriptors
+from agent_studio.model_config import (
+    provider_status,
+    resolve_chat_config,
+    resolve_embedding_config,
+)
+from agent_studio.model_provider_config import (
+    model_provider_config_store,
+    model_provider_config_view,
+)
 from agent_studio.observability import aggregate_ai_ops_metrics, sanitize_payload
 from agent_studio.realtime import realtime_manager, verify_realtime_token
 from agent_studio.retrieval import retriever
@@ -64,6 +74,7 @@ from agent_studio.schemas import (
     IntegrationConnectionUpsertRequest,
     IntegrationListResponse,
     IntegrationProvider,
+    ModelProviderConfigUpsertRequest,
     KnowledgeDocumentListResponse,
     KnowledgeDocumentRecord,
     KnowledgeIngestionJobCreateRequest,
@@ -1536,6 +1547,124 @@ def test_integration_config(
         detail=detail,
         connection=connection,
     )
+
+
+def _test_chat_provider(settings: Settings) -> dict[str, object]:
+    cfg = resolve_chat_config(settings)
+    if not cfg.configured:
+        return {"ok": False, "detail": cfg.detail or "No chat provider configured.", "model": cfg.model}
+    try:
+        import litellm
+
+        kwargs: dict[str, object] = {
+            "model": cfg.model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }
+        if cfg.api_base:
+            kwargs["api_base"] = cfg.api_base
+        if cfg.api_key:
+            kwargs["api_key"] = cfg.api_key
+        litellm.completion(**kwargs)
+        return {"ok": True, "detail": f"Chat reachable via {cfg.provider}.", "model": cfg.model}
+    except Exception as exc:  # noqa: BLE001 - test endpoint must report, never raise
+        return {
+            "ok": False,
+            "detail": f"Chat test failed: {exc.__class__.__name__}: {exc}",
+            "model": cfg.model,
+        }
+
+
+def _test_embedding_provider(settings: Settings) -> dict[str, object]:
+    cfg = resolve_embedding_config(settings)
+    if not cfg.configured:
+        return {"ok": False, "detail": cfg.detail or "No embedding provider configured.", "model": cfg.model}
+    headers = {"Content-Type": "application/json"}
+    if cfg.api_key:
+        headers["Authorization"] = f"Bearer {cfg.api_key}"
+    try:
+        with httpx.Client(timeout=10) as client:
+            response = client.post(
+                f"{cfg.base_url}/embeddings",
+                headers=headers,
+                json={"model": cfg.model, "input": "test", "encoding_format": "float"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        ok = isinstance(data, list) and bool(data) and isinstance(data[0].get("embedding"), list)
+        return {
+            "ok": bool(ok),
+            "detail": "Embedding endpoint reachable." if ok else "Embedding response missing vector.",
+            "model": cfg.model,
+        }
+    except Exception as exc:  # noqa: BLE001 - test endpoint must report, never raise
+        return {
+            "ok": False,
+            "detail": f"Embedding test failed: {exc.__class__.__name__}",
+            "model": cfg.model,
+        }
+
+
+@app.get("/model-providers")
+def list_model_providers(
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    _require_integration_admin(context)
+    settings = configured_settings(get_settings(), context)
+    chat_cfg = resolve_chat_config(settings)
+    embed_cfg = resolve_embedding_config(settings)
+    record = model_provider_config_store.get(context=context)
+    return {
+        "active": settings.model_provider or "none",
+        "embedding_active": embed_cfg.provider,
+        "chat_model": chat_cfg.model,
+        "embedding_model": embed_cfg.model if embed_cfg.configured else None,
+        "embedding_dimensions": embed_cfg.dimensions,
+        "providers": [asdict(status) for status in provider_status(settings)],
+        "config": model_provider_config_view(record, settings),
+    }
+
+
+@app.put("/model-providers")
+def update_model_providers(
+    request: ModelProviderConfigUpsertRequest,
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    _require_integration_admin(context)
+    record = model_provider_config_store.upsert(request, context=context)
+    settings = configured_settings(get_settings(), context)
+    return {
+        "active": settings.model_provider or "none",
+        "config": model_provider_config_view(record, settings),
+    }
+
+
+@app.post("/model-providers/test")
+def test_model_providers(
+    x_sagad_org_id: Annotated[str | None, Header()] = None,
+    x_sagad_user_id: Annotated[str | None, Header()] = None,
+    x_sagad_role: Annotated[str | None, Header()] = None,
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    _verify_internal_secret(x_sagad_internal_secret)
+    context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    _require_integration_admin(context)
+    settings = configured_settings(get_settings(), context)
+    return {
+        "chat": _test_chat_provider(settings),
+        "embedding": _test_embedding_provider(settings),
+    }
 
 
 @app.post("/knowledge/ingestion-jobs", response_model=KnowledgeIngestionJobResponse)

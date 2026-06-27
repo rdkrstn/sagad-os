@@ -129,6 +129,7 @@ const navSections: NavSection[] = [
     items: [
       { href: "/integrations", label: "Adapters", code: "AD", icon: PlugZap, status: "Adapters" },
       { href: "/settings", label: "Settings", code: "ST", icon: Settings, status: "Config" },
+      { href: "/superadmin", label: "SuperAdmin", code: "SA", icon: ShieldCheck, status: "Admin" },
     ],
   },
 ];
@@ -233,6 +234,12 @@ const routeMeta: Array<{ match: string; title: string; description: string }> = 
     match: "/settings",
     title: "Settings",
     description: "Runtime policy, approval thresholds, prompts, and developer payloads.",
+  },
+  {
+    match: "/superadmin",
+    title: "SuperAdmin",
+    description:
+      "Instance control plane: adapter connections, runtime toggles, members and roles, model gateway, and secrets policy.",
   },
 ];
 

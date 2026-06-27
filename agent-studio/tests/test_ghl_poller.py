@@ -20,6 +20,7 @@ import pytest
 
 from agent_studio.config import Settings
 from agent_studio.ghl_poller import GhlPoller, _RateLimited
+from agent_studio.integration_config import integration_config_store
 from agent_studio.store import store
 
 
@@ -82,6 +83,10 @@ def _patch_httpx(handler: Any) -> Any:
 
 def setup_function() -> None:
     store.clear()
+    # The poller resolves GHL config via `configured_settings`, which overlays the
+    # integration_config store. Clear it so leftover rows from other test modules can't
+    # flip ghl_configured or override the env-style settings each test builds via _settings().
+    integration_config_store.clear()
 
 
 @pytest.mark.asyncio

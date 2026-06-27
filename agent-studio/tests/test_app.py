@@ -1220,7 +1220,7 @@ def test_integration_configs_are_viewable_without_secrets() -> None:
     assert response.status_code == 200
     payload = response.json()
     providers = {item["provider"] for item in payload["connections"]}
-    assert providers == {"chatwoot", "twenty"}
+    assert providers == {"chatwoot", "ghl", "twenty"}
     assert "secret-token" not in response.text
     assert "twenty-secret" not in response.text
 

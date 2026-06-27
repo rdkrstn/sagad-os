@@ -214,7 +214,7 @@ interface AgentStudioKnowledgeIngestionJob {
 }
 
 export interface IntegrationConnectionView {
-  provider: "chatwoot" | "twenty";
+  provider: "chatwoot" | "twenty" | "ghl";
   name: string;
   kind: string;
   status: string;
@@ -230,6 +230,14 @@ export interface IntegrationConnectionView {
   has_api_access_token: boolean;
   has_webhook_token: boolean;
   has_api_key: boolean;
+  // GHL-specific display fields (null/False for chatwoot/twenty).
+  location_id: string | null;
+  outbound_mode: string | null;
+  signature_scheme: string | null;
+  poll_enabled: boolean | null;
+  poll_interval_seconds: number | null;
+  has_webhook_secret: boolean;
+  has_native_webhook_key: boolean;
   missing: string[];
   detail: string;
   updated_at: string | null;
@@ -3973,6 +3981,13 @@ export async function getIntegrationConnections(): Promise<IntegrationConnection
         has_api_access_token: false,
         has_webhook_token: false,
         has_api_key: false,
+        location_id: null,
+        outbound_mode: null,
+        signature_scheme: null,
+        poll_enabled: null,
+        poll_interval_seconds: null,
+        has_webhook_secret: false,
+        has_native_webhook_key: false,
         missing: ["base_url", "account_id", "api_access_token"],
         detail:
           "Chatwoot configuration is managed by Agent Studio. Set SAGAD_API_BASE_URL to load live status.",
@@ -3995,13 +4010,104 @@ export async function getIntegrationConnections(): Promise<IntegrationConnection
         has_api_access_token: false,
         has_webhook_token: false,
         has_api_key: false,
+        location_id: null,
+        outbound_mode: null,
+        signature_scheme: null,
+        poll_enabled: null,
+        poll_interval_seconds: null,
+        has_webhook_secret: false,
+        has_native_webhook_key: false,
         missing: ["base_url", "api_key"],
         detail:
           "Twenty CRM is external. Store credentials in Agent Studio before enabling reads.",
         updated_at: null,
       },
+      {
+        provider: "ghl",
+        name: "GoHighLevel",
+        kind: "channel",
+        status: "unconfigured",
+        configured: false,
+        enabled: false,
+        external: true,
+        base_url: null,
+        account_id: null,
+        inbox_id: null,
+        api_mode: null,
+        dry_run: true,
+        writes_enabled: false,
+        has_api_access_token: false,
+        has_webhook_token: false,
+        has_api_key: false,
+        location_id: null,
+        outbound_mode: "webhook",
+        signature_scheme: "hmac",
+        poll_enabled: false,
+        poll_interval_seconds: 30,
+        has_webhook_secret: false,
+        has_native_webhook_key: false,
+        missing: ["base_url", "api_key", "location_id"],
+        detail:
+          "GoHighLevel adapter (inbound poller + approved outbound). Configure credentials from the SuperAdmin console or GHL_* env vars.",
+        updated_at: null,
+      },
     ],
   );
+}
+
+import {
+  readConfig,
+  mockConfig,
+  mockModelProviders,
+  type ModelProvidersView,
+  type ProviderStatusView,
+} from "@/lib/model-providers";
+
+export type {
+  ProviderStatusView,
+  ProviderConfigView,
+  ModelProviderConfigView,
+  ModelProvidersView,
+  ModelProviderConfigUpsertRequest,
+  ModelProviderTestResult,
+} from "@/lib/model-providers";
+export { updateModelProviders } from "@/lib/model-providers";
+
+export async function getModelProviders(): Promise<ModelProvidersView> {
+  const result = await fetchAgentStudioJson<ModelProvidersView>(
+    "/model-providers",
+    (payload) => {
+      if (!payload || typeof payload !== "object") return null;
+      const obj = payload as Record<string, unknown>;
+      const providers = obj.providers;
+      if (!Array.isArray(providers)) return null;
+      const rows: ProviderStatusView[] = providers.map((raw) => {
+        const p = (raw ?? {}) as Record<string, unknown>;
+        return {
+          provider: String(p.provider ?? ""),
+          active: Boolean(p.active),
+          embedding_active: Boolean(p.embedding_active),
+          configured: Boolean(p.configured),
+          embedding_configured: Boolean(p.embedding_configured),
+          base_url: p.base_url ? String(p.base_url) : null,
+          model: p.model ? String(p.model) : null,
+          detail: String(p.detail ?? ""),
+        };
+      });
+      return {
+        active: String(obj.active ?? "none"),
+        embedding_active: String(obj.embedding_active ?? "none"),
+        chat_model: String(obj.chat_model ?? ""),
+        embedding_model: obj.embedding_model ? String(obj.embedding_model) : null,
+        embedding_dimensions: Number(obj.embedding_dimensions ?? 1536),
+        providers: rows,
+        config: readConfig(obj.config) ?? mockConfig(),
+        source: "agent-studio" as const,
+        detail: "",
+      } satisfies ModelProvidersView;
+    },
+  );
+  return result.data ?? mockModelProviders();
 }
 
 export type {

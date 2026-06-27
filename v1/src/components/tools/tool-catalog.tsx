@@ -104,7 +104,7 @@ const providerMeta: PrimaryProviderMeta[] = [
     description:
       "Receives inbound conversations and sends only supervisor-approved replies through Agent Studio.",
     icon: MessageSquareText,
-    accentClassName: "border-[#008F7A]/40 bg-[#008F7A]/10 text-[#007C6B]",
+    accentClassName: "border-[var(--sui-green-border)] bg-[var(--sui-green-soft)] text-[var(--accent-text)]",
   },
   {
     provider: "twenty",
@@ -155,10 +155,19 @@ const futureProviderRows: FutureProviderRow[] = [
 ];
 
 function blankConnection(provider: IntegrationProvider): IntegrationConnectionView {
+  const name =
+    provider === "chatwoot" ? "Chatwoot" : provider === "ghl" ? "GoHighLevel" : "Twenty CRM";
+  const kind = provider === "twenty" ? "crm" : "channel";
+  const missing =
+    provider === "chatwoot"
+      ? ["base_url", "account_id", "api_access_token"]
+      : provider === "ghl"
+        ? ["base_url", "api_key", "location_id"]
+        : ["base_url", "api_key"];
   return {
     provider,
-    name: provider === "chatwoot" ? "Chatwoot" : "Twenty CRM",
-    kind: provider === "chatwoot" ? "channel" : "crm",
+    name,
+    kind,
     status: "unconfigured",
     configured: false,
     enabled: false,
@@ -172,14 +181,15 @@ function blankConnection(provider: IntegrationProvider): IntegrationConnectionVi
     has_api_access_token: false,
     has_webhook_token: false,
     has_api_key: false,
-    missing:
-      provider === "chatwoot"
-        ? ["base_url", "account_id", "api_access_token"]
-        : ["base_url", "api_key"],
-    detail:
-      provider === "chatwoot"
-        ? "Chatwoot is not configured yet."
-        : "Twenty CRM is not configured yet.",
+    location_id: null,
+    outbound_mode: provider === "ghl" ? "webhook" : null,
+    signature_scheme: provider === "ghl" ? "hmac" : null,
+    poll_enabled: provider === "ghl" ? false : null,
+    poll_interval_seconds: provider === "ghl" ? 30 : null,
+    has_webhook_secret: false,
+    has_native_webhook_key: false,
+    missing,
+    detail: `${name} is not configured yet.`,
     updated_at: null,
   };
 }
@@ -190,6 +200,7 @@ function initialConnections(
   const fallback = {
     chatwoot: blankConnection("chatwoot"),
     twenty: blankConnection("twenty"),
+    ghl: blankConnection("ghl"),
   };
 
   return connections.reduce((next, connection) => {
@@ -220,7 +231,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isIntegrationConnection(value: unknown): value is IntegrationConnectionView {
   return (
     isRecord(value) &&
-    (value.provider === "chatwoot" || value.provider === "twenty") &&
+    (value.provider === "chatwoot" || value.provider === "twenty" || value.provider === "ghl") &&
     typeof value.name === "string" &&
     typeof value.status === "string"
   );
@@ -313,6 +324,7 @@ export function ToolCatalog({
   const [forms, setForms] = useState<Record<IntegrationProvider, ProviderForm>>({
     chatwoot: formFromConnection(connectionState.chatwoot),
     twenty: formFromConnection(connectionState.twenty),
+    ghl: formFromConnection(connectionState.ghl),
   });
   const [action, setAction] = useState<ActionState>({
     provider: "global",
@@ -644,7 +656,7 @@ export function ToolCatalog({
 
           <SectionPanel title="Connection Policy" eyebrow="Agent Studio owned">
             <div className="space-y-4 p-4">
-              <Alert className="border-[#D8D3C8] bg-white">
+              <Alert className="border-border bg-white">
                 <ShieldCheck aria-hidden="true" />
                 <AlertTitle>Provider credentials stay server-side</AlertTitle>
                 <AlertDescription>
@@ -661,18 +673,18 @@ export function ToolCatalog({
                   ["Twenty writes", "Dry-run until approved"],
                 ].map(([label, value]) => (
                   <div
-                    className="flex items-center justify-between rounded-lg border border-[#D8D3C8] bg-[#F8F6F1] px-3 py-2"
+                    className="flex items-center justify-between rounded-lg border border-border bg-surface-2 px-3 py-2"
                     key={label}
                   >
                     <span className="text-muted-foreground">{label}</span>
-                    <span className="font-medium text-[#08111F]">{value}</span>
+                    <span className="font-medium text-foreground">{value}</span>
                   </div>
                 ))}
               </div>
 
               {action.message ? (
                 <Alert
-                  className="border-[#D8D3C8] bg-white"
+                  className="border-border bg-white"
                   variant={action.status === "error" ? "destructive" : "default"}
                 >
                   <AlertTitle>
@@ -692,7 +704,7 @@ export function ToolCatalog({
             const Icon = meta.icon;
 
             return (
-              <Card className="border-[#D8D3C8] bg-white shadow-xs" key={meta.provider}>
+              <Card className="border-border bg-white shadow-xs" key={meta.provider}>
                 <CardHeader className="space-y-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -718,7 +730,7 @@ export function ToolCatalog({
                       ["Mode", connection.dry_run ? "Dry-run" : "Live"],
                     ].map(([label, value]) => (
                       <div
-                        className="rounded-lg border border-[#D8D3C8] bg-[#F8F6F1] p-3"
+                        className="rounded-lg border border-border bg-surface-2 p-3"
                         key={label}
                       >
                         <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
@@ -734,13 +746,13 @@ export function ToolCatalog({
                   <div className="grid gap-2">
                     {connectionSteps(connection).map((step) => (
                       <div
-                        className="flex gap-3 rounded-lg border border-[#D8D3C8] bg-white p-3"
+                        className="flex gap-3 rounded-lg border border-border bg-white p-3"
                         key={step.label}
                       >
                         {step.ready ? (
                           <CheckCircle2
                             aria-hidden="true"
-                            className="mt-0.5 size-4 shrink-0 text-[#008F7A]"
+                            className="mt-0.5 size-4 shrink-0 text-[var(--accent-text)]"
                           />
                         ) : (
                           <CircleDashed
@@ -876,7 +888,7 @@ export function ToolCatalog({
                       </div>
                     )}
 
-                    <div className="grid gap-3 rounded-lg border border-[#D8D3C8] bg-[#F8F6F1] p-3 sm:grid-cols-3">
+                    <div className="grid gap-3 rounded-lg border border-border bg-surface-2 p-3 sm:grid-cols-3">
                       {[
                         ["Enabled", "enabled", "Adapter can be used by Agent Studio."],
                         ["Dry-run", "dry_run", "Run safely without live writes."],
@@ -910,7 +922,7 @@ export function ToolCatalog({
 
                     <div className="flex flex-wrap gap-2">
                       <Button
-                        className="bg-[#008F7A] text-white hover:bg-[#007C6B]"
+                        className="bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]"
                         disabled={!canManage || action.status === "saving"}
                         type="submit"
                       >
@@ -977,7 +989,7 @@ export function ToolCatalog({
                 key: "access",
                 label: "Access",
                 render: (row: FutureProviderRow) => (
-                  <Badge className="border-[#D8D3C8]" variant="outline">
+                  <Badge className="border-border" variant="outline">
                     {row.access}
                   </Badge>
                 ),
@@ -1100,10 +1112,10 @@ export function ToolCatalog({
             },
           ].map(({ label, detail, icon: Icon }) => (
             <div
-              className="rounded-lg border border-[#D8D3C8] bg-white p-4"
+              className="rounded-lg border border-border bg-card p-4"
               key={label}
             >
-              <Icon aria-hidden="true" className="mb-3 size-4 text-[#008F7A]" />
+              <Icon aria-hidden="true" className="mb-3 size-4 text-[var(--accent-text)]" />
               <div className="text-sm font-medium text-foreground">{label}</div>
               <div className="mt-1 text-xs leading-5 text-muted-foreground">
                 {detail}

@@ -191,7 +191,7 @@ export function AiOpsReports({ data }: { data: unknown }) {
         </SectionPanel>
         <SectionPanel eyebrow="Knowledge gaps" title="Recommended Action">
           <div className="space-y-4 p-4">
-            <div className="rounded-lg border bg-[#F8F6F1] p-4">
+            <div className="rounded-lg border border-border bg-surface-2 p-4">
               <div className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                 Top issue
               </div>

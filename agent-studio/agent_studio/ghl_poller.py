@@ -205,8 +205,22 @@ class GhlPoller:
     def stop(self) -> None:
         self._stop.set()
 
+    def _resolved_settings(self) -> Settings:
+        """DB-backed GHL config (superadmin console) over the poller's base settings, refreshed each cycle.
+
+        The base is ``self.settings`` (the settings the poller was constructed with — in
+        production that's ``get_settings()`` captured at lifespan startup). The DB-backed
+        ``integration_config`` store overlays it each cycle, so superadmin console edits take
+        effect without a restart. ``context=system`` resolves the default organization
+        (single-location GHL today). When no ``ghl`` row is stored, the base settings pass
+        through unchanged, so env-only deployments keep working.
+        """
+        from agent_studio.integration_config import configured_settings
+
+        return configured_settings(self.settings, context=_system_context())
+
     async def run(self) -> None:
-        interval = max(1.0, float(self.settings.ghl_poll_interval_seconds))
+        interval = max(1.0, float(self._resolved_settings().ghl_poll_interval_seconds))
         consecutive_failures = 0
         _logger.info("GHL inbound poller started (interval=%.1fs).", interval)
         while not self._stop.is_set():
@@ -256,7 +270,7 @@ class GhlPoller:
             _universal_conversation_id,
         )
 
-        settings = self.settings
+        settings = self._resolved_settings()
         if not settings.ghl_configured:
             # No creds -> nothing to poll. Skip silently (not a failure; the loop continues).
             return 0
