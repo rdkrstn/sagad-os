@@ -37,7 +37,7 @@ import Nodemailer from "next-auth/providers/nodemailer";
 import type { Provider } from "next-auth/providers";
 import { Pool } from "pg";
 
-type SagadRole = "owner" | "admin" | "supervisor" | "agent" | "qa" | "viewer";
+export type SagadRole = "owner" | "admin" | "supervisor" | "agent" | "qa" | "viewer";
 
 declare module "next-auth" {
   interface Session {
@@ -79,7 +79,7 @@ function readOptionalAuthEnvironment(
   return value ? value : undefined;
 }
 
-function getAuthPool(): Pool {
+export function getAuthPool(): Pool {
   if (!authPool) {
     authPool = new Pool({
       connectionString: readAuthEnvironment("DATABASE_URL"),

@@ -42,6 +42,9 @@ agent-studio/.langgraph_api/
 .agents
 sagad-os-sprints-2-4-files/
 
+# graphify code-graph index (regenerated via `graphify update .`)
+graphify-out/
+
 # Local screenshots and app state
 .playwright-mcp/
 .obsidian/

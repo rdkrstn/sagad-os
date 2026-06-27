@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "graphify": {
+      "source": "howell5/willhong-skills",
+      "sourceType": "github",
+      "skillPath": "skills/graphify/SKILL.md",
+      "computedHash": "a6c23b455dc5985554fe94f956360c19d0d99a0962a919b082693c50b42e3843"
+    }
+  }
+}

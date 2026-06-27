@@ -400,6 +400,14 @@ class IntegrationConnection(BaseModel):
     has_api_access_token: bool = False
     has_webhook_token: bool = False
     has_api_key: bool = False
+    # GHL-specific display fields (nullable/False so chatwoot/twenty rows stay valid).
+    location_id: str | None = None
+    outbound_mode: str | None = None
+    signature_scheme: str | None = None
+    poll_enabled: bool | None = None
+    poll_interval_seconds: int | None = None
+    has_webhook_secret: bool = False
+    has_native_webhook_key: bool = False
     missing: list[str] = Field(default_factory=list)
     detail: str
     updated_at: datetime | None = None
@@ -420,6 +428,16 @@ class IntegrationConnectionUpsertRequest(BaseModel):
     enabled: bool = True
     dry_run: bool = True
     allow_writes: bool = False
+    # GHL-specific writable fields (ignored by chatwoot/twenty upserts).
+    location_id: str | None = None
+    outbound_mode: str | None = None
+    signature_scheme: str | None = None
+    poll_enabled: bool | None = None
+    poll_interval_seconds: int | None = None
+    poll_conversation_limit: int | None = None
+    poll_message_limit: int | None = None
+    webhook_secret: str | None = None
+    native_webhook_key: str | None = None
 
 
 class IntegrationConnectionTestResponse(BaseModel):
@@ -427,6 +445,42 @@ class IntegrationConnectionTestResponse(BaseModel):
     status: IntegrationStatus
     detail: str
     connection: IntegrationConnection
+
+
+class ModelProviderConfigUpsertRequest(BaseModel):
+    """Writable model-provider config (SuperAdmin console).
+
+    Nullable fields mean "leave unchanged". Secret fields (openai_api_key, ...) are only
+    written when a non-empty value is sent -- empty/None keeps the stored value.
+    """
+
+    chat_provider: str | None = None
+    embedding_provider: str | None = None
+    # Per-provider non-secret fields (keys match Settings field names).
+    openai_base_url: str | None = None
+    openai_model: str | None = None
+    openai_embedding_model: str | None = None
+    fireworks_base_url: str | None = None
+    fireworks_model: str | None = None
+    fireworks_embedding_model: str | None = None
+    ollama_cloud_base_url: str | None = None
+    ollama_cloud_model: str | None = None
+    ollama_cloud_embedding_model: str | None = None
+    openrouter_model: str | None = None
+    litellm_base_url: str | None = None
+    litellm_model: str | None = None
+    litellm_embedding_model: str | None = None
+    embedding_dimensions: int | None = None
+    classifier_model: str | None = None
+    guardrail_model: str | None = None
+    extractor_model: str | None = None
+    supervisor_model: str | None = None
+    # Secrets (only written when non-empty).
+    openai_api_key: str | None = None
+    fireworks_api_key: str | None = None
+    ollama_cloud_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    litellm_master_key: str | None = None
 
 
 class ApprovalRequest(BaseModel):

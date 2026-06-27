@@ -111,6 +111,33 @@ class Settings(BaseModel):
     litellm_master_key: str | None = None
     deepseek_api_key: str | None = None
     openrouter_api_key: str | None = None
+    # --- Model provider config (env-driven; resolved by agent_studio.model_config) ---
+    # Provider selection. Unknown values degrade to "none" (zero network, zero credentials).
+    model_provider: str = "none"
+    embedding_provider: str = "auto"
+    # Fireworks AI (OpenAI-compatible at /inference/v1).
+    fireworks_api_key: str | None = None
+    fireworks_base_url: str = "https://api.fireworks.ai/inference/v1"
+    fireworks_model: str = "accounts/fireworks/models/llama-v3p1-70b-instruct"
+    fireworks_embedding_model: str = "nomic-embed-v1"
+    # Ollama Cloud (OpenAI-compatible + key). Also covers self-hosted Ollama by setting
+    # OLLAMA_CLOUD_BASE_URL=http://localhost:11434/v1 (and leaving the key unset).
+    ollama_cloud_api_key: str | None = None
+    ollama_cloud_base_url: str | None = None
+    ollama_cloud_model: str = "llama3.1"
+    ollama_cloud_embedding_model: str = "nomic-embed-text"
+    # OpenRouter (one key, many providers; model is "<vendor>/<model>").
+    openrouter_model: str = "openai/gpt-4o-mini"
+    # LiteLLM gateway (model = alias configured in the gateway, e.g. sagad-openai-fast).
+    litellm_model: str | None = None
+    litellm_embedding_model: str | None = None
+    # Per-node model overrides (fall back to the active provider's model when unset).
+    classifier_model: str | None = None
+    guardrail_model: str | None = None
+    extractor_model: str | None = None
+    supervisor_model: str | None = None
+    # Optional explicit embedding vector size (overrides the model-dimension map).
+    embedding_dimensions: int | None = None
     sagad_ocr_enabled: bool = False
     sagad_ocr_lang: str = "eng"
     sagad_ocr_max_pages: int = 10
@@ -238,6 +265,32 @@ def get_settings() -> Settings:
         litellm_master_key=os.getenv("LITELLM_MASTER_KEY"),
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
+        model_provider=os.getenv("MODEL_PROVIDER", "none"),
+        embedding_provider=os.getenv("EMBEDDING_PROVIDER", "auto"),
+        fireworks_api_key=os.getenv("FIREWORKS_API_KEY"),
+        fireworks_base_url=os.getenv(
+            "FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1"
+        ),
+        fireworks_model=os.getenv(
+            "FIREWORKS_MODEL", "accounts/fireworks/models/llama-v3p1-70b-instruct"
+        ),
+        fireworks_embedding_model=os.getenv("FIREWORKS_EMBEDDING_MODEL", "nomic-embed-v1"),
+        ollama_cloud_api_key=os.getenv("OLLAMA_CLOUD_API_KEY"),
+        ollama_cloud_base_url=os.getenv("OLLAMA_CLOUD_BASE_URL"),
+        ollama_cloud_model=os.getenv("OLLAMA_CLOUD_MODEL", "llama3.1"),
+        ollama_cloud_embedding_model=os.getenv("OLLAMA_CLOUD_EMBEDDING_MODEL", "nomic-embed-text"),
+        openrouter_model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+        litellm_model=os.getenv("LITELLM_MODEL"),
+        litellm_embedding_model=os.getenv("LITELLM_EMBEDDING_MODEL"),
+        classifier_model=os.getenv("CLASSIFIER_MODEL"),
+        guardrail_model=os.getenv("GUARDRAIL_MODEL"),
+        extractor_model=os.getenv("EXTRACTOR_MODEL"),
+        supervisor_model=os.getenv("SUPERVISOR_MODEL"),
+        embedding_dimensions=(
+            int(os.getenv("EMBEDDING_DIMENSIONS"))
+            if os.getenv("EMBEDDING_DIMENSIONS")
+            else None
+        ),
         sagad_ocr_enabled=_bool_env("SAGAD_OCR_ENABLED", False),
         sagad_ocr_lang=os.getenv("SAGAD_OCR_LANG", "eng"),
         sagad_ocr_max_pages=_int_env("SAGAD_OCR_MAX_PAGES", 10),

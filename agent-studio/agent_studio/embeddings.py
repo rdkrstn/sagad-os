@@ -8,28 +8,21 @@ import re
 import httpx
 
 from agent_studio.config import Settings
+# The dimension map + resolver live in model_config (single source of truth for chat +
+# embeddings). Re-exported here so existing imports keep working.
+from agent_studio.model_config import (
+    DEFAULT_EMBEDDING_DIMENSIONS,
+    EMBEDDING_DIMENSIONS_MAP,
+    resolve_embedding_config,
+    resolve_embedding_dimensions,
+)
 
 _log = logging.getLogger(__name__)
 
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 DEV_EMBEDDING_DIMENSIONS = 1536
-DEFAULT_EMBEDDING_DIMENSIONS = 1536
 DEV_EMBEDDING_MODEL = "sagad-dev-hash-embedding-v1"
-OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1"
-
-# Model-to-dimension map for known embedding models
-EMBEDDING_DIMENSIONS_MAP: dict[str, int] = {
-    "text-embedding-3-small": 1536,
-    "text-embedding-3-large": 3072,
-    "text-embedding-ada-002": 1536,
-    DEV_EMBEDDING_MODEL: DEV_EMBEDDING_DIMENSIONS,
-}
-
-
-def resolve_embedding_dimensions(embedding_model: str) -> int:
-    """Return the expected dimension for a known embedding model, or fall back to default."""
-    return EMBEDDING_DIMENSIONS_MAP.get(embedding_model, DEFAULT_EMBEDDING_DIMENSIONS)
 
 
 def tokenize(value: str) -> set[str]:
@@ -68,30 +61,33 @@ class EmbeddingService:
 
     @property
     def embedding_model(self) -> str:
-        if not self.settings.openai_api_key:
-            return DEV_EMBEDDING_MODEL
-        return self.settings.openai_embedding_model
+        cfg = resolve_embedding_config(self.settings)
+        return cfg.model if (cfg.configured and cfg.model) else DEV_EMBEDDING_MODEL
 
     def embed_text(self, value: str) -> list[float]:
-        content = value.strip()
-        model_name = self.embedding_model
-        expected_dims = resolve_embedding_dimensions(model_name)
-        if not content:
-            return deterministic_embedding("", dimensions=expected_dims)
-        if not self.settings.openai_api_key:
-            return deterministic_embedding(content, dimensions=expected_dims)
+        """Embed text via the resolved provider, or the deterministic fallback.
 
-        base_url = (self.settings.openai_base_url or OPENAI_EMBEDDINGS_URL).rstrip("/")
+        When no embedding provider is configured (``EMBEDDING_PROVIDER=none`` or the active
+        provider has no creds), this makes **no network call** — it returns the deterministic
+        hash embedding so the pipeline never 500s and never silently hangs on a dead endpoint.
+        """
+        content = value.strip()
+        cfg = resolve_embedding_config(self.settings)
+        if not content:
+            return deterministic_embedding("", dimensions=cfg.dimensions)
+        if not cfg.configured:
+            return deterministic_embedding(content, dimensions=cfg.dimensions)
+
+        headers = {"Content-Type": "application/json"}
+        if cfg.api_key:
+            headers["Authorization"] = f"Bearer {cfg.api_key}"
         try:
             with httpx.Client(timeout=30) as client:
                 response = client.post(
-                    f"{base_url}/embeddings",
-                    headers={
-                        "Authorization": f"Bearer {self.settings.openai_api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    f"{cfg.base_url}/embeddings",
+                    headers=headers,
                     json={
-                        "model": self.settings.openai_embedding_model,
+                        "model": cfg.model,
                         "input": content,
                         "encoding_format": "float",
                     },
@@ -100,25 +96,42 @@ class EmbeddingService:
                 payload = response.json()
             data = payload.get("data")
             if not isinstance(data, list) or not data:
-                raise RuntimeError("OpenAI embedding response did not include embedding data.")
+                raise RuntimeError("Embedding response did not include embedding data.")
             embedding = data[0].get("embedding") if isinstance(data[0], dict) else None
             if not isinstance(embedding, list):
-                raise RuntimeError("OpenAI embedding response did not include a vector.")
+                raise RuntimeError("Embedding response did not include a vector.")
             values = [float(item) for item in embedding]
-            if len(values) != expected_dims:
+            if len(values) != cfg.dimensions:
                 raise RuntimeError(
-                    f"Embedding dimension mismatch for model '{model_name}': "
-                    f"expected {expected_dims}, got {len(values)}.",
+                    f"Embedding dimension mismatch for model '{cfg.model}': "
+                    f"expected {cfg.dimensions}, got {len(values)}.",
                 )
             return values
         except Exception as exc:
-            # An invalid/unreachable OpenAI key must not break the pipeline (webhook,
-            # retrieval, memory). Fall back to the dimension-aligned deterministic
-            # embedding so the request still succeeds; semantic recall is degraded
-            # but nothing 500s. Set a valid OPENAI_API_KEY to restore real embeddings.
+            # A dead/unreachable endpoint must never break the pipeline (webhook, retrieval,
+            # memory). Fall back to the dimension-aligned deterministic embedding; semantic
+            # recall is degraded but nothing 500s. The warning names provider + base_url so the
+            # failure is diagnosable. Configure a reachable EMBEDDING_PROVIDER to restore real
+            # embeddings.
             _log.warning(
-                "embed_text_openai_failed model=%s error=%s -> falling back to deterministic embedding",
-                model_name,
+                "embed_text_failed provider=%s base_url=%s model=%s error=%s -> falling back to deterministic embedding",
+                cfg.provider,
+                cfg.base_url,
+                cfg.model,
                 exc.__class__.__name__,
             )
-            return deterministic_embedding(content, dimensions=expected_dims)
+            return deterministic_embedding(content, dimensions=cfg.dimensions)
+
+
+__all__ = [
+    "DEFAULT_EMBEDDING_DIMENSIONS",
+    "DEV_EMBEDDING_DIMENSIONS",
+    "DEV_EMBEDDING_MODEL",
+    "EMBEDDING_DIMENSIONS_MAP",
+    "EmbeddingService",
+    "content_hash",
+    "deterministic_embedding",
+    "resolve_embedding_dimensions",
+    "tokenize",
+    "vector_literal",
+]

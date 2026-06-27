@@ -212,63 +212,28 @@ class DryRunChatModel:
             yield AIMessageChunk(content=token + " ")
 
 
-def _resolve_model(node_type: str) -> str:
-    """Resolve the model for a given node type.
+def _build_chat_model(node_type: str | None = None):
+    """Build a chat model from the resolved provider config.
 
-    Supports per-node overrides via:
-      CLASSIFIER_MODEL / GUARDRAIL_MODEL — for classifier and guardrail nodes
-      EXTRACTOR_MODEL                   — for sub-agent / extractor nodes
-      SUPERVISOR_MODEL                  — for the supervisor synthesis node
-    Falls back to LITELLM_MODEL, then ``gpt-4o-mini``.
+    Resolution lives in :mod:`agent_studio.model_config` (one source of truth for chat +
+    embeddings). When ``LLM_MODE=dry_run`` is set, or the active provider is ``none`` /
+    missing credentials, returns a :class:`DryRunChatModel` so the graph runs deterministically
+    with no network and no credentials. Per-node model overrides (CLASSIFIER_MODEL etc.) are
+    applied by the resolver.
     """
-    type_env = {
-        "classifier": "CLASSIFIER_MODEL",
-        "guardrail": "GUARDRAIL_MODEL",
-        "extractor": "EXTRACTOR_MODEL",
-        "supervisor": "SUPERVISOR_MODEL",
-    }
-    env_var = type_env.get(node_type, "LITELLM_MODEL")
-    model = os.getenv(env_var) or os.getenv("LITELLM_MODEL", "gpt-4o-mini")
+    from agent_studio.config import get_settings
+    from agent_studio.integration_config import configured_settings
+    from agent_studio.model_config import resolve_chat_config
 
-    # Auto-prefix OpenRouter for models that are not already prefixed
-    openrouter_key = os.getenv("OPENROUTER_API_KEY")
-    if openrouter_key and not model.startswith("openrouter/"):
-        model = f"openrouter/{model}"
-
-    return model
-
-
-def _build_chat_model(model_name: str | None = None):
-    """Build a chat model routed through LiteLLM proxy, OpenRouter, direct library call, or dry-run stub.
-
-    When ``LLM_MODE=dry_run`` is set, returns a :class:`DryRunChatModel` so the full graph runs
-    deterministically with no LLM credentials — used by the compose e2e roundtrip in CI/local.
-    """
     if os.getenv("LLM_MODE", "").lower() == "dry_run":
-        return DryRunChatModel(model=model_name or "dry-run")
-    if not model_name:
-        model_name = os.getenv("LITELLM_MODEL", "gpt-4o-mini")
-    openrouter_key = os.getenv("OPENROUTER_API_KEY")
-    litellm_base = os.getenv("LITELLM_BASE_URL")
-
-    # Priority 1: LiteLLM proxy server
-    if litellm_base and os.getenv("LITELLM_ENABLED", "false").lower() in ("true", "1", "yes"):
-        return LiteLLMLangChainWrapper(
-            model=model_name,
-            api_key=os.getenv("LITELLM_MASTER_KEY") or "sk-not-needed",
-            api_base=litellm_base,
-        )
-    # Priority 2: OpenRouter directly
-    if openrouter_key and model_name.startswith("openrouter/"):
-        return LiteLLMLangChainWrapper(
-            model=model_name.removeprefix("openrouter/"),
-            api_key=openrouter_key,
-            api_base="https://openrouter.ai/api/v1",
-        )
-    # Priority 3: Direct python library call (reads provider env keys automatically, e.g. GEMINI_API_KEY, OPENAI_API_KEY)
-    return LiteLLMLangChainWrapper(
-        model=model_name,
-    )
+        return DryRunChatModel(model="dry-run")
+    # configured_settings merges DB model-provider config (SuperAdmin console) over env, so the
+    # resolver sees the writable config. context=None resolves the default org (single-tenant).
+    settings = configured_settings(get_settings(), context=None)
+    cfg = resolve_chat_config(settings, node_type=node_type)
+    if not cfg.configured:
+        return DryRunChatModel(model="dry-run")
+    return LiteLLMLangChainWrapper(model=cfg.model, api_base=cfg.api_base, api_key=cfg.api_key)
 
 
 
@@ -659,7 +624,7 @@ def classify_and_route(state: AgentStudioState) -> dict[str, object]:
     system_prompt = agent.system_prompt if agent else "Classify the user intent and routed agent."
 
     try:
-        llm = _build_chat_model(_resolve_model("classifier"))
+        llm = _build_chat_model("classifier")
         lc_messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=normalized_message),
@@ -719,7 +684,7 @@ def _run_sub_agent(state: AgentStudioState, agent_key: str) -> dict[str, object]
     prompt = _prepare_agent_prompt_with_context(agent.system_prompt, state)
 
     try:
-        llm = _build_chat_model(_resolve_model("extractor"))
+        llm = _build_chat_model("extractor")
         lc_messages = [
             SystemMessage(content=prompt),
             HumanMessage(content=state["normalized_message"]),
@@ -998,7 +963,7 @@ def supervisor_draft(state: AgentStudioState) -> dict[str, object]:
         )
 
     try:
-        llm = _build_chat_model(_resolve_model("supervisor"))
+        llm = _build_chat_model("supervisor")
         if not has_report:
             llm = llm.bind_tools(agent_tools, tool_choice="auto")
 

@@ -453,5 +453,8 @@ class GhlAdapter(ChannelAdapter):
 def _settings():
     # Local import to avoid pulling config at module import time (test isolation).
     from agent_studio.config import get_settings
+    from agent_studio.integration_config import configured_settings
 
-    return get_settings()
+    # DB-backed GHL config (superadmin console) overrides env, with env as the fallback when
+    # no 'ghl' row is stored. context=None resolves the default org (single-location today).
+    return configured_settings(get_settings(), context=None)
