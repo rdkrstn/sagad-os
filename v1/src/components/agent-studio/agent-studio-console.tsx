@@ -29,6 +29,13 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   MetricCard,
   Panel,
   SourcePill,
@@ -292,6 +299,8 @@ function CatalogIntro({
   );
 }
 
+const AGENT_TIERS = ["Standard", "Managed", "High-risk"] as const;
+
 export function AgentsConsole({ agents }: { agents: unknown }) {
   const rows = asArray(agents).map(asRecord);
   const router = useRouter();
@@ -305,6 +314,10 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
     intents: string;
     allowed_tools: string;
     system_prompt: string;
+    description: string;
+    model: string;
+    tier: string;
+    voice: string;
     original_id: string | null;
   } | null>(null);
   const [deletingAgent, setDeletingAgent] = useState<{ id: string; name: string } | null>(null);
@@ -316,6 +329,10 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
       intents: "",
       allowed_tools: "",
       system_prompt: "",
+      description: "",
+      model: "",
+      tier: "",
+      voice: "",
       original_id: null,
     });
     setSaveError(null);
@@ -330,6 +347,10 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
       intents: listFrom(row, ["intents"]).join(", "),
       allowed_tools: listFrom(row, ["allowed_tools", "allowedTools"]).join(", "),
       system_prompt: String(row.system_prompt ?? row.systemPrompt ?? ""),
+      description: String(row.description ?? ""),
+      model: String(row.model ?? ""),
+      tier: String(row.tier ?? ""),
+      voice: String(row.voice ?? ""),
       original_id: id,
     });
     setSaveError(null);
@@ -354,6 +375,10 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
         intents: editingAgent.intents.split(",").map((s: string) => s.trim()).filter(Boolean),
         allowed_tools: editingAgent.allowed_tools.split(",").map((s: string) => s.trim()).filter(Boolean),
         system_prompt: editingAgent.system_prompt,
+        description: editingAgent.description,
+        model: editingAgent.model.trim(),
+        tier: editingAgent.tier,
+        voice: editingAgent.voice.trim(),
         original_id: editingAgent.original_id,
       };
       const response = await fetch("/api/agents", {
@@ -395,6 +420,16 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
     }
   }
 
+  // Derived roster metrics (replaces the hardcoded placeholder values).
+  const distinctIntents = new Set<string>();
+  const distinctTools = new Set<string>();
+  let modelOverrideCount = 0;
+  for (const row of rows) {
+    for (const intent of listFrom(row, ["intents"])) distinctIntents.add(intent);
+    for (const tool of listFrom(row, ["allowed_tools", "allowedTools"])) distinctTools.add(tool);
+    if (textOf(row, ["model"], "").trim()) modelOverrideCount += 1;
+  }
+
   return (
     <div className="space-y-3">
       <CatalogIntro
@@ -403,10 +438,10 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
       />
       <AgentStudioRelationshipStrip active="agent" />
       <section className="grid gap-3 md:grid-cols-4">
-        <MetricCard detail="Sales, support, QA, escalation" icon={Bot} label="Agents" value={rows.length} />
-        <MetricCard detail="Configured playbooks" icon={BrainCircuit} label="Skills allowed" value="5" />
-        <MetricCard detail="Server-side actions" icon={Wrench} label="Tools allowed" value="8" />
-        <MetricCard detail="Writes held by policy" icon={ShieldCheck} label="Approval policy" value="On" />
+        <MetricCard detail="Configured workers" icon={Bot} label="Agents" value={rows.length} />
+        <MetricCard detail="Distinct routing intents" icon={BrainCircuit} label="Intents" value={distinctIntents.size} />
+        <MetricCard detail="Distinct allowed tools" icon={Wrench} label="Tools allowed" value={distinctTools.size} />
+        <MetricCard detail="Per-agent model overrides" icon={ShieldCheck} label="Custom models" value={modelOverrideCount} />
       </section>
       <Panel title="Agent Configuration" eyebrow="Workers" action={
         <Button size="sm" variant="outline" onClick={openCreate}>
@@ -418,7 +453,17 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
             const name = textOf(row, ["name"], "Agent");
             const intents = listFrom(row, ["intents"]);
             const tools = listFrom(row, ["allowed_tools", "allowedTools"]);
-            const systemPromptPreview = textOf(row, ["system_prompt", "systemPrompt"], "").slice(0, 150) + "...";
+            const description = textOf(row, ["description"], "");
+            const model = textOf(row, ["model"], "");
+            const tier = textOf(row, ["tier"], "");
+            const voice = textOf(row, ["voice"], "");
+            // Prefer the editable description as the card summary; fall back to a
+            // correctly-truncated system prompt (only append "..." when it actually overflowed).
+            const systemPrompt = textOf(row, ["system_prompt", "systemPrompt"], "");
+            const previewSlice = systemPrompt.slice(0, 150);
+            const systemPromptPreview =
+              systemPrompt.length > previewSlice.length ? `${previewSlice}...` : previewSlice;
+            const summary = description.trim() || systemPromptPreview;
 
             return (
               <div className="border border-border bg-surface-2 p-3" key={name}>
@@ -426,7 +471,7 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
                   <div className="min-w-0">
                     <h3 className="font-semibold text-foreground">{name}</h3>
                     <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                      {systemPromptPreview}
+                      {summary}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
@@ -436,9 +481,13 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
                     <Button size="icon-sm" variant="ghost" onClick={() => openDelete(row)} title="Delete agent">
                       <Trash2 className="size-3.5 text-destructive" />
                     </Button>
-                    <StatusPill status={textOf(row, ["status", "health"], "Active")}>
-                      {textOf(row, ["status", "health"], "Active")}
-                    </StatusPill>
+                    {tier ? (
+                      <StatusPill status={tier}>{tier}</StatusPill>
+                    ) : (
+                      <StatusPill status={textOf(row, ["status", "health"], "Active")}>
+                        {textOf(row, ["status", "health"], "Active")}
+                      </StatusPill>
+                    )}
                   </div>
                 </div>
                 <div className="mt-3 grid gap-3 text-xs md:grid-cols-2">
@@ -450,14 +499,18 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
                     <div className="mb-1 font-mono uppercase text-muted-foreground">Allowed tools</div>
                     <InlineList values={tools} />
                   </div>
-                  <div>
-                    <div className="mb-1 font-mono uppercase text-muted-foreground">Workflow</div>
-                    <span className="font-semibold text-foreground">Default Support Graph</span>
-                  </div>
-                  <div>
-                    <div className="mb-1 font-mono uppercase text-muted-foreground">Risk tolerance</div>
-                    <span className="font-semibold text-foreground">Managed by intent</span>
-                  </div>
+                  {model ? (
+                    <div>
+                      <div className="mb-1 font-mono uppercase text-muted-foreground">Model override</div>
+                      <span className="font-semibold text-foreground">{model}</span>
+                    </div>
+                  ) : null}
+                  {voice ? (
+                    <div>
+                      <div className="mb-1 font-mono uppercase text-muted-foreground">Voice / tone</div>
+                      <span className="font-semibold text-foreground">{voice}</span>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             );
@@ -501,6 +554,18 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
                 />
               </div>
               <div className="grid gap-2">
+                <Label htmlFor="agent-description">Description</Label>
+                <Textarea
+                  id="agent-description"
+                  className="min-h-16 resize-y"
+                  placeholder="Short summary shown on the agent card (e.g. Handles billing questions and payment issues)."
+                  value={editingAgent.description}
+                  onChange={(e) =>
+                    setEditingAgent({ ...editingAgent, description: e.target.value })
+                  }
+                />
+              </div>
+              <div className="grid gap-2">
                 <Label htmlFor="agent-intents">Intents (comma-separated)</Label>
                 <Input
                   id="agent-intents"
@@ -519,6 +584,53 @@ export function AgentsConsole({ agents }: { agents: unknown }) {
                   value={editingAgent.allowed_tools}
                   onChange={(e) =>
                     setEditingAgent({ ...editingAgent, allowed_tools: e.target.value })
+                  }
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-2">
+                  <Label htmlFor="agent-model">Model override (optional)</Label>
+                  <Input
+                    id="agent-model"
+                    placeholder="e.g. openai/gpt-4o-mini"
+                    value={editingAgent.model}
+                    onChange={(e) =>
+                      setEditingAgent({ ...editingAgent, model: e.target.value })
+                    }
+                  />
+                  <p className="text-[11px] leading-4 text-muted-foreground">
+                    LiteLLM-format model. When set, this agent uses it instead of the node default.
+                  </p>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="agent-tier">Tier</Label>
+                  <Select
+                    value={editingAgent.tier}
+                    onValueChange={(value) =>
+                      setEditingAgent({ ...editingAgent, tier: value })
+                    }
+                  >
+                    <SelectTrigger id="agent-tier">
+                      <SelectValue placeholder="Unset" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {AGENT_TIERS.map((tier) => (
+                        <SelectItem key={tier} value={tier}>
+                          {tier}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="agent-voice">Voice / tone (optional)</Label>
+                <Input
+                  id="agent-voice"
+                  placeholder="e.g. warm, concise"
+                  value={editingAgent.voice}
+                  onChange={(e) =>
+                    setEditingAgent({ ...editingAgent, voice: e.target.value })
                   }
                 />
               </div>

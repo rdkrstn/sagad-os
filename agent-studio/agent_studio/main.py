@@ -1223,6 +1223,12 @@ class AgentSavePayload(BaseModel):
     allowed_tools: list[str]
     system_prompt: str
     original_id: str | None = None
+    # Optional, UI-editable metadata. Default "" so older clients keep working and
+    # existing agent files stay minimal when these are unset.
+    description: str = ""
+    model: str = ""
+    tier: str = ""
+    voice: str = ""
 
 
 @app.post("/agents")
@@ -1238,6 +1244,10 @@ def save_agent(
         allowed_tools=payload.allowed_tools,
         system_prompt=payload.system_prompt,
         original_id=payload.original_id,
+        description=payload.description,
+        model=payload.model,
+        tier=payload.tier,
+        voice=payload.voice,
     )
     return [agent.model_dump() for agent in agent_registry.get_all_agents()]
 

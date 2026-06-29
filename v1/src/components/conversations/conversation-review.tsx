@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import {
   AlertCircle,
   Bot,
@@ -43,6 +43,14 @@ import {
   type LooseRecord,
 } from "@/components/ui/data-access";
 import { cn } from "@/lib/utils";
+import {
+  compactClock,
+  durationLabel,
+  elapsedSecondsSince,
+  parseIsoMs,
+  secondsBetween,
+  turnOwnerOf,
+} from "@/lib/time";
 
 type RailTab =
   | "context"
@@ -150,6 +158,100 @@ function readableDate(value: string) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+/** Short absolute time for a message, used as a tooltip on the turn-duration label. */
+function absoluteTimeLabel(message: LooseRecord): string {
+  const preset = textOf(message, ["time"], "");
+  if (preset) return preset;
+  const iso = textOf(message, ["createdAt"], "");
+  const parsed = new Date(iso);
+  if (Number.isFinite(parsed.getTime())) {
+    return parsed.toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+  return iso;
+}
+
+/**
+ * Chess-clock turn timer. Counts up from the last message's createdAt, labeled with
+ * whose turn it is to reply. Renders a stable "--:--" on the server and ticks on the
+ * client after mount to avoid a hydration mismatch.
+ */
+function TurnClock({
+  messages,
+  className,
+}: {
+  messages: LooseRecord[];
+  className?: string;
+}) {
+  const last = messages[messages.length - 1];
+  const lastIso = last ? textOf(last, ["createdAt"], "") : "";
+  const lastRole = last ? textOf(last, ["role", "senderType", "sender"], "") : "";
+  const owner = last ? turnOwnerOf(lastRole) : null;
+
+  const [nowMs, setNowMs] = useState<number | null>(null);
+  useEffect(() => {
+    if (!lastIso) return;
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [lastIso]);
+
+  if (!owner) return null;
+  const seconds = nowMs === null ? null : elapsedSecondsSince(lastIso, nowMs);
+  const isOurTurn = owner === "Our turn";
+
+  return (
+    <div
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold tabular-nums",
+        isOurTurn
+          ? "border-[rgba(0,212,170,0.42)] bg-[rgba(0,212,170,0.12)] text-[var(--accent-text)]"
+          : "border-border bg-surface-2 text-muted-foreground",
+        className,
+      )}
+      title={
+        lastIso
+          ? `Last reply at ${absoluteTimeLabel(last ?? {})}`
+          : "Waiting for the first message"
+      }
+    >
+      <Clock3 aria-hidden="true" className="size-3.5" />
+      <span className="uppercase tracking-[0.04em]">{owner}</span>
+      <span aria-live="polite">{seconds === null ? "--:--" : compactClock(seconds)}</span>
+    </div>
+  );
+}
+
+/**
+ * Compact, ticking "Xm ago" age for a timestamp. Renders the full readable date on the
+ * server (stable) and switches to a live relative label after mount, with the full date
+ * kept as a tooltip. Avoids hydration mismatch by gating the relative label on mount.
+ */
+function LiveAge({ iso, fallback = "Unknown" }: { iso: string; fallback?: string }) {
+  const [nowMs, setNowMs] = useState<number | null>(null);
+  useEffect(() => {
+    if (parseIsoMs(iso) === null) return;
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [iso]);
+
+  const ms = parseIsoMs(iso);
+  if (ms === null) return <span>{fallback}</span>;
+  const full = readableDate(iso);
+  if (nowMs === null) return <span title={full}>{full}</span>;
+  const seconds = Math.max(0, Math.round((nowMs - ms) / 1000));
+  return (
+    <span title={full} className="tabular-nums">
+      {durationLabel(seconds)} ago
+    </span>
+  );
 }
 
 function optionalBoolean(record: LooseRecord, keys: string[]): boolean | null {
@@ -821,6 +923,17 @@ export function ConversationReview({
               const isOutbound = !isCustomer && !isSystem;
               const delivery = deliveryState(message, primary, isOutbound);
               const DeliveryIcon = delivery?.icon;
+              // Chess-style per-turn timing: how long this side took to reply after the
+              // previous message. The first message has no prior turn, so it shows its
+              // absolute time. The absolute time is always kept as a tooltip.
+              const absolute = absoluteTimeLabel(message);
+              const prevIso = index > 0 ? textOf(messages[index - 1], ["createdAt"], "") : "";
+              const thisIso = textOf(message, ["createdAt"], "");
+              const turnSeconds = index > 0 ? secondsBetween(prevIso, thisIso) : null;
+              const timeContent =
+                index > 0 && turnSeconds !== null && turnSeconds > 0
+                  ? `replied in ${durationLabel(turnSeconds)}`
+                  : absolute;
 
               if (isSystem) {
                 return (
@@ -856,7 +969,7 @@ export function ConversationReview({
                   >
                     <div className="mb-1 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
                       <span className="font-semibold text-foreground">{sender}</span>
-                      <span>{textOf(message, ["time", "createdAt"], "")}</span>
+                      <span title={absolute}>{timeContent}</span>
                     </div>
                     <p className="whitespace-pre-wrap text-sm leading-6 text-foreground">
                       {messageBody(message)}
@@ -904,9 +1017,14 @@ export function ConversationReview({
                 </Button>
               )}
             </div>
-            <StatusPill tone={confidence >= 88 ? "good" : "warning"}>
-              {confidence}% trust
-            </StatusPill>
+            <div className="flex items-center gap-2">
+              {hasConversation && messages.length > 0 ? (
+                <TurnClock messages={messages} />
+              ) : null}
+              <StatusPill tone={confidence >= 88 ? "good" : "warning"}>
+                {confidence}% trust
+              </StatusPill>
+            </div>
           </div>
           <Textarea
             aria-label="AI draft reply"
@@ -1109,16 +1227,19 @@ export function ConversationReview({
                   Customer context
                 </div>
                 <div className="grid gap-2 text-sm">
-                  {[
+                  {([
                     ["Name", customerName],
                     ["Inbox", fieldValue(primary, ["inboxName"], "Chatwoot inbox")],
                     ["Can reply", fieldValue(primary, ["canReply"], "Unknown")],
                     ["Unread", fieldValue(primary, ["unreadCount"], "0")],
                     [
                       "Last activity",
-                      readableDate(fieldValue(primary, ["lastActivityAt", "updatedAt"], "Unknown")),
+                      <LiveAge
+                        key="last-activity"
+                        iso={fieldValue(primary, ["lastActivityAt", "updatedAt"], "")}
+                      />,
                     ],
-                  ].map(([label, value]) => (
+                  ] as Array<[string, ReactNode]>).map(([label, value]) => (
                     <div className="flex justify-between gap-3" key={label}>
                       <span className="text-muted-foreground">{label}</span>
                       <span className="min-w-0 truncate font-semibold text-foreground">{value}</span>

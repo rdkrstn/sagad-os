@@ -236,6 +236,38 @@ def _build_chat_model(node_type: str | None = None):
     return LiteLLMLangChainWrapper(model=cfg.model, api_base=cfg.api_base, api_key=cfg.api_key)
 
 
+def _build_chat_model_for_agent(agent, node_type: str | None = None):
+    """Build a chat model for a sub-agent, honoring an optional per-agent model override.
+
+    When ``agent.model`` is set (non-empty) and the active provider is configured, the override
+    model string is used with the same provider credentials/api_base the resolver picked for the
+    node. This keeps the model-gateway resolver as the single source of truth for provider/creds
+    while letting an individual agent pin a different model from the console. When the override is
+    unset, the provider is ``none``, or credentials are missing, this is identical to
+    :func:`_build_chat_model` (and returns the DryRunChatModel under dry-run).
+    """
+    if os.getenv("LLM_MODE", "").lower() == "dry_run":
+        return DryRunChatModel(model="dry-run")
+
+    override = getattr(agent, "model", "") if agent is not None else ""
+    if not (isinstance(override, str) and override.strip()):
+        return _build_chat_model(node_type)
+
+    from agent_studio.config import get_settings
+    from agent_studio.integration_config import configured_settings
+    from agent_studio.model_config import resolve_chat_config
+
+    settings = configured_settings(get_settings(), context=None)
+    cfg = resolve_chat_config(settings, node_type=node_type)
+    if not cfg.configured:
+        return DryRunChatModel(model="dry-run")
+    return LiteLLMLangChainWrapper(
+        model=override.strip(),
+        api_base=cfg.api_base,
+        api_key=cfg.api_key,
+    )
+
+
 
 TOOL_SCHEMAS = {
     "crm.lookup_contact": {
@@ -624,7 +656,7 @@ def classify_and_route(state: AgentStudioState) -> dict[str, object]:
     system_prompt = agent.system_prompt if agent else "Classify the user intent and routed agent."
 
     try:
-        llm = _build_chat_model("classifier")
+        llm = _build_chat_model_for_agent(agent, "classifier")
         lc_messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=normalized_message),
@@ -682,9 +714,21 @@ def _run_sub_agent(state: AgentStudioState, agent_key: str) -> dict[str, object]
         }
 
     prompt = _prepare_agent_prompt_with_context(agent.system_prompt, state)
+    # Optional console-editable hints. Appended only when set so agents without them
+    # behave exactly as before. Voice shapes the draft_hint the sub-agent emits (which
+    # becomes the customer-facing reply when no tools run); tier is a risk context cue.
+    agent_voice = (getattr(agent, "voice", "") or "").strip()
+    agent_tier = (getattr(agent, "tier", "") or "").strip()
+    if agent_voice or agent_tier:
+        hints = []
+        if agent_tier:
+            hints.append(f"Risk tier: {agent_tier}.")
+        if agent_voice:
+            hints.append(f"Tone for any draft_hint: {agent_voice}.")
+        prompt = f"{prompt}\n\n# Operator hints\n- " + "\n- ".join(hints)
 
     try:
-        llm = _build_chat_model("extractor")
+        llm = _build_chat_model_for_agent(agent, "extractor")
         lc_messages = [
             SystemMessage(content=prompt),
             HumanMessage(content=state["normalized_message"]),
@@ -941,6 +985,10 @@ def supervisor_draft(state: AgentStudioState) -> dict[str, object]:
 
     agent = get_agent_registry().get_agent("supervisor_agent")
     system_prompt = agent.system_prompt if agent else "You are the supervisor. Synthesize response."
+    # Optional console-editable tone hint for the supervisor's synthesized reply.
+    supervisor_voice = (getattr(agent, "voice", "") or "").strip() if agent else ""
+    if supervisor_voice:
+        system_prompt += f"\n\n# Operator hint\nTone for the customer-facing draft: {supervisor_voice}."
 
     if not has_report:
         # ---- First pass: bind agent tools, let supervisor pick one ----
@@ -968,7 +1016,7 @@ def supervisor_draft(state: AgentStudioState) -> dict[str, object]:
         )
 
     try:
-        llm = _build_chat_model("supervisor")
+        llm = _build_chat_model_for_agent(agent, "supervisor")
         if not has_report:
             llm = llm.bind_tools(agent_tools, tool_choice="auto")
 
