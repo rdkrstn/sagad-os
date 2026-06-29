@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from uuid import UUID, uuid4
 
@@ -28,8 +28,10 @@ from agent_studio.schemas import (
     IntegrationSyncState,
     MemoryHit,
     QaFinding,
+    TICKET_SLA_HOURS,
     ToolPlan,
     ToolResult,
+    compute_sla_due_at,
 )
 
 
@@ -228,6 +230,26 @@ class ConversationStoreProtocol(Protocol):
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _enrich_new_ticket(record: ConversationRecord) -> None:
+    """First-creation ticket enrichment: SLA deadline + auto-assignment.
+
+    Only meaningful for brand-new conversations (the caller only invokes this on the
+    new-conversation path). The inbound pipeline never sets priority/assignee itself, so with
+    the default empty `ticket_default_assignees` map and no priority this is a no-op and the
+    "open ticket, no assignee, no SLA" default is preserved. When a priority is present we derive
+    `sla_due_at` from the SLA map; when an assignee map is configured we fill `assignee` from the
+    `selected_agent` (falling back to `intent`) key.
+    """
+    if record.priority and not record.sla_due_at:
+        record.sla_due_at = compute_sla_due_at(record.priority)
+    if not record.assignee:
+        assignees = get_settings().ticket_default_assignees
+        if assignees:
+            key = record.selected_agent or record.intent
+            if key and key in assignees:
+                record.assignee = assignees[key]
 
 
 def _coerce_datetime(value: object) -> datetime:
@@ -651,6 +673,10 @@ class InMemoryConversationStore:
             record.pipeline_stage = pipeline_stage
         if sla_due_at is not None:
             record.sla_due_at = sla_due_at
+        elif priority is not None and priority in TICKET_SLA_HOURS:
+            # Priority changed (or re-asserted) with no explicit deadline -> recompute the SLA
+            # window from now so the queue reflects the new urgency.
+            record.sla_due_at = compute_sla_due_at(priority)
         record.updated_at = _now()
         self._records[conversation_id] = record
         return record
@@ -684,6 +710,7 @@ class InMemoryConversationStore:
             record.sla_due_at = existing.sla_due_at
         else:
             record.messages = _merge_messages([], incoming_messages)
+            _enrich_new_ticket(record)
         self._records[record.id] = record
         return record
 
@@ -1040,6 +1067,10 @@ class PostgresConversationStore:
         if sla_due_at is not None:
             sets.append("sla_due_at = %s")
             params.append(sla_due_at)
+        elif priority is not None and priority in TICKET_SLA_HOURS:
+            # Priority changed with no explicit deadline -> recompute the SLA window from now.
+            sets.append("sla_due_at = %s")
+            params.append(compute_sla_due_at(priority))
         if not sets:
             return self.get(conversation_id, context=context)
         sets.append("updated_at = now()")
@@ -1124,6 +1155,11 @@ class PostgresConversationStore:
                 scoped.organization_id,
                 record.id,
             )
+            if not existed:
+                # Brand-new conversation: derive SLA deadline + auto-assignee (no-op when the
+                # inbound record carries no priority and the assignee map is unset). Mirrors
+                # InMemoryConversationStore.save's new-conversation branch.
+                _enrich_new_ticket(record)
             if not record.messages:
                 record.messages = [_inbound_message_from_record(record)]
             connection.execute(

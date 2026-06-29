@@ -1,4 +1,5 @@
 from functools import lru_cache
+import json
 import os
 
 from dotenv import load_dotenv
@@ -51,6 +52,20 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
+def _json_dict_env(name: str) -> dict[str, str] | None:
+    """Parse a JSON object env var (e.g. ``{"sales_agent": "alice"}``). None when unset/blank."""
+    value = os.getenv(name)
+    if not value or not value.strip():
+        return None
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if isinstance(parsed, dict):
+        return {str(k): str(v) for k, v in parsed.items() if v is not None}
+    return None
+
+
 class Settings(BaseModel):
     database_url: str | None = None
     agent_studio_internal_secret: str | None = None
@@ -86,6 +101,11 @@ class Settings(BaseModel):
     revops_autosend_enabled: bool = True
     revops_autosend_intents: list[str] = Field(default_factory=list)
     revops_autosend_confidence: float = 0.88
+    # RevOps ticket auto-assignment on creation: maps `selected_agent` (fallback `intent`) to a
+    # default assignee id. EMPTY by default => no auto-assignment => existing behavior (assignee
+    # stays None until a supervisor sets it via PATCH .../ticket). Set via
+    # TICKET_DEFAULT_ASSIGNEES='{"sales_agent":"alice","support_agent":"bob"}'.
+    ticket_default_assignees: dict[str, str] | None = None
     # Universal-webhook debouncing (opt-in). When enabled, /webhooks/{provider} returns 202
     # and coalesces a burst of messages into a single graph run after the debounce window.
     webhook_debounce_enabled: bool = False
@@ -239,6 +259,7 @@ def get_settings() -> Settings:
             if token.strip()
         ],
         revops_autosend_confidence=_float_env("REVOPS_AUTOSEND_CONFIDENCE", 0.88),
+        ticket_default_assignees=_json_dict_env("TICKET_DEFAULT_ASSIGNEES"),
         webhook_debounce_enabled=_bool_env("WEBHOOK_DEBOUNCE_ENABLED", False),
         webhook_debounce_ms=int(os.getenv("WEBHOOK_DEBOUNCE_MS", "2500")),
         twenty_enabled=_bool_env("TWENTY_ENABLED", False),

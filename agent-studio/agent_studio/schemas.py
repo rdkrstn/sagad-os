@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import uuid4
 
@@ -15,6 +15,73 @@ ConversationStatus = Literal[
 # RevOps ticket lifecycle. A conversation IS a ticket; these stage the supervisor queue.
 TicketStatus = Literal["open", "in_progress", "waiting", "resolved"]
 TicketPriority = Literal["low", "medium", "high", "urgent"]
+
+# Priority -> SLA window in hours. Used to derive `sla_due_at` when a ticket is created/priority
+# is set without an explicit deadline, and to compute `sla_status` from the deadline vs now.
+TICKET_SLA_HOURS: dict[str, float] = {
+    "urgent": 2.0,
+    "high": 8.0,
+    "medium": 24.0,
+    "low": 72.0,
+}
+# Runtime-derived SLA health. "none" = no deadline set; otherwise on_track -> warning -> overdue
+# as the deadline approaches then passes. Surfaced on read (GET /conversations, queue) and never
+# persisted -- it is recomputed from `sla_due_at` each request.
+SlaStatus = Literal["none", "on_track", "warning", "overdue"]
+# Status flips to "warning" in the final SLA_WARNING_FRACTION of the SLA window.
+SLA_WARNING_FRACTION = 0.2
+# Allowed ticket_status transitions. Same-status writes are always allowed (no-op). `resolved` is
+# terminal -- reopening requires the supervisor `force` override on PATCH .../ticket.
+TICKET_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    "open": {"in_progress", "waiting", "resolved"},
+    "in_progress": {"waiting", "resolved", "open"},
+    "waiting": {"in_progress", "resolved", "open"},
+    "resolved": set(),
+}
+
+
+def compute_sla_due_at(priority: str | None, *, now: datetime | None = None) -> datetime | None:
+    """Deadline = now + the priority's SLA window, or None when the priority is unmapped."""
+    if priority not in TICKET_SLA_HOURS:
+        return None
+    return (now or datetime.now(timezone.utc)) + timedelta(hours=TICKET_SLA_HOURS[priority])
+
+
+def compute_sla_status(
+    sla_due_at: datetime | None,
+    *,
+    priority: str | None = None,
+    created_at: datetime | None = None,
+    now: datetime | None = None,
+) -> SlaStatus:
+    """Derive on_track/warning/overdue from the SLA deadline vs ``now``.
+
+    - ``none`` when no deadline is set.
+    - ``overdue`` once the deadline has passed.
+    - ``warning`` in the final ``SLA_WARNING_FRACTION`` of the SLA window (window start = the
+      ticket's ``created_at`` when known, else the priority's nominal SLA hours).
+    - ``on_track`` otherwise.
+    """
+    if sla_due_at is None:
+        return "none"
+    now = now or datetime.now(timezone.utc)
+    due = sla_due_at if sla_due_at.tzinfo else sla_due_at.replace(tzinfo=timezone.utc)
+    if now >= due:
+        return "overdue"
+    start = created_at
+    if start is not None and start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    window_seconds: float | None = None
+    if start is not None:
+        window_seconds = (due - start).total_seconds()
+    if window_seconds is None or window_seconds <= 0:
+        hours = TICKET_SLA_HOURS.get(priority or "")
+        window_seconds = hours * 3600.0 if hours else None
+    if window_seconds and window_seconds > 0:
+        remaining = (due - now).total_seconds()
+        if remaining <= window_seconds * SLA_WARNING_FRACTION:
+            return "warning"
+    return "on_track"
 IntegrationKind = Literal[
     "channel",
     "crm",
@@ -353,6 +420,9 @@ class ConversationRecord(BaseModel):
     priority: TicketPriority | None = None
     pipeline_stage: str | None = None
     sla_due_at: datetime | None = None
+    # Runtime-derived SLA health (not persisted; recomputed from `sla_due_at` on read). Defaults
+    # to "none" so a freshly-created ticket with no priority/SLA surfaces as "none".
+    sla_status: SlaStatus = "none"
     trace_url: str | None = None
     eval_tags: list[str] = Field(default_factory=list)
     trace_attributes: dict[str, object] = Field(default_factory=dict)

@@ -86,6 +86,8 @@ from agent_studio.schemas import (
     ToolPlan,
     ToolResult,
     TicketUpdateRequest,
+    TICKET_STATUS_TRANSITIONS,
+    compute_sla_status,
 )
 from agent_studio.skill_registry import list_skill_definitions
 from agent_studio.store import StoreContext, store
@@ -795,6 +797,20 @@ def _attach_memory_context(
         "persisted_memory_count": len(memory_context),
         "memory_available": bool(memory_context),
     }
+    return record
+
+
+def _with_sla_status(record: ConversationRecord) -> ConversationRecord:
+    """Surface runtime SLA health (on_track/warning/overdue) derived from `sla_due_at` vs now.
+
+    `sla_status` is a transient field (not persisted); recompute it on every read so the queue
+    and GET /conversations/{id} reflect the current deadline. No deadline -> "none".
+    """
+    record.sla_status = compute_sla_status(
+        record.sla_due_at,
+        priority=record.priority,
+        created_at=record.created_at,
+    )
     return record
 
 
@@ -2766,18 +2782,37 @@ def list_conversations(
     ticket_status: Annotated[str | None, Query(description="Filter the RevOps ticket queue by ticket status.")] = None,
     assignee: Annotated[str | None, Query(description="Filter by assigned supervisor/user id.")] = None,
     priority: Annotated[str | None, Query(description="Filter by ticket priority.")] = None,
+    sla_status: Annotated[str | None, Query(description="Filter by runtime SLA health (on_track|warning|overdue|none).")] = None,
+    overdue: Annotated[bool | None, Query(description="When true, return only tickets past their SLA deadline.")] = None,
 ) -> ConversationListResponse:
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
+    records = store.list(
+        context=context,
+        ticket_status=ticket_status,
+        assignee=assignee,
+        priority=priority,
+    )
+    # SLA-derived filters are applied here (not in the store) because `sla_status` is a runtime
+    # computation against `now`, not a persisted column.
+    if overdue or sla_status:
+        filtered: list[ConversationRecord] = []
+        for record in records:
+            status = compute_sla_status(
+                record.sla_due_at,
+                priority=record.priority,
+                created_at=record.created_at,
+            )
+            if overdue and status != "overdue":
+                continue
+            if sla_status and status != sla_status:
+                continue
+            filtered.append(record)
+        records = filtered
     return ConversationListResponse(
         conversations=[
-            _attach_memory_context(record, context=context)
-            for record in store.list(
-                context=context,
-                ticket_status=ticket_status,
-                assignee=assignee,
-                priority=priority,
-            )
+            _with_sla_status(_attach_memory_context(record, context=context))
+            for record in records
         ],
     )
 
@@ -2790,6 +2825,7 @@ async def update_conversation_ticket(
     x_sagad_user_id: Annotated[str | None, Header()] = None,
     x_sagad_role: Annotated[str | None, Header()] = None,
     x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+    force: Annotated[bool, Query(description="Bypass ticket_status transition validation (supervisor override, e.g. to reopen a resolved ticket).")] = False,
 ) -> ConversationRecord:
     _verify_internal_secret(x_sagad_internal_secret)
     context = _trusted_context(x_sagad_org_id, x_sagad_user_id, x_sagad_role)
@@ -2797,6 +2833,20 @@ async def update_conversation_ticket(
     if record is None:
         raise HTTPException(status_code=404, detail="Conversation not found.")
     _require_supervisor_approval(True)
+    # Validate the ticket_status transition against the allowed-state machine. Same-status
+    # writes are no-ops and allowed; `resolved` is terminal and requires `force=true` to reopen.
+    if request.ticket_status is not None and not force:
+        current = record.ticket_status
+        if request.ticket_status != current:
+            allowed = TICKET_STATUS_TRANSITIONS.get(current, set())
+            if request.ticket_status not in allowed:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Invalid ticket status transition: {current} -> {request.ticket_status}. "
+                        "Use ?force=true to override (supervisor reopen)."
+                    ),
+                )
     updated = store.update_ticket(
         conversation_id,
         ticket_status=request.ticket_status,
@@ -2832,7 +2882,7 @@ async def update_conversation_ticket(
             organization_id=context.organization_id,
         ),
     )
-    return _attach_memory_context(updated, context=context)
+    return _with_sla_status(_attach_memory_context(updated, context=context))
 
 
 @app.get("/conversations/{conversation_id}", response_model=ConversationRecord)
@@ -2871,7 +2921,7 @@ async def get_conversation(
                     payload={"fetch_error": chatwoot_context.fetch_error or "unknown"},
                     context=context,
                 )
-    return _attach_memory_context(record, context=context)
+    return _with_sla_status(_attach_memory_context(record, context=context))
 
 
 @app.post("/conversations/{conversation_id}/resolve", response_model=ConversationRecord)
