@@ -54,4 +54,15 @@ class AgentStudioState(TypedDict, total=False):
     supervisor_decision: dict[str, object]
     tool_requests: list[dict[str, object]]
     tool_outputs: list[dict[str, object]]
+    # --- Supervisor/handoff orchestration (Phase 3) ---
+    # `handoff_to` is set by the supervisor node to transfer control to another sub-agent; the
+    # conditional edge `_supervisor_route` maps it back to the matching sub-agent node. Cleared
+    # (None) when the supervisor finalizes to `supervisor_draft`.
+    handoff_to: str | None
+    # Ordered list of agent keys the supervisor has delegated to (e.g. ["refund_resolver"]).
+    # Bounded by `MAX_DELEGATIONS` to prevent infinite agent->agent handoff loops.
+    delegation_chain: list[str]
+    # Per-agent transcript: each entry is {"agent": <key>, "report": <sub_agent_report>} recorded
+    # by the supervisor as it inspects each sub-agent's report before finalizing or handing off.
+    agent_messages: list[dict[str, object]]
 

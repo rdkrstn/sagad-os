@@ -1,10 +1,31 @@
+import os
+
 import pytest
 from unittest.mock import patch, MagicMock
 from langchain_core.messages import AIMessage
-from agent_studio.embeddings import deterministic_embedding
 
 from fastapi.testclient import TestClient
 from agent_studio.config import get_settings
+
+# Force every store singleton to resolve InMemory for the test suite. The repo `.env` (loaded
+# above by `agent_studio.config` and `agent_studio/__init__` via load_dotenv) sets DATABASE_URL
+# to a Postgres that isn't running in CI/local sandboxes; without this, the module-level
+# singletons (integration_config_store, model_provider_config_store) and the lazy store proxy
+# build as Postgres backends and time out (5s) on first use — breaking any test that touches
+# configured_settings(), the /integration-configs/*/test probe, /health/ready, setup_function's
+# store.clear(), or the /webhooks/ghl path.
+#
+# We SET DATABASE_URL to an empty string rather than popping it: a transitive dependency
+# (litellm, imported via embeddings -> model_config) calls load_dotenv() at import time, and
+# load_dotenv(override=False) will *re-set* a variable that is absent (it only skips vars that
+# are already present). Popping therefore loses the race; an empty string is already "present"
+# so it survives, and database_configured() (bool(db_url and db_url.strip())) returns False ->
+# all stores build InMemory. test_store_persistence.py's Postgres test is skipif
+# AGENT_STUDIO_TEST_DATABASE_URL (a separate, unset var), so it stays skipped and unaffected.
+os.environ["DATABASE_URL"] = ""
+get_settings.cache_clear()
+
+from agent_studio.embeddings import deterministic_embedding
 
 # Patch EmbeddingService.embed_text at import time to prevent live OpenAI API calls during test collection
 patch("agent_studio.embeddings.EmbeddingService.embed_text", side_effect=deterministic_embedding).start()

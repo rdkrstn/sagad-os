@@ -701,6 +701,11 @@ def _run_sub_agent(state: AgentStudioState, agent_key: str) -> dict[str, object]
         report.setdefault("draft_hint", "")
         report.setdefault("confidence", 0.5)
         report.setdefault("risk_flags", [])
+        # Optional agent->agent handoff target. When the sub-agent LLM emits a `handoff_to`
+        # agent key (and recommended_action "HANDOFF"), the supervisor node transfers control to
+        # that sub-agent. Absent => None => no handoff (default DRAFT_REPLY/REQUEST_TOOL/ESCALATE
+        # flow is unchanged).
+        report.setdefault("handoff_to", None)
 
         tool_requests = report.get("tool_requests", [])
         if not isinstance(tool_requests, list):
@@ -1190,11 +1195,14 @@ def _route_to_agent(state: AgentStudioState) -> str:
 
 
 def _needs_tools(state: AgentStudioState) -> str:
-    """Decide whether to run tool executor or proceed to supervisor draft.
+    """Decide whether to run tool executor or proceed to the supervisor (handoff orchestrator).
 
     Returns ``"run_tool_executor"`` when:
     - A sub-agent has requested a CRM tool, OR
     - The supervisor has requested an agent tool (``agent.*`` tool call)
+
+    Otherwise returns ``"supervisor"`` -- the handoff node that either transfers control to
+    another sub-agent or finalizes to ``supervisor_draft``.
     """
     tool_requests = state.get("tool_requests") or []
 
@@ -1211,6 +1219,73 @@ def _needs_tools(state: AgentStudioState) -> str:
     if action == "REQUEST_TOOL" and tool_requests:
         return "run_tool_executor"
 
+    return "supervisor"
+
+
+# --- Supervisor/handoff orchestration (Phase 3) -------------------------------------------
+# Maps an agent key (the `handoff_to` / `routed_agent` value emitted by a sub-agent report) to
+# the graph node that runs that sub-agent. This is the agent->agent transfer table the
+# supervisor uses to delegate within a single run.
+_AGENT_HANDOFF_NODES: dict[str, str] = {
+    "sales_agent": "run_sales_agent",
+    "refund_resolver": "run_refund_resolver",
+    "general_support": "run_support_agent",
+}
+
+# Hard cap on agent->agent delegations in one run. Prevents a handoff cycle (e.g.
+# support -> refund -> sales -> support) from looping forever; the supervisor finalizes to
+# `supervisor_draft` once the cap is reached.
+MAX_DELEGATIONS = 3
+
+
+def supervisor(state: AgentStudioState) -> dict[str, object]:
+    """Supervisor/handoff orchestrator -- inspects a sub-agent report and either transfers
+    control to another sub-agent or finalizes.
+
+    This node is rule-based (no LLM call) so it stays deterministic and never breaks the
+    pipeline on model failure. It records each sub-agent's report into `agent_messages`
+    (the per-agent transcript) and, when the report requests a handoff (`recommended_action`
+    == "HANDOFF" or `handoff_to` set to a known agent key) and the delegation cap has not been
+    reached, sets `handoff_to` + appends to `delegation_chain`. The `_supervisor_route` edge then
+    transfers to the target sub-agent. Otherwise `handoff_to` is cleared and the run finalizes
+    to `supervisor_draft`.
+    """
+    report = state.get("sub_agent_report") or {}
+    chain = list(state.get("delegation_chain") or [])
+    agent_messages = list(state.get("agent_messages") or [])
+
+    # Record this agent's report in the per-agent transcript (skip empty placeholder reports).
+    agent_name = report.get("agent")
+    if agent_name or report.get("analysis"):
+        agent_messages.append({"agent": agent_name, "report": report})
+
+    handoff_to = report.get("handoff_to")
+    action = report.get("recommended_action")
+    wants_handoff = (action == "HANDOFF" or bool(handoff_to)) and handoff_to in _AGENT_HANDOFF_NODES
+
+    if wants_handoff and len(chain) < MAX_DELEGATIONS:
+        chain.append(handoff_to)
+        return {
+            "handoff_to": handoff_to,
+            "delegation_chain": chain,
+            "agent_messages": agent_messages,
+            # Keep routed_agent in sync with the active sub-agent for downstream tool policy.
+            "routed_agent": handoff_to,
+        }
+
+    # No handoff (or cap reached): finalize to supervisor_draft.
+    return {
+        "handoff_to": None,
+        "delegation_chain": chain,
+        "agent_messages": agent_messages,
+    }
+
+
+def _supervisor_route(state: AgentStudioState) -> str:
+    """Edge out of the supervisor node: hand off to the requested sub-agent, else finalize."""
+    target = state.get("handoff_to")
+    if target in _AGENT_HANDOFF_NODES:
+        return _AGENT_HANDOFF_NODES[target]
     return "supervisor_draft"
 
 
@@ -1227,6 +1302,9 @@ def build_graph() -> object:
     workflow.add_node("run_support_agent", run_support_agent)
 
     workflow.add_node("run_tool_executor", run_tool_executor)
+    # Supervisor/handoff orchestrator: inspects each sub-agent report and either transfers
+    # control to another sub-agent (bounded by MAX_DELEGATIONS) or finalizes to supervisor_draft.
+    workflow.add_node("supervisor", supervisor)
     workflow.add_node("supervisor_draft", supervisor_draft)
     workflow.add_node("run_guardrail", run_guardrail)
 
@@ -1245,36 +1323,31 @@ def build_graph() -> object:
         }
     )
 
-    workflow.add_conditional_edges(
+    # Sub-agents + tool executor route to either the tool executor (CRM/agent tool requested) or
+    # the supervisor handoff node (which finalizes to supervisor_draft when no handoff is needed).
+    for source_node in (
         "run_sales_agent",
-        _needs_tools,
-        {
-            "run_tool_executor": "run_tool_executor",
-            "supervisor_draft": "supervisor_draft",
-        }
-    )
-    workflow.add_conditional_edges(
         "run_refund_resolver",
-        _needs_tools,
-        {
-            "run_tool_executor": "run_tool_executor",
-            "supervisor_draft": "supervisor_draft",
-        }
-    )
-    workflow.add_conditional_edges(
         "run_support_agent",
-        _needs_tools,
-        {
-            "run_tool_executor": "run_tool_executor",
-            "supervisor_draft": "supervisor_draft",
-        }
-    )
-
-    workflow.add_conditional_edges(
         "run_tool_executor",
-        _needs_tools,
+    ):
+        workflow.add_conditional_edges(
+            source_node,
+            _needs_tools,
+            {
+                "run_tool_executor": "run_tool_executor",
+                "supervisor": "supervisor",
+            }
+        )
+
+    # Supervisor: hand off to the requested sub-agent, or finalize to supervisor_draft.
+    workflow.add_conditional_edges(
+        "supervisor",
+        _supervisor_route,
         {
-            "run_tool_executor": "run_tool_executor",
+            "run_sales_agent": "run_sales_agent",
+            "run_refund_resolver": "run_refund_resolver",
+            "run_support_agent": "run_support_agent",
             "supervisor_draft": "supervisor_draft",
         }
     )
