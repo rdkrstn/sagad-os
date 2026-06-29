@@ -197,7 +197,10 @@ function TurnClock({
   const [nowMs, setNowMs] = useState<number | null>(null);
   useEffect(() => {
     if (!lastIso) return;
-    setNowMs(Date.now());
+    // Drive the clock from the interval callback only. Calling setState
+    // synchronously in the effect body is flagged by react-hooks/set-state-in-effect
+    // and causes cascading renders; the interval tick is the legitimate "subscribe
+    // to external time" path. nowMs starts null -> "--:--" until the first tick.
     const id = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(id);
   }, [lastIso]);
@@ -237,7 +240,9 @@ function LiveAge({ iso, fallback = "Unknown" }: { iso: string; fallback?: string
   const [nowMs, setNowMs] = useState<number | null>(null);
   useEffect(() => {
     if (parseIsoMs(iso) === null) return;
-    setNowMs(Date.now());
+    // setState only via the interval callback (see TurnClock note). nowMs starts
+    // null -> the stable full date is rendered until the first tick, which avoids a
+    // hydration mismatch and the react-hooks/set-state-in-effect violation.
     const id = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(id);
   }, [iso]);
