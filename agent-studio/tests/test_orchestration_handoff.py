@@ -30,7 +30,11 @@ def _handoff_report(agent: str, target: str | None) -> str:
                 "analysis": f"{agent} handled the request",
                 "recommended_action": "DRAFT_REPLY",
                 "tool_requests": [],
-                "draft_hint": "Done.",
+                # Empty draft_hint so supervisor_draft falls back to the LLM (mock returns
+                # draft_text). These tests focus on delegation_chain/agent_messages, not draft
+                # content; the verbatim-draft_hint path is covered separately by
+                # test_sub_agent_draft_hint_used_verbatim in test_graph_hierarchy.py.
+                "draft_hint": "",
                 "confidence": 0.9,
                 "risk_flags": [],
             }

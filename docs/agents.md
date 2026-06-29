@@ -31,8 +31,15 @@ Agents should use approved knowledge, calculate a trust score, and never perform
 
 Supervisors can dynamically configure and manage AI agents directly from the **Agent Configuration** panel in the `/agents` page.
 
-* **Storage**: Configurations are saved as Markdown files with YAML frontmatter in `agent-studio/agent_studio/agents/`.
+* **Storage**: Configurations are saved as Markdown files with YAML frontmatter in `agent-studio/agent_studio/agents/`. The body is the `system_prompt`; frontmatter keys are `name`, `intents`, `allowed_tools`, plus optional `description`, `model`, `tier`, and `voice`. Optional keys are only written when set, so existing agent files stay minimal.
 * **Registry Sync**: The registry dynamically reloads and updates when agents are created, edited, or deleted.
+* **Editable fields**:
+  * `system_prompt` — the agent's voice/instructions (drives the sub-agent's `draft_hint`, which becomes the customer-facing reply when no tools run).
+  * `intents` / `allowed_tools` — routing intents and server-side tool permissions.
+  * `description` — short summary shown on the agent card (UI only).
+  * `model` — optional per-agent model override (LiteLLM format). When set, the agent uses it instead of the node default (`classifier` / `extractor` / `supervisor`); the provider credentials/base still come from the model-gateway resolver.
+  * `tier` — risk tier label (e.g. Standard / Managed / High-risk), shown on the card and passed to the sub-agent as a risk-context hint.
+  * `voice` — short tone directive appended to the agent prompt (and the supervisor's) so the configured tone carries into the reply.
 * **API Endpoints**:
   * `POST /agents` — Saves or updates an agent config file.
   * `DELETE /agents/{agent_id}` — Deletes an agent config file.

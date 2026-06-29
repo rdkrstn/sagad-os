@@ -26,7 +26,7 @@ from agent_studio.config import Settings
 from agent_studio.config import get_settings
 from agent_studio.db import TrustedContext, database_ready, initialize_database_safe
 from agent_studio.evals import built_in_eval_cases, run_fixture_evals
-from agent_studio.graph import graph
+from agent_studio.graph import graph, get_agent_registry
 from agent_studio.integration_config import (
     ADMIN_ROLES,
     configured_settings,
@@ -94,7 +94,6 @@ from agent_studio.store import StoreContext, store
 from agent_studio.tool_manifests import ToolManifestRegistry
 from agent_studio.tool_policy import ToolPolicyContext, ToolPolicyDecision, evaluate_tool_policy
 from agent_studio.twenty import TwentyAdapter, twenty_status
-from agent_studio.agents import AgentRegistry
 
 
 # Handle to the background GHL poller, if started. Stopped on lifespan shutdown.
@@ -152,7 +151,13 @@ knowledge_ingestion_service = KnowledgeIngestionService(
     runtime_retriever=retriever,
 )
 tool_manifest_registry = ToolManifestRegistry()
-agent_registry = AgentRegistry()
+# Share the SAME @lru_cache'd registry instance the graph uses (agent_studio.graph.
+# get_agent_registry). The graph reads agent prompts from get_agent_registry(); if this were a
+# separate AgentRegistry() instance, POST /agents edits (and .md reloads) would mutate this
+# object + disk but never reach the running pipeline until a process restart. Reusing the
+# singleton means save_agent/reload_agents (which mutate self.agents in place) are visible to
+# the graph on the next node call — edits hot-apply with no restart.
+agent_registry = get_agent_registry()
 
 # Populated by the Sprint 2 graph/retrieval workflow when those state fields exist.
 _SPRINT2_CONVERSATION_STATE_FIELDS = (
@@ -1223,6 +1228,12 @@ class AgentSavePayload(BaseModel):
     allowed_tools: list[str]
     system_prompt: str
     original_id: str | None = None
+    # Optional, UI-editable metadata. Default "" so older clients keep working and
+    # existing agent files stay minimal when these are unset.
+    description: str = ""
+    model: str = ""
+    tier: str = ""
+    voice: str = ""
 
 
 @app.post("/agents")
@@ -1238,6 +1249,10 @@ def save_agent(
         allowed_tools=payload.allowed_tools,
         system_prompt=payload.system_prompt,
         original_id=payload.original_id,
+        description=payload.description,
+        model=payload.model,
+        tier=payload.tier,
+        voice=payload.voice,
     )
     return [agent.model_dump() for agent in agent_registry.get_all_agents()]
 
@@ -1254,6 +1269,23 @@ def delete_agent(
     return {"deleted": agent_id, "agents": [agent.model_dump() for agent in agent_registry.get_all_agents()]}
 
 
+@app.post("/agents/reload")
+def reload_agents(
+    x_sagad_internal_secret: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    """Hot-reload agent definitions from disk without a process restart.
+
+    ``POST /agents`` already reloads the shared registry in place after a save; this endpoint
+    covers the case where an agent ``.md`` was edited directly on disk (e.g. via git or an
+    editor). Because ``agent_registry`` is the same ``@lru_cache``'d singleton the graph reads
+    from, ``reload_agents()`` (which mutates ``self.agents`` in place) makes the new prompts
+    visible to the running pipeline immediately.
+    """
+    _verify_internal_secret(x_sagad_internal_secret)
+    agent_registry.reload_agents()
+    return {"reloaded": True, "agents": [agent.model_dump() for agent in agent_registry.get_all_agents()]}
+
+
 @app.get("/conversations/{conversation_id}/draft/stream")
 async def stream_draft(
     conversation_id: str,
@@ -1268,62 +1300,47 @@ async def stream_draft(
     if not record:
         raise HTTPException(status_code=404, detail="Conversation not found.")
 
-    # Build the same prompt context as draft_reply
-    intent = record.intent or "general_support"
     incoming = record.normalized_message or record.incoming_message or ""
-    knowledge = record.retrieved_knowledge or []
-    _memory = record.memory_context if hasattr(record, "memory_context") else []
-    citation_titles = ", ".join(
-        getattr(hit, "title", str(hit)) for hit in knowledge[:4]
-    )
 
-    from agent_studio.graph import _resolve_markdown_agent, _build_chat_model, TOOL_SCHEMAS
-
-    agent = _resolve_markdown_agent(intent, getattr(record, "selected_agent", None))
-    system_prompt = agent.system_prompt if agent else "You are a helpful assistant."
-    if knowledge:
-        knowledge_context = "\n".join(
-            f"- {getattr(hit, 'title', 'Source')} ({getattr(hit, 'category', 'general')}, score {getattr(hit, 'score', 0.0):.2f}): {getattr(hit, 'excerpt', '')}"
-            for hit in knowledge
-        )
-        system_prompt += f"\n\nSelected Source Pack:\n{knowledge_context}"
-    system_prompt += (
-        "\n\nCRITICAL: Respond directly with the message content you want to send to the customer. "
-        "Do NOT output internal tool call logs or 'I am checking my tools'. Produce the final conversational response."
-    )
-
-    tools: list[dict[str, object]] = []
-    if agent:
-        for tool_name in agent.allowed_tools:
-            if tool_name in TOOL_SCHEMAS:
-                tools.append(TOOL_SCHEMAS[tool_name])
-
-    from langchain_core.messages import HumanMessage, SystemMessage
-
-    llm = _build_chat_model()
-    lc_messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=incoming),
-    ]
-    if tools:
-        llm = llm.bind_tools(tools, tool_choice="none")
+    # Run the SAME pipeline the webhook runs (graph.ainvoke) so streaming and the drafted reply
+    # share one customizable chain: normalize -> retrieve -> classify -> sub-agent -> supervisor
+    # -> guardrail. Editing any agent .md (followed by POST /agents or POST /agents/reload) is
+    # reflected here identically — there is no longer a divergent stream-only prompt path.
+    initial_state: dict[str, object] = {
+        "conversation_id": conversation_id,
+        "chatwoot_conversation_id": getattr(record, "chatwoot_conversation_id", None),
+        "chatwoot_message_id": getattr(record, "chatwoot_message_id", None),
+        "customer_name": record.customer_name,
+        "channel": record.channel,
+        "incoming_message": incoming,
+        "conversation_history": record.messages,
+        "memory_context": store.list_memory_items(conversation_id, query=incoming, context=context)
+        if conversation_id
+        else [],
+        "trace_url": None,
+    }
 
     async def generate():
-        collected = []
         try:
-            async for chunk in llm.astream(lc_messages):
-                token = chunk.content or ""
-                if token:
-                    collected.append(token)
-                    yield f"data: {token}\n\n"
+            final_state = await graph.ainvoke(initial_state)
         except Exception as exc:
             yield f"data: [ERROR] {exc}\n\n"
+            return
 
-        # Save the final draft
-        final_body = "".join(collected)
-        if citation_titles:
-            final_body = f"{final_body}\n\nBasis: {citation_titles}."
-        record.draft_reply = final_body
+        draft = str(final_state.get("draft_reply", "") or "")
+        # Stream the finalized draft as SSE tokens (word-chunked, matching DryRun astream format).
+        for token in draft.split():
+            yield f"data: {token} \n\n"
+
+        # Persist the graph-produced draft + QA state back onto the record.
+        record.draft_reply = draft
+        qa_findings = final_state.get("qa_findings")
+        if qa_findings is not None:
+            record.qa_findings = qa_findings
+        compliance_status = final_state.get("compliance_status")
+        if compliance_status:
+            record.compliance_status = compliance_status
+        record.approval_status = "needs_approval"
         store.save(record, context=context)
         yield "data: [DONE]\n\n"
 

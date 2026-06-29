@@ -11,6 +11,12 @@ class AgentConfig(BaseModel):
     intents: List[str]
     allowed_tools: List[str]
     system_prompt: str
+    # Optional, UI-editable metadata. All default to "" so existing agent .md files
+    # (which predate these fields) load cleanly and the graph behavior is unchanged.
+    description: str = ""
+    model: str = ""  # per-agent model override (LiteLLM-format); empty => node default
+    tier: str = ""  # e.g. "standard" / "managed" / "high-risk"; UI + prompt hint
+    voice: str = ""  # short tone directive appended to the agent prompt when set
 
 class AgentRegistry:
     def __init__(self, agents_dir: str = None):
@@ -38,7 +44,11 @@ class AgentRegistry:
                             name=frontmatter.get("name", file_path.stem),
                             intents=frontmatter.get("intents", []),
                             allowed_tools=frontmatter.get("allowed_tools", []),
-                            system_prompt=body
+                            system_prompt=body,
+                            description=frontmatter.get("description", "") or "",
+                            model=frontmatter.get("model", "") or "",
+                            tier=frontmatter.get("tier", "") or "",
+                            voice=frontmatter.get("voice", "") or "",
                         )
                         for intent in config.intents:
                             self.agents[intent] = config
@@ -64,6 +74,10 @@ class AgentRegistry:
         allowed_tools: List[str],
         system_prompt: str,
         original_id: Optional[str] = None,
+        description: str = "",
+        model: str = "",
+        tier: str = "",
+        voice: str = "",
     ) -> AgentConfig:
         safe_id = re.sub(r"[^a-z0-9_]", "_", agent_id.lower().strip())
         if not safe_id:
@@ -75,10 +89,23 @@ class AgentRegistry:
             if old_path.exists():
                 old_path.unlink()
 
-        frontmatter_data = yaml.dump(
-            {"name": name, "intents": intents, "allowed_tools": allowed_tools},
-            default_flow_style=True,
-        ).strip()
+        # Always persist the core fields. Optional metadata is written only when
+        # non-empty so existing agent files stay minimal and diffs stay small.
+        frontmatter: dict = {
+            "name": name,
+            "intents": intents,
+            "allowed_tools": allowed_tools,
+        }
+        for key, value in (
+            ("description", description),
+            ("model", model),
+            ("tier", tier),
+            ("voice", voice),
+        ):
+            if isinstance(value, str) and value.strip():
+                frontmatter[key] = value.strip()
+
+        frontmatter_data = yaml.dump(frontmatter, default_flow_style=True).strip()
         content = f"---\n{frontmatter_data}\n---\n{system_prompt.strip()}\n"
         file_path = self.agents_dir / f"{safe_id}.md"
         file_path.write_text(content, encoding="utf-8")
@@ -90,6 +117,10 @@ class AgentRegistry:
             intents=intents,
             allowed_tools=allowed_tools,
             system_prompt=system_prompt.strip(),
+            description=(description or "").strip(),
+            model=(model or "").strip(),
+            tier=(tier or "").strip(),
+            voice=(voice or "").strip(),
         )
         return config
 

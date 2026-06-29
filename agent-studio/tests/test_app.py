@@ -611,6 +611,42 @@ def test_approve_send_uses_dry_run_without_chatwoot_credentials(
     assert payload["send_status"] == "dry_run"
 
 
+def test_draft_stream_runs_graph_and_persists() -> None:
+    # The stream endpoint runs the SAME graph as the webhook (no divergent stream-only prompt),
+    # streams the resulting draft_reply as SSE tokens, then persists it back onto the record.
+    created = client.post(
+        "/webhooks/chatwoot",
+        json={"content": "Tell me about pricing", "conversation": {"id": 4242}},
+    ).json()
+    conv_id = created["id"]
+
+    resp = client.get(f"/conversations/{conv_id}/draft/stream")
+    assert resp.status_code == 200
+    tokens: list[str] = []
+    done = False
+    for line in resp.text.splitlines():
+        if line.startswith("data: "):
+            payload = line[len("data: "):]
+            if payload == "[DONE]":
+                done = True
+                break
+            tokens.append(payload)
+    assert done, "stream must terminate with data: [DONE]"
+
+    # Normalize whitespace: the draft was word-chunked into SSE tokens.
+    streamed = " ".join("".join(tokens).split())
+
+    # The record's draft_reply was updated to the graph-produced draft, and the streamed content
+    # matches what was persisted.
+    fetched = client.get(f"/conversations/{conv_id}").json()
+    persisted = " ".join(fetched["draft_reply"].split())
+    assert persisted, "draft must be non-empty"
+    assert streamed == persisted
+
+    # It is the graph's draft (sub-agent voice), not the old bespoke stream canned text.
+    assert "finalized draft for your request" not in streamed
+
+
 def test_approve_send_records_policy_metadata_in_chatwoot_tool_result() -> None:
     created = client.post(
         "/webhooks/chatwoot",
