@@ -257,3 +257,15 @@ def test_build_chat_model_for_agent_override_uses_agent_model(monkeypatch):
 
     wrapper = _build_chat_model_for_agent(agent, "extractor")
     assert wrapper.model == "openai/gpt-4o-mini"
+
+
+def test_agent_registry_singleton_shared_between_api_and_graph():
+    """POST /agents (main.agent_registry) and the graph (get_agent_registry) must share the
+    SAME registry instance, so save_agent's in-place reload_agents() makes edits visible to the
+    running pipeline without a process restart. If this invariant breaks, agent edits silently
+    never reach the graph until the server is restarted.
+    """
+    from agent_studio.main import agent_registry
+    from agent_studio.graph import get_agent_registry
+
+    assert agent_registry is get_agent_registry()

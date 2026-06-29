@@ -990,6 +990,12 @@ def supervisor_draft(state: AgentStudioState) -> dict[str, object]:
     if supervisor_voice:
         system_prompt += f"\n\n# Operator hint\nTone for the customer-facing draft: {supervisor_voice}."
 
+    # Sub-agent voice: when the sub-agent supplied a usable draft_hint AND no tool lookups were
+    # run AND it isn't an escalation, use the sub-agent's own words verbatim as the reply (no
+    # supervisor LLM rewrite). This is what makes editing a sub-agent .md directly change the
+    # customer-facing reply. Set only on the re-entry path below; empty otherwise.
+    verbatim_draft = ""
+
     if not has_report:
         # ---- First pass: bind agent tools, let supervisor pick one ----
         agent_tools = _build_agent_tool_schemas()
@@ -1004,6 +1010,15 @@ def supervisor_draft(state: AgentStudioState) -> dict[str, object]:
         # ---- Re-entry: we have sub-agent report + tool outputs, write draft ----
         report = existing_report
         tool_outputs = state.get("tool_outputs") or []
+        draft_hint = (report.get("draft_hint") or "").strip()
+        action = report.get("recommended_action")
+        # Use the sub-agent's draft_hint verbatim when no tools ran and it isn't an escalation.
+        # When tools ran, their outputs must be woven into the reply -> supervisor synthesizes.
+        # On ESCALATE or missing draft_hint -> supervisor synthesizes. Editing the sub-agent .md
+        # (which drives draft_hint) directly changes the reply in the verbatim case.
+        if draft_hint and not tool_outputs and action != "ESCALATE":
+            verbatim_draft = draft_hint
+
         context_str = f"SUB-AGENT REPORT:\n{json.dumps(report, indent=2)}\n\nTOOL OUTPUTS:\n{json.dumps(tool_outputs, indent=2)}"
         knowledge = state.get("retrieved_knowledge", [])
         if knowledge:
@@ -1016,30 +1031,34 @@ def supervisor_draft(state: AgentStudioState) -> dict[str, object]:
         )
 
     try:
-        llm = _build_chat_model_for_agent(agent, "supervisor")
-        if not has_report:
-            llm = llm.bind_tools(agent_tools, tool_choice="auto")
+        if verbatim_draft:
+            # Sub-agent voice path: skip the supervisor LLM call entirely.
+            body = verbatim_draft
+        else:
+            llm = _build_chat_model_for_agent(agent, "supervisor")
+            if not has_report:
+                llm = llm.bind_tools(agent_tools, tool_choice="auto")
 
-        msg = state.get("normalized_message", state.get("incoming_message", ""))
-        lc_messages = [SystemMessage(content=system_prompt), HumanMessage(content=msg)]
-        response = llm.invoke(lc_messages)
-        body = (response.content or "").strip()
+            msg = state.get("normalized_message", state.get("incoming_message", ""))
+            lc_messages = [SystemMessage(content=system_prompt), HumanMessage(content=msg)]
+            response = llm.invoke(lc_messages)
+            body = (response.content or "").strip()
 
-        # ---- Detect agent tool calls (first-pass) ----
-        agent_calls = _has_agent_tool_calls(response)
-        if agent_calls and not has_report:
-            return {
-                "tool_requests": [{"tool": tc["name"], "args": tc.get("args", {}), "id": tc.get("id", "")} for tc in agent_calls],
-                "draft_reply": "",
-                "approval_status": "needs_approval",
-            }
+            # ---- Detect agent tool calls (first-pass) ----
+            agent_calls = _has_agent_tool_calls(response)
+            if agent_calls and not has_report:
+                return {
+                    "tool_requests": [{"tool": tc["name"], "args": tc.get("args", {}), "id": tc.get("id", "")} for tc in agent_calls],
+                    "draft_reply": "",
+                    "approval_status": "needs_approval",
+                }
 
-        if body.startswith("```"):
-            body = re.sub(r"^```(?:json)?\n", "", body)
-            body = re.sub(r"\n```$", "", body)
-        body = body.strip()
-        if not body:
-            body = "I am looking into this request. One moment please."
+            if body.startswith("```"):
+                body = re.sub(r"^```(?:json)?\n", "", body)
+                body = re.sub(r"\n```$", "", body)
+            body = body.strip()
+            if not body:
+                body = "I am looking into this request. One moment please."
     except Exception as exc:
         body = f"An error occurred: {exc}"
 

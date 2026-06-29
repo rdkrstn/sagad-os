@@ -505,6 +505,50 @@ def test_supervisor_draft_always_needs_approval(mock_graph_llm):
     assert res["approval_status"] == "needs_approval"
 
 
+def test_supervisor_draft_uses_sub_agent_draft_hint_verbatim(mock_graph_llm):
+    # Sub-agent voice: when a draft_hint is present and no tool lookups ran, supervisor_draft
+    # uses it verbatim and skips the supervisor LLM rewrite — so editing the sub-agent .md
+    # (which drives draft_hint) directly changes the customer-facing reply.
+    state: AgentStudioState = {
+        "normalized_message": "Hello",
+        "sub_agent_report": {
+            "agent": "sales_agent",
+            "analysis": "pricing request",
+            "recommended_action": "DRAFT_REPLY",
+            "draft_hint": "Our pricing starts at $10/mo — which plan were you considering?",
+        },
+    }
+    res = supervisor_draft(state)
+    assert res["draft_reply"].startswith("Our pricing starts at $10/mo")
+    # The supervisor's canned LLM text must NOT appear (no rewrite happened).
+    assert "finalized draft reply from the supervisor" not in res["draft_reply"]
+
+
+def test_supervisor_draft_synthesizes_when_tools_ran_even_with_draft_hint(mock_graph_llm):
+    # When tool lookups ran, their outputs must be woven in -> supervisor synthesizes even if a
+    # draft_hint is present (the verbatim path is skipped because tool_outputs is non-empty).
+    def custom_llm(sys, user):
+        if "ACME" in user or "ACME" in sys:
+            return "Finalized draft for ACME customer."
+        return None
+    mock_graph_llm.return_value = make_mock_llm(custom_llm)
+
+    state: AgentStudioState = {
+        "normalized_message": "Hello",
+        "sub_agent_report": {
+            "agent": "sales_agent",
+            "analysis": "pricing request",
+            "recommended_action": "DRAFT_REPLY",
+            "draft_hint": "Our pricing starts at $10/mo.",
+        },
+        "tool_outputs": [{"tool": "crm.lookup_contact", "output": {"company_name": "ACME"}}],
+    }
+    res = supervisor_draft(state)
+    assert "ACME" in res["draft_reply"]
+    # The raw draft_hint was NOT used verbatim — the supervisor synthesized to incorporate ACME.
+    assert not res["draft_reply"].startswith("Our pricing starts at $10/mo.")
+
+
 # =====================================================================
 # GUARDRAIL / QA TESTS (9 tests)
 # =====================================================================
