@@ -96,10 +96,15 @@ class Settings(BaseModel):
     ghl_signature_scheme: str = "hmac"
     ghl_native_webhook_key: str | None = None
     # RevOps tiered auto-send: a narrow allowlist of low-risk intents that may be promoted to
-    # compliance_status="pass" (and thus auto-sent) when risk=low + confidence>=threshold.
-    # EMPTY by default => no promotion => existing needs_approval behavior is unchanged.
+    # compliance_status="pass" (and thus auto-sent) when risk=low + confidence>=threshold. The
+    # default is ["pricing_lead"] (the classifier's real low-risk pricing intent) so a low-risk
+    # pricing reply auto-sends out of the box. Override with REVOPS_AUTOSEND_INTENTS (comma-list
+    # of classifier intents: pricing_lead / general_support / booking_or_support /
+    # refund_or_cancellation). Note: retrieval_confidence must still clear revops_autosend_confidence
+    # (quality_score is capped at min(0.88, retrieval_confidence)), so a low retrieval score can
+    # still queue a low-risk reply; raise retrieval quality (RERANK_ENABLED) or lower the threshold.
     revops_autosend_enabled: bool = True
-    revops_autosend_intents: list[str] = Field(default_factory=list)
+    revops_autosend_intents: list[str] = Field(default_factory=lambda: ["pricing_lead"])
     revops_autosend_confidence: float = 0.88
     # RevOps ticket auto-assignment on creation: maps `selected_agent` (fallback `intent`) to a
     # default assignee id. EMPTY by default => no auto-assignment => existing behavior (assignee
@@ -253,11 +258,14 @@ def get_settings() -> Settings:
         ghl_signature_scheme=os.getenv("GHL_SIGNATURE_SCHEME", "hmac"),
         ghl_native_webhook_key=os.getenv("GHL_NATIVE_WEBHOOK_KEY"),
         revops_autosend_enabled=_bool_env("REVOPS_AUTOSEND_ENABLED", True),
-        revops_autosend_intents=[
-            token.strip()
-            for token in os.getenv("REVOPS_AUTOSEND_INTENTS", "").split(",")
-            if token.strip()
-        ],
+        revops_autosend_intents=(
+            [
+                token.strip()
+                for token in os.getenv("REVOPS_AUTOSEND_INTENTS", "").split(",")
+                if token.strip()
+            ]
+            or ["pricing_lead"]
+        ),
         revops_autosend_confidence=_float_env("REVOPS_AUTOSEND_CONFIDENCE", 0.88),
         ticket_default_assignees=_json_dict_env("TICKET_DEFAULT_ASSIGNEES"),
         webhook_debounce_enabled=_bool_env("WEBHOOK_DEBOUNCE_ENABLED", False),

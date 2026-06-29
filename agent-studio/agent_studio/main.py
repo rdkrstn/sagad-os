@@ -107,6 +107,29 @@ async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
     # while /health/ready reports not-ready. A background task retries until the DB recovers,
     # so a slow-to-start Postgres self-heals without a container restart.
     settings = get_settings()
+    # Surface the resolved chat provider at startup so a dry-run misconfiguration is
+    # immediately visible (otherwise every draft silently becomes the canned supervisor
+    # stub). Logs e.g. "provider=ollama_cloud configured=True model=openai/minimax-m3:cloud
+    # base_url=http://host.docker.internal:11434/v1" or "provider=none configured=False ...".
+    try:
+        from agent_studio.integration_config import configured_settings
+        from agent_studio.model_config import resolve_chat_config
+
+        _cfg = resolve_chat_config(
+            configured_settings(settings, context=None), node_type="supervisor"
+        )
+        logging.getLogger("agent_studio").info(
+            "Model provider resolved: provider=%s configured=%s model=%s base_url=%s - %s",
+            _cfg.provider,
+            _cfg.configured,
+            _cfg.model or "(none)",
+            _cfg.api_base or "(none)",
+            _cfg.detail,
+        )
+    except Exception as exc:  # noqa: BLE001 - startup diagnostics must never crash the process
+        logging.getLogger("agent_studio").warning(
+            "Could not log model-provider status: %s: %s", exc.__class__.__name__, exc
+        )
     initialize_database_safe(settings)
     asyncio.create_task(_retry_database_init(settings))
     # GHL inbound poller: opt-in via GHL_POLL_ENABLED. The poller feeds the SAME

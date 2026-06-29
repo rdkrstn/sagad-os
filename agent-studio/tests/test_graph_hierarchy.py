@@ -12,6 +12,7 @@ from agent_studio.graph import (
     supervisor_draft,
     run_guardrail,
     graph,
+    DryRunChatModel,
 )
 from agent_studio.schemas import (
     KnowledgeHit,
@@ -547,6 +548,27 @@ def test_supervisor_draft_synthesizes_when_tools_ran_even_with_draft_hint(mock_g
     assert "ACME" in res["draft_reply"]
     # The raw draft_hint was NOT used verbatim — the supervisor synthesized to incorporate ACME.
     assert not res["draft_reply"].startswith("Our pricing starts at $10/mo.")
+
+
+def test_supervisor_draft_uses_draft_hint_in_dryrun_even_with_tool_outputs():
+    # When the supervisor resolves to DryRunChatModel (provider=none / LLM_MODE=dry_run), it cannot
+    # weave tool outputs, so it must fall back to the sub-agent's draft_hint rather than ship the
+    # canned "This is the finalized draft reply from the supervisor." stub.
+    with patch("agent_studio.graph._build_chat_model_for_agent", return_value=DryRunChatModel()):
+        state: AgentStudioState = {
+            "normalized_message": "Hello",
+            "sub_agent_report": {
+                "agent": "sales_agent",
+                "analysis": "pricing request",
+                "recommended_action": "DRAFT_REPLY",
+                "draft_hint": "Our pricing starts at $10/mo - which plan were you considering?",
+            },
+            "tool_outputs": [{"tool": "crm.lookup_contact", "output": {"company_name": "ACME"}}],
+        }
+        res = supervisor_draft(state)
+    assert res["draft_reply"].startswith("Our pricing starts at $10/mo")
+    # The dry-run supervisor stub must NOT reach the customer.
+    assert "finalized draft reply from the supervisor" not in res["draft_reply"]
 
 
 # =====================================================================

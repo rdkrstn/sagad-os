@@ -77,14 +77,40 @@ services:
       # LLM_MODE=dry_run runs the graph with a deterministic stub model (no credentials, no GPU)
       # so the compose e2e roundtrip is reproducible in CI. Empty = use the real LiteLLM/OpenAI stack.
       LLM_MODE: ${LLM_MODE:-}
+      # Model-provider stack (agent_studio.model_config). .dockerignore excludes .env, so these
+      # must be passed explicitly or the container defaults to MODEL_PROVIDER=none -> DryRunChatModel
+      # (every draft becomes the canned "This is the finalized draft reply from the supervisor.").
+      # When Ollama runs on the host, set OLLAMA_CLOUD_BASE_URL=http://host.docker.internal:11434/v1
+      # (see extra_hosts below); for a remote Ollama / Ollama-Cloud endpoint, set that URL directly.
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-none}
+      OLLAMA_CLOUD_API_KEY: ${OLLAMA_CLOUD_API_KEY:-}
+      OLLAMA_CLOUD_BASE_URL: ${OLLAMA_CLOUD_BASE_URL:-}
+      OLLAMA_CLOUD_MODEL: ${OLLAMA_CLOUD_MODEL:-llama3.1}
+      OLLAMA_CLOUD_EMBEDDING_MODEL: ${OLLAMA_CLOUD_EMBEDDING_MODEL:-nomic-embed-text}
+      FIREWORKS_API_KEY: ${FIREWORKS_API_KEY:-}
+      FIREWORKS_BASE_URL: ${FIREWORKS_BASE_URL:-https://api.fireworks.ai/inference/v1}
+      FIREWORKS_MODEL: ${FIREWORKS_MODEL:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Per-node model overrides (fall back to the active provider's model when unset).
+      CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-}
+      EXTRACTOR_MODEL: ${EXTRACTOR_MODEL:-}
+      SUPERVISOR_MODEL: ${SUPERVISOR_MODEL:-}
       RERANK_ENABLED: ${RERANK_ENABLED:-false}
+      RERANK_MODEL: ${RERANK_MODEL:-cohere/rerank-english-v3.0}
+      RERANK_API_KEY: ${RERANK_API_KEY:-}
       # Webhook debouncing (opt-in). When enabled, the universal/GHL handlers return 202 and
       # coalesce a burst of messages into a single graph run after the debounce window.
       WEBHOOK_DEBOUNCE_ENABLED: ${WEBHOOK_DEBOUNCE_ENABLED:-false}
       WEBHOOK_DEBOUNCE_MS: ${WEBHOOK_DEBOUNCE_MS:-2500}
-      # RevOps tiered auto-send "safe lane". Empty allowlist (default) => no promotion, so every
-      # conversation still lands in needs_approval (prior behavior). Set REVOPS_AUTOSEND_INTENTS
-      # to a comma-list of low-risk intents allowed to auto-send once confidence >= the threshold.
+      # RevOps tiered auto-send "safe lane". Empty REVOPS_AUTOSEND_INTENTS falls through to the
+      # code default (["pricing_lead"]), so a low-risk pricing reply auto-sends out of the box
+      # once risk==low, retrieval_confidence >= REVOPS_AUTOSEND_CONFIDENCE (default 0.88), not
+      # blocked, and the draft is non-empty. Set REVOPS_AUTOSEND_INTENTS to override (comma-list
+      # of classifier intents; note pricing_faq/business_hours/status_check are NOT classifier
+      # outputs -- use pricing_lead / general_support / booking_or_support / refund_or_cancellation).
+      # Auto-send also requires retrieval_confidence >= the threshold (quality_score is capped at
+      # min(0.88, retrieval_confidence)); if it still doesn't fire, enable RERANK_ENABLED or lower
+      # REVOPS_AUTOSEND_CONFIDENCE.
       REVOPS_AUTOSEND_ENABLED: ${REVOPS_AUTOSEND_ENABLED:-true}
       REVOPS_AUTOSEND_INTENTS: ${REVOPS_AUTOSEND_INTENTS:-}
       REVOPS_AUTOSEND_CONFIDENCE: ${REVOPS_AUTOSEND_CONFIDENCE:-0.88}
@@ -114,6 +140,11 @@ services:
       SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
     expose:
       - "8010"
+    # Lets the container reach a host-side Ollama at http://host.docker.internal:11434 (Docker
+    # Desktop maps this automatically; on Linux this adds the host-gateway alias). Required when
+    # OLLAMA_CLOUD_BASE_URL points at a host-local Ollama. No-op for remote endpoints.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       sagad-db:
         condition: service_healthy
