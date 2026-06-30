@@ -96,6 +96,18 @@ def test_quality_migration_defines_eval_tables_quality_fields_and_rls() -> None:
     assert "eval_results_org_isolation" in migration
 
 
+def test_model_provider_config_migration_uses_integer_updated_by() -> None:
+    # users.id is SERIAL (INTEGER) in 0001, so updated_by must be INTEGER (not UUID) -- binding
+    # the trusted-context user_id (users.id::text, e.g. "6") into a UUID column raised
+    # "invalid input syntax for type uuid: "6"" on every DB-backed PUT /model-providers.
+    migration = (Path(__file__).resolve().parents[1] / "migrations" / "0010_model_provider_config.sql").read_text(encoding="utf-8")
+
+    assert "updated_by INTEGER REFERENCES users(id)" in migration
+    # Guard against re-introducing the UUID declaration that caused the upsert 500.
+    uuid_updated_by = [line for line in migration.splitlines() if "updated_by" in line and "UUID" in line.upper()]
+    assert uuid_updated_by == [], f"updated_by must not be UUID: {uuid_updated_by}"
+
+
 def test_in_memory_store_persists_and_ranks_memory_items() -> None:
     conversation_store = InMemoryConversationStore()
     conversation = conversation_store.save(

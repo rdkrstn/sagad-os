@@ -16,7 +16,11 @@ CREATE TABLE IF NOT EXISTS model_provider_config (
   embedding_provider TEXT NOT NULL DEFAULT 'auto',
   config JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_by UUID
+  -- users.id is SERIAL (INTEGER) in 0001, so updated_by must be INTEGER (matching the 0001
+  -- convention at line 130), NOT UUID -- binding the trusted-context user_id (users.id::text,
+  -- e.g. "6") into a UUID column raised "invalid input syntax for type uuid: "6"" on every
+  -- DB-backed PUT /model-providers. See 0012 for the existing-deploy heal.
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS model_provider_secret_versions (
