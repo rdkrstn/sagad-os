@@ -803,10 +803,18 @@ def connection_test_result(
     provider: IntegrationProvider,
     context: StoreContext | None = None,
 ) -> tuple[str, str, IntegrationConnection]:
-    connection = _connection_from_record(
+    # Mirror `integration_connections_for_display`: when no DB-saved config exists (fresh DB,
+    # or adapter configured only via .env), fall back to the runtime connection derived from
+    # `configured_settings` (.env merged with the DB store). Without this, the Test probe
+    # reported "unconfigured" for an adapter the list showed as ready — because it read only
+    # the empty DB store and never consulted the runtime .env values.
+    settings = configured_settings(get_settings(), context=context)
+    saved = _connection_from_record(
         integration_config_store.get(provider, context=context),
         provider,
     )
+    runtime = _runtime_connection_from_settings(settings, provider)
+    connection = saved if saved.configured else runtime
     if connection.missing:
         return (
             "unconfigured",
@@ -818,7 +826,6 @@ def connection_test_result(
     if provider == "ghl":
         # Dry-run gates sends, not reads — probe the live endpoint regardless of dry_run so
         # the supervisor sees whether the credentials actually work.
-        settings = configured_settings(get_settings(), context=context)
         status, detail = _probe_ghl_connection(settings)
         return (status, detail, connection)
     if connection.dry_run:
