@@ -42,6 +42,25 @@ def test_chat_openai_missing_key_is_unconfigured() -> None:
     assert cfg.configured is False
 
 
+def test_chat_openai_compatible_deepseek_via_base_url() -> None:
+    # DeepSeek is OpenAI-compatible and reuses the openai provider via OPENAI_BASE_URL (no
+    # first-class deepseek branch). Pins the documented path so a resolver refactor can't
+    # silently break it.
+    cfg = resolve_chat_config(
+        s(
+            model_provider="openai",
+            openai_api_key="sk-deepseek",
+            openai_base_url="https://api.deepseek.com/v1",
+            openai_model="deepseek-chat",
+        )
+    )
+    assert cfg.configured is True
+    assert cfg.provider == "openai"
+    assert cfg.model == "openai/deepseek-chat"
+    assert cfg.api_base == "https://api.deepseek.com/v1"
+    assert cfg.api_key == "sk-deepseek"
+
+
 def test_chat_fireworks() -> None:
     cfg = resolve_chat_config(s(model_provider="fireworks", fireworks_api_key="fw"))
     assert cfg.configured is True

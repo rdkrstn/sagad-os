@@ -64,7 +64,9 @@ services:
       SAGAD_REALTIME_SECRET: ${SAGAD_REALTIME_SECRET:?Set SAGAD_REALTIME_SECRET in .env}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4}
+      # Also covers any OpenAI-compatible endpoint via OPENAI_BASE_URL (e.g. DeepSeek:
+      # OPENAI_BASE_URL=https://api.deepseek.com/v1 + OPENAI_MODEL=deepseek-chat).
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
       SAGAD_OCR_ENABLED: ${SAGAD_OCR_ENABLED:-true}
       SAGAD_OCR_LANG: ${SAGAD_OCR_LANG:-eng}
@@ -80,17 +82,24 @@ services:
       # Model-provider stack (agent_studio.model_config). .dockerignore excludes .env, so these
       # must be passed explicitly or the container defaults to MODEL_PROVIDER=none -> DryRunChatModel
       # (every draft becomes the canned "This is the finalized draft reply from the supervisor.").
-      # When Ollama runs on the host, set OLLAMA_CLOUD_BASE_URL=http://host.docker.internal:11434/v1
-      # (see extra_hosts below); for a remote Ollama / Ollama-Cloud endpoint, set that URL directly.
+      # Set MODEL_PROVIDER to one of: openrouter / openai / fireworks / ollama_cloud / litellm.
+      # OpenRouter is the recommended default (one key, many models); it has no embeddings endpoint,
+      # so pair it with EMBEDDING_PROVIDER=fireworks|openai. DeepSeek is reached via the openai
+      # provider: OPENAI_BASE_URL=https://api.deepseek.com/v1 + OPENAI_MODEL=deepseek-chat. Ollama is
+      # the self-hosted/local option; only then set OLLAMA_CLOUD_BASE_URL=http://host.docker.internal:11434/v1
+      # (see extra_hosts below) for a host-local Ollama, or the remote URL directly.
       MODEL_PROVIDER: ${MODEL_PROVIDER:-none}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-auto}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+      FIREWORKS_API_KEY: ${FIREWORKS_API_KEY:-}
+      FIREWORKS_BASE_URL: ${FIREWORKS_BASE_URL:-https://api.fireworks.ai/inference/v1}
+      FIREWORKS_MODEL: ${FIREWORKS_MODEL:-}
+      FIREWORKS_EMBEDDING_MODEL: ${FIREWORKS_EMBEDDING_MODEL:-nomic-embed-v1}
       OLLAMA_CLOUD_API_KEY: ${OLLAMA_CLOUD_API_KEY:-}
       OLLAMA_CLOUD_BASE_URL: ${OLLAMA_CLOUD_BASE_URL:-}
       OLLAMA_CLOUD_MODEL: ${OLLAMA_CLOUD_MODEL:-llama3.1}
       OLLAMA_CLOUD_EMBEDDING_MODEL: ${OLLAMA_CLOUD_EMBEDDING_MODEL:-nomic-embed-text}
-      FIREWORKS_API_KEY: ${FIREWORKS_API_KEY:-}
-      FIREWORKS_BASE_URL: ${FIREWORKS_BASE_URL:-https://api.fireworks.ai/inference/v1}
-      FIREWORKS_MODEL: ${FIREWORKS_MODEL:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # Per-node model overrides (fall back to the active provider's model when unset).
       CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-}
       EXTRACTOR_MODEL: ${EXTRACTOR_MODEL:-}
@@ -140,9 +149,10 @@ services:
       SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
     expose:
       - "8010"
-    # Lets the container reach a host-side Ollama at http://host.docker.internal:11434 (Docker
-    # Desktop maps this automatically; on Linux this adds the host-gateway alias). Required when
-    # OLLAMA_CLOUD_BASE_URL points at a host-local Ollama. No-op for remote endpoints.
+    # Only relevant for the ollama_cloud provider pointing at a host-local Ollama: lets the
+    # container reach http://host.docker.internal:11434 (Docker Desktop maps this automatically;
+    # on Linux this adds the host-gateway alias). No-op for OpenRouter/OpenAI/Fireworks/DeepSeek
+    # (remote endpoints) and for a remote Ollama.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

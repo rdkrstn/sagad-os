@@ -109,8 +109,9 @@ async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     # Surface the resolved chat provider at startup so a dry-run misconfiguration is
     # immediately visible (otherwise every draft silently becomes the canned supervisor
-    # stub). Logs e.g. "provider=ollama_cloud configured=True model=openai/minimax-m3:cloud
-    # base_url=http://host.docker.internal:11434/v1" or "provider=none configured=False ...".
+    # stub). Logs e.g. "provider=openrouter configured=True model=openrouter/openai/gpt-4o-mini
+    # base_url=(none)" (or "provider=openai ... base_url=https://api.deepseek.com/v1" for an
+    # OpenAI-compatible endpoint like DeepSeek), or "provider=none configured=False ...".
     try:
         from agent_studio.integration_config import configured_settings
         from agent_studio.model_config import resolve_chat_config
