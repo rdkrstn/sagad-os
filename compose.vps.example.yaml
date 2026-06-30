@@ -97,7 +97,11 @@ services:
       FIREWORKS_MODEL: ${FIREWORKS_MODEL:-}
       FIREWORKS_EMBEDDING_MODEL: ${FIREWORKS_EMBEDDING_MODEL:-nomic-embed-v1}
       OLLAMA_CLOUD_API_KEY: ${OLLAMA_CLOUD_API_KEY:-}
-      OLLAMA_CLOUD_BASE_URL: ${OLLAMA_CLOUD_BASE_URL:-}
+      # Containers can't reach the host's 127.0.0.1; a host-local Ollama must be addressed via
+      # host.docker.internal (extra_hosts below). OLLAMA_CLOUD_DOCKER_BASE_URL overrides the
+      # container's base URL for the Docker run only, so .env's OLLAMA_CLOUD_BASE_URL (localhost)
+      # stays correct for local .venv runs and a remote Ollama still works by setting either var.
+      OLLAMA_CLOUD_BASE_URL: ${OLLAMA_CLOUD_DOCKER_BASE_URL:-${OLLAMA_CLOUD_BASE_URL:-}}
       OLLAMA_CLOUD_MODEL: ${OLLAMA_CLOUD_MODEL:-llama3.1}
       OLLAMA_CLOUD_EMBEDDING_MODEL: ${OLLAMA_CLOUD_EMBEDDING_MODEL:-nomic-embed-text}
       # Per-node model overrides (fall back to the active provider's model when unset).
