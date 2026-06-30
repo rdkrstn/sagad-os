@@ -148,10 +148,15 @@ jobs:
       - name: Run pytest
         working-directory: agent-studio
         env:
-          # Credential-free: tests use the in-memory store + dry-run model + deterministic
-          # embeddings. DATABASE_URL="" overrides any local .env so no Postgres is required.
+          # Credential-free: tests inject mock LLMs (patching graph._build_chat_model) and use
+          # the in-memory store + deterministic embeddings. DATABASE_URL="" overrides any local
+          # .env so no Postgres is required. MODEL_PROVIDER is unset -> provider=none -> the
+          # unmocked paths get DryRunChatModel anyway, so no creds are needed.
+          # Do NOT add LLM_MODE=dry_run here: it short-circuits graph._build_chat_model_for_agent
+          # to DryRunChatModel BEFORE it delegates to the patched _build_chat_model, bypassing the
+          # test mocks (15 supervisor/orchestration tests fail under LLM_MODE=dry_run). The dev-e2e
+          # job sets LLM_MODE=dry_run itself in scripts/dev-e2e.sh for a real dry-run e2e.
           DATABASE_URL: ""
-          LLM_MODE: dry_run
           # Poller is off in CI; the poller roundtrip is pytest-covered with stubbed httpx
           # (tests/test_ghl_poller.py). Keep it explicit so a stray local .env can't flip it on.
           GHL_POLL_ENABLED: "false"

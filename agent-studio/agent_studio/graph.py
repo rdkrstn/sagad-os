@@ -995,6 +995,9 @@ def supervisor_draft(state: AgentStudioState) -> dict[str, object]:
     # supervisor LLM rewrite). This is what makes editing a sub-agent .md directly change the
     # customer-facing reply. Set only on the re-entry path below; empty otherwise.
     verbatim_draft = ""
+    # Supervisor chat model, built lazily. Pre-resolved on the re-entry path only when tools ran
+    # (to decide dry-run vs. real synthesis); built on demand in the synthesis branch otherwise.
+    llm = None
 
     if not has_report:
         # ---- First pass: bind agent tools, let supervisor pick one ----
@@ -1013,11 +1016,21 @@ def supervisor_draft(state: AgentStudioState) -> dict[str, object]:
         draft_hint = (report.get("draft_hint") or "").strip()
         action = report.get("recommended_action")
         # Use the sub-agent's draft_hint verbatim when no tools ran and it isn't an escalation.
-        # When tools ran, their outputs must be woven into the reply -> supervisor synthesizes.
-        # On ESCALATE or missing draft_hint -> supervisor synthesizes. Editing the sub-agent .md
-        # (which drives draft_hint) directly changes the reply in the verbatim case.
-        if draft_hint and not tool_outputs and action != "ESCALATE":
-            verbatim_draft = draft_hint
+        # When tools ran, their outputs must be woven into the reply -> supervisor synthesizes --
+        # BUT only if a real LLM is available. In dry-run (DryRunChatModel) there is nothing to
+        # weave, so fall back to the draft_hint rather than shipping the canned supervisor stub
+        # ("This is the finalized draft reply from the supervisor."). On ESCALATE or missing
+        # draft_hint -> supervisor synthesizes. Editing the sub-agent .md (which drives
+        # draft_hint) directly changes the reply in the verbatim case.
+        if draft_hint and action != "ESCALATE":
+            if not tool_outputs:
+                verbatim_draft = draft_hint
+            else:
+                llm = _build_chat_model_for_agent(agent, "supervisor")
+                if isinstance(llm, DryRunChatModel):
+                    # Dry-run can't weave tool outputs; use the sub-agent's own voice instead.
+                    verbatim_draft = draft_hint
+                    llm = None
 
         context_str = f"SUB-AGENT REPORT:\n{json.dumps(report, indent=2)}\n\nTOOL OUTPUTS:\n{json.dumps(tool_outputs, indent=2)}"
         knowledge = state.get("retrieved_knowledge", [])
@@ -1035,7 +1048,8 @@ def supervisor_draft(state: AgentStudioState) -> dict[str, object]:
             # Sub-agent voice path: skip the supervisor LLM call entirely.
             body = verbatim_draft
         else:
-            llm = _build_chat_model_for_agent(agent, "supervisor")
+            if llm is None:
+                llm = _build_chat_model_for_agent(agent, "supervisor")
             if not has_report:
                 llm = llm.bind_tools(agent_tools, tool_choice="auto")
 

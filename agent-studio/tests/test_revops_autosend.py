@@ -118,8 +118,10 @@ def _final_state(*, intent="business_hours", risk="low", confidence=0.90, compli
     }
 
 
-def test_default_empty_allowlist_preserves_needs_approval(monkeypatch: pytest.MonkeyPatch) -> None:
-    # No REVOPS_AUTOSEND_INTENTS set -> default empty allowlist -> no promotion -> queues.
+def test_default_allowlist_queues_non_pricing_intent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVOPS_AUTOSEND_INTENTS unset -> code default ["pricing_lead"]. business_hours is NOT a
+    # classifier intent / not allowlisted -> no promotion -> queues (the default does not
+    # over-send non-pricing low-risk replies).
     monkeypatch.delenv("REVOPS_AUTOSEND_INTENTS", raising=False)
     get_settings.cache_clear()
     with patch("agent_studio.main.graph.ainvoke", new=AsyncMock(return_value=_final_state())):
@@ -129,6 +131,45 @@ def test_default_empty_allowlist_preserves_needs_approval(monkeypatch: pytest.Mo
     assert payload["compliance_status"] == "needs_review"
     assert payload["approval_status"] == "needs_approval"
     assert payload["send_status"] == "not_sent"
+
+
+def test_default_allowlist_auto_sends_pricing_lead(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVOPS_AUTOSEND_INTENTS unset -> code default ["pricing_lead"]. A low-risk, high-confidence
+    # pricing_lead reply is promoted -> auto-sends out of the box (the whole point of the default).
+    monkeypatch.delenv("REVOPS_AUTOSEND_INTENTS", raising=False)
+    get_settings.cache_clear()
+    with patch(
+        "agent_studio.main.graph.ainvoke",
+        new=AsyncMock(return_value=_final_state(intent="pricing_lead")),
+    ):
+        response = client.post("/webhooks/ghl", json=_ghl_payload(message_id="msg-default-promote"))
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["compliance_status"] == "pass"
+    assert payload["approval_status"] == "sent"
+    assert payload["send_status"] == "dry_run"
+
+
+def test_revops_autosend_intents_env_default_and_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Unset -> code default ["pricing_lead"]; explicit value overrides the default.
+    from agent_studio.config import Settings
+
+    monkeypatch.delenv("REVOPS_AUTOSEND_INTENTS", raising=False)
+    get_settings.cache_clear()
+    assert get_settings().revops_autosend_intents == ["pricing_lead"]
+
+    monkeypatch.setenv("REVOPS_AUTOSEND_INTENTS", "general_support,booking_or_support")
+    get_settings.cache_clear()
+    assert get_settings().revops_autosend_intents == ["general_support", "booking_or_support"]
+
+    # An explicit empty-ish value still falls through to the default (not []).
+    monkeypatch.setenv("REVOPS_AUTOSEND_INTENTS", " , ")
+    get_settings.cache_clear()
+    assert get_settings().revops_autosend_intents == ["pricing_lead"]
+
+    # Settings constructed directly with an explicit [] still means "no promotion" (callers can
+    # opt out), so the default only applies via the env-parsing path.
+    assert Settings(revops_autosend_intents=[]).revops_autosend_intents == []
 
 
 def test_allowlisted_intent_auto_sends_after_promotion(monkeypatch: pytest.MonkeyPatch) -> None:

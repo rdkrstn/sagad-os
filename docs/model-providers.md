@@ -21,13 +21,13 @@ For chat, Agent Studio always calls `litellm.completion` under the hood. LiteLLM
 
 | `MODEL_PROVIDER` | LiteLLM model sent | Endpoint | Key |
 | --- | --- | --- | --- |
+| `openrouter` | `openrouter/<model>` | (LiteLLM built-in) | `OPENROUTER_API_KEY` |
 | `openai` | `openai/<model>` | `OPENAI_BASE_URL` (or OpenAI default) | `OPENAI_API_KEY` |
 | `fireworks` | `fireworks_ai/<model>` | `FIREWORKS_BASE_URL` | `FIREWORKS_API_KEY` |
 | `ollama_cloud` | `openai/<model>` | `OLLAMA_CLOUD_BASE_URL` | `OLLAMA_CLOUD_API_KEY` (optional for local) |
-| `openrouter` | `openrouter/<model>` | (LiteLLM built-in) | `OPENROUTER_API_KEY` |
 | `litellm` | `<alias>` | `LITELLM_BASE_URL` | `LITELLM_MASTER_KEY` |
 
-The `litellm` provider is for the **optional LiteLLM gateway** (a separate container that fronts many models behind one URL). Use it only if you run that gateway. Otherwise pick the provider you have credentials for directly.
+The `openai` provider covers **any OpenAI-compatible endpoint** via `OPENAI_BASE_URL`, not just `api.openai.com` — DeepSeek, vLLM, etc. (see the DeepSeek setup below). The `litellm` provider is for the **optional LiteLLM gateway** (a separate container that fronts many models behind one URL). Use it only if you run that gateway. Otherwise pick the provider you have credentials for directly.
 
 ## Embeddings are a separate dial
 
@@ -45,32 +45,18 @@ If the embedding endpoint is unreachable, `EmbeddingService` logs `embed_text_fa
 
 ## Provider setup (copy-paste)
 
-### Fireworks AI
-```
-MODEL_PROVIDER=fireworks
-FIREWORKS_API_KEY=fw-...
-FIREWORKS_MODEL=accounts/fireworks/models/llama-v3p1-70b-instruct
-FIREWORKS_EMBEDDING_MODEL=nomic-embed-v1
-EMBEDDING_PROVIDER=auto
-```
+The OpenAI-compatible providers (OpenRouter, OpenAI, Fireworks, DeepSeek) are the recommended path.
+Ollama Cloud remains supported as the self-hosted / local-LLM option (see last).
 
-### Ollama Cloud (or self-hosted Ollama)
-```
-MODEL_PROVIDER=ollama_cloud
-OLLAMA_CLOUD_BASE_URL=https://<your-ollama-cloud-endpoint>/v1
-OLLAMA_CLOUD_API_KEY=...            # leave empty for local Ollama
-OLLAMA_CLOUD_MODEL=llama3.1
-OLLAMA_CLOUD_EMBEDDING_MODEL=nomic-embed-text
-```
-For self-hosted Ollama: `OLLAMA_CLOUD_BASE_URL=http://localhost:11434/v1` and leave the key empty.
-
-### OpenRouter (chat only)
+### OpenRouter (chat only -- recommended default)
 ```
 MODEL_PROVIDER=openrouter
 OPENROUTER_API_KEY=sk-or-...
 OPENROUTER_MODEL=openai/gpt-4o-mini
-EMBEDDING_PROVIDER=fireworks   # OpenRouter has no embeddings -- pick one
+EMBEDDING_PROVIDER=fireworks   # OpenRouter has no embeddings -- pick one (fireworks|openai|ollama_cloud)
 ```
+One key reaches many vendors (`openai/...`, `deepseek/...`, `anthropic/...`, ...). The model string
+is `<vendor>/<model>`.
 
 ### OpenAI
 ```
@@ -79,6 +65,30 @@ OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ```
+Also covers any OpenAI-compatible endpoint via `OPENAI_BASE_URL` (see DeepSeek below).
+
+### DeepSeek (via the OpenAI provider -- OpenAI-compatible)
+```
+MODEL_PROVIDER=openai
+OPENAI_BASE_URL=https://api.deepseek.com/v1
+OPENAI_API_KEY=<deepseek key>
+OPENAI_MODEL=deepseek-chat
+EMBEDDING_PROVIDER=fireworks   # DeepSeek has no embeddings -- pick one
+```
+DeepSeek speaks the OpenAI `/v1/chat/completions` shape, so it reuses the `openai` provider with a
+custom base URL. Note: this overloads the SuperAdmin console's `openai` slot — it holds the DeepSeek
+creds, so you can't keep OpenAI and DeepSeek configured there at the same time. Use the LiteLLM
+gateway (below) if you need both simultaneously.
+
+### Fireworks AI
+```
+MODEL_PROVIDER=fireworks
+FIREWORKS_API_KEY=fw-...
+FIREWORKS_MODEL=accounts/fireworks/models/llama-v3p1-70b-instruct
+FIREWORKS_EMBEDDING_MODEL=nomic-embed-v1
+EMBEDDING_PROVIDER=auto
+```
+OpenAI-compatible at `/inference/v1`; chat + embeddings (nomic-embed-v1) from one vendor.
 
 ### LiteLLM gateway (optional)
 ```
@@ -88,6 +98,19 @@ LITELLM_MASTER_KEY=...
 LITELLM_MODEL=sagad-openai-fast            # alias from infra/litellm/config.example.yaml
 LITELLM_EMBEDDING_MODEL=sagad-openai-embedding
 ```
+Fronts many models behind one URL; the example config includes a `sagad-deepseek-chat` alias.
+
+### Ollama Cloud (or self-hosted Ollama) -- self-hosted / local-LLM option
+```
+MODEL_PROVIDER=ollama_cloud
+OLLAMA_CLOUD_BASE_URL=https://<your-ollama-cloud-endpoint>/v1
+OLLAMA_CLOUD_API_KEY=...            # leave empty for local Ollama
+OLLAMA_CLOUD_MODEL=llama3.1
+OLLAMA_CLOUD_EMBEDDING_MODEL=nomic-embed-text
+```
+For self-hosted Ollama: `OLLAMA_CLOUD_BASE_URL=http://localhost:11434/v1` and leave the key empty.
+In Docker, use `http://host.docker.internal:11434/v1` (the container can't reach host `localhost`;
+see `extra_hosts` in `compose.vps.example.yaml`).
 
 ## Per-node model overrides
 

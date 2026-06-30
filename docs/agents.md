@@ -85,18 +85,23 @@ full gate; in short, after the graph runs and the guardrail did **not** block, a
 promoted from `needs_review` → `pass` only when:
 
 - `REVOPS_AUTOSEND_ENABLED=true` (kill-switch),
-- `intent ∈ REVOPS_AUTOSEND_INTENTS` (comma-list; **empty default → no promotion → prior
-  behavior unchanged**),
+- `intent ∈ REVOPS_AUTOSEND_INTENTS` (comma-list; **empty/unset → code default
+  `["pricing_lead"]`**, the classifier's low-risk pricing intent, so low-risk pricing
+  auto-sends out of the box),
 - `risk_level == "low"`,
 - `confidence >= REVOPS_AUTOSEND_CONFIDENCE` (default `0.88`), and
 - the draft is non-empty.
 
-The guardrail's `blocked` verdict always wins — the safe lane is never consulted on a
-blocked conversation, so the worst case is over-queued, never over-sent. The two confidence
-gates (promotion + send) share one threshold so a promoted conversation always clears the
-send gate. Start conservative (e.g. `pricing_lead,business_hours,status_check`). Root cause
-of the prior dormant-dead-code bug and the fix are in the postmortem "dormant auto-send"
-entry.
+The intents the classifier actually emits are `pricing_lead` / `general_support` /
+`booking_or_support` / `refund_or_cancellation` (see `agent_studio/agents/classifier_agent.md`).
+`pricing_faq` / `business_hours` / `status_check` are **not** classifier outputs and will
+never match the allowlist. The guardrail's `blocked` verdict always wins — the safe lane is
+never consulted on a blocked conversation, so the worst case is over-queued, never over-sent.
+The two confidence gates (promotion + send) share one threshold so a promoted conversation
+always clears the send gate. Note `quality_score = min(0.88, retrieval_confidence)`, so a
+low-risk reply still needs `retrieval_confidence >= 0.88` to auto-send; if it queues, enable
+`RERANK_ENABLED` or lower `REVOPS_AUTOSEND_CONFIDENCE`. Root cause of the prior
+dormant-dead-code bug and the fix are in the postmortem "dormant auto-send" entry.
 
 ## CRM context in graph state
 
